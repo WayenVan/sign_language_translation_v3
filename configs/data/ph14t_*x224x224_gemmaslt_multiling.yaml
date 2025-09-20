@@ -1,0 +1,47 @@
+chat_template_jinjia: jinjas/gemma_slt.jinja
+data_root: dataset/PHOENIX-2014-T-release-v3
+en_data_root: large_files/ph14t_english
+zh_data_root: large_files/ph14t_chinese
+
+train:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    en_data_root: ${data.en_data_root}
+    zh_data_root: ${data.zh_data_root}
+    mode: train
+  pipline:
+    _target_: csi_slt.data.piplines.SLTGeneralPiplineTrain
+    height: 224
+    width: 224
+    downsample_rate: 1
+  collator:
+    _target_: csi_slt.data.collators.Gemma3SLTMultilingCollator
+    mode: train
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+
+val:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    en_data_root: ${data.en_data_root}
+    zh_data_root: ${data.zh_data_root}
+    mode: dev
+  pipline:
+    _target_: csi_slt.data.piplines.SLTGeneralPiplineTest
+    height: 224
+    width: 224
+    downsample_rate: 1
+  collator:
+    _target_: csi_slt.data.collators.Gemma3SLTMultilingCollator
+    mode: val
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+
+test: null
+
+fraction_dataset: false
+train_fraction: 0.3
+val_fraction: 1.0
+test_fraction: 1.0

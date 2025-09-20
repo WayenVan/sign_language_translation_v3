@@ -1,4 +1,3 @@
-from nlpaug.augmenter.word.random import RandomWordAug
 from albumentations import (
     CenterCrop,
     Compose,
@@ -6,10 +5,9 @@ from albumentations import (
     Normalize,
     RandomCrop,
     Resize,
-    ShiftScaleRotate,
     ColorJitter,
 )
-from ..transforms import JitteredUniformSampleVideo, UniformSampleVideo, ToTensorVideo
+from ..transforms import ToTensorVideo
 
 MEAN = (0.5, 0.5, 0.5)  # to fit the perception encoder
 STD = (0.5, 0.5, 0.5)

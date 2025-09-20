@@ -22,7 +22,11 @@ class DataModule:
         self.pipline_test = instantiate(
             getattr(cfg.test, "pipline", cfg.val.pipline),
         )
+
         self.tokenizer = tokenizer
+        with open(cfg.chat_template_jinjia, "r", encoding="utf-8") as f:
+            chat_template = f.read()
+        self.tokenizer.chat_template = chat_template
 
     @staticmethod
     def get_fraction_subset_dataset(
@@ -105,32 +109,17 @@ class DataModule:
                             fraction=self.cfg.test_fraction,
                         )
 
-    def train_dataloader(self):
-        # Return the training dataloader
-        return DataLoader(
-            self.train_dataset,
-            collate_fn=instantiate(
-                self.cfg.train.collator,
-                tokenizer=self.tokenizer,
-            ),
-            **self.cfg.train.loader_kwargs,
+    @property
+    def train_collator(self):
+        return instantiate(
+            self.cfg.train.collator,
+            tokenizer=self.tokenizer,
         )
 
-    def val_dataloader(self):
-        # Return the validation dataloader
-        return DataLoader(
-            self.val_dataset,
-            collate_fn=instantiate(self.cfg.val.collator, tokenizer=self.tokenizer),
-            **self.cfg.val.loader_kwargs,
-        )
+    @property
+    def val_collator(self):
+        return instantiate(self.cfg.val.collator, tokenizer=self.tokenizer)
 
-    def test_dataloader(self):
-        kwargs = getattr(
-            self.cfg, "test_dataloader_kwargs", self.cfg.val_dataloader_kwargs
-        )
-        collator = getattr(self.cfg.test, "collator", self.cfg.val_collator)
-        return DataLoader(
-            self.test_dataset,
-            collate_fn=instantiate(collator, tokenizer=self.tokenizer),
-            **kwargs,
-        )
+    @property
+    def test_collator(self):
+        return instantiate(self.cfg.test.collator, tokenizer=self.tokenizer)
