@@ -1,0 +1,12 @@
+defaults:
+  - model: base_model
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  sweep:
+    dir: .
+  output_subdir: null

@@ -1,0 +1,19 @@
+config:
+  hidden_size: 1152
+  video_soft_token_id: 24000
+  llm_model_name_or_path: google/gemma-3-1b-it
+  visual_backbone_type: dinov2
+  visual_backbone_kwargs:
+    id: facebook/dinov2-with-registers-base
+    output_layer: -2
+    enable_lora: False
+  visual_adapter_type: token_sampler
+  visual_adapter_kwargs:
+    hidden_size: 768
+    target_hidden_size: 3840
+    num_heads: 12
+    num_layers: 1
+    num_extra_queries: 4
+    mlp_depth: 2
+    attn_drop: 0.0
+    proj_drop: 0.0
