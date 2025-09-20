@@ -1,0 +1,14 @@
+{{ bos_token }}
+{%- if (messages|length != 1) or (messages[0]['role'] != 'user') -%}
+  {{ raise_exception("The first message must be from the user") }}
+{%- endif -%}
+{{ '<start_of_turn>' + "user" +  "
+"+ "You are a native "+ messages[0]['language'] + " speaker. You are going to translate the following content to " + messages[0]["language"]}} 
+{{ '<unused1>' }}{{"
+
+"+ "the output should only contains the translated text in " + messages[0]["language"] + " without any additional text or explanation"}}{{ '<end_of_turn>
+' }}
+{%- if add_generation_prompt -%}
+    {{'<start_of_turn>model
+'}}
+{%- endif -%}
