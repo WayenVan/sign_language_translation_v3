@@ -9,10 +9,6 @@ from .text import (
     ExtendedPh14TTextAugmentation,
     SaveOriginalText,
 )
-from .simsiam import (
-    SimSiamTransformForTrain,
-    SimSiamTransformForEval,
-)
 
 __all__ = [
     "ToTensorVideo",
@@ -21,6 +17,4 @@ __all__ = [
     "JitteredUniformSampleVideo",
     "ExtendedPh14TTextAugmentation",
     "SaveOriginalText",
-    "SimSiamTransformForTrain",
-    "SimSiamTransformForEval",
 ]

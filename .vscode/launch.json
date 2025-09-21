@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Train with Accelerate",
+      "type": "python",
+      "request": "launch",
+      "module": "accelerate.commands.launch",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "./src:${env:PYTHONPATH}",
+        "CUDA_VISIBLE_DEVICES": "0"
+      },
+      "args": [
+        "--mixed_precision=fp16",
+        "-m",
+        "csi_slt.commands.train"
+      ]
+    }
+  ]
+}

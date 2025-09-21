@@ -112,6 +112,7 @@ class Gemma3SLTMultilingCollator:
 
             if self.mode == "train":
                 input_ids = prompt_ids + target_ids
+                assert len(input_ids) == len(label_ids)
             else:
                 # For inference, we only use the prompt
                 input_ids = prompt_ids

@@ -1,11 +1,9 @@
-from torch import select_copy
 from torch.utils.data import Dataset
 import cv2
 import numpy
 import os
 import polars as pl
 from datasets import load_dataset
-from functools import cached_property
 
 
 class Ph14TMultiLinglDataset(Dataset):
@@ -43,6 +41,7 @@ class Ph14TMultiLinglDataset(Dataset):
         self._create_assemble_df()
 
         self.pipline = pipline
+        self.ids = self.hg_dataset.unique("name")
 
     def _create_assemble_df(self):
         # Merge
@@ -68,10 +67,6 @@ class Ph14TMultiLinglDataset(Dataset):
 
     def __len__(self):
         return len(self.assemble_df)
-
-    @cached_property
-    def ids(self):
-        return self.hg_dataset.unique("name")
 
     def __getitem__(self, idx):
         item = self.assemble_df[idx]
