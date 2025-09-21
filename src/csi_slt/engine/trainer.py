@@ -1,5 +1,9 @@
 from transformers.trainer_seq2seq import Seq2SeqTrainer
-from .callbacks import SltTrainerCallbackHandler, SaveBestMetricCallback
+from .callbacks import (
+    SltTrainerCallbackHandler,
+    SaveBestMetricCallback,
+    ModelInfoCallback,
+)
 from transformers.trainer_utils import EvalLoopOutput
 from torch import nn
 import torch
@@ -18,8 +22,9 @@ from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers.utils import logging
 
-from typing import Callable, Literal
+from typing import Callable, Literal, Tuple
 from functools import partial
+import evaluate
 
 logger = logging.get_logger(__name__)
 
@@ -47,7 +52,10 @@ class SltTrainer(Seq2SeqTrainer):
             test_data_collator if test_data_collator is not None else self.data_collator
         )
 
+        # NOTE: add custom callbacks
         self.add_callback(SaveBestMetricCallback(metric_name="bleu4"))
+        self.add_callback(ModelInfoCallback())
+
         self.callback_handler = SltTrainerCallbackHandler(
             self,
             self.callback_handler.callbacks,  # WARN: replaceing the original callback handler
@@ -57,7 +65,7 @@ class SltTrainer(Seq2SeqTrainer):
             self.lr_scheduler,
         )
 
-        self.compute_metrics = self._compute_metrics
+        self.compute_metrics = partial(self._compute_metrics, tokenizer=self.tokenizer)
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
@@ -67,10 +75,54 @@ class SltTrainer(Seq2SeqTrainer):
         self.args.predict_with_generate = True
 
     @staticmethod
-    def _compute_metrics(pred: EvalLoopOutput):
-        preds = pred.predictions
-        labels = pred.label_ids
-        return {"bleu": 0.1, "bleu4": 0.1}
+    def _compute_metrics(pred: EvalLoopOutput, tokenizer) -> dict:
+        preds_ids, pred_length, prompt_length = pred.predictions
+        labels_ids = pred.label_ids
+
+        full_prediction_texts = []
+        predction_texts = []
+        label_texts = []
+        B = labels_ids.shape[0]
+        for b in range(B):
+            full_prediction = preds_ids[b][: pred_length[b]]
+            prediction = full_prediction[prompt_length[b] :]
+            label = labels_ids[b]
+            # replace -100 in the labels as we can't decode them
+            label = [l if l != -100 else tokenizer.pad_token_id for l in label]
+            # decode
+            full_pred_text = tokenizer.decode(
+                full_prediction,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            pred_text = tokenizer.decode(
+                prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )
+            label_text = tokenizer.decode(
+                label, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )
+            full_prediction_texts.append(full_pred_text)
+            predction_texts.append(pred_text)
+            label_texts.append(label_text)
+
+        bleu = evaluate.load("bleu")
+        results_bleu_1 = bleu.compute(
+            predictions=predction_texts,
+            references=[[l] for l in label_texts],
+            max_order=1,
+        )
+        results_bleu_4 = bleu.compute(
+            predictions=predction_texts,
+            references=[[l] for l in label_texts],
+            max_order=4,
+        )
+        dummy = bleu.compute(
+            predictions=predction_texts,
+            references=[[l] for l in predction_texts],
+            max_order=4,
+        )
+
+        return {"bleu1": results_bleu_1["bleu"], "bleu4": results_bleu_4["bleu"]}
 
     def prediction_step(
         self,
@@ -79,7 +131,11 @@ class SltTrainer(Seq2SeqTrainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[list[str]] = None,
         **gen_kwargs,
-    ) -> tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> tuple[
+        Optional[float],
+        Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+        Optional[torch.Tensor],
+    ]:
         # NOTE: this method is modified to support text generation during evaluation
         # I REMOVE the label prediction part
         """
@@ -221,7 +277,23 @@ class SltTrainer(Seq2SeqTrainer):
         else:
             labels = None
 
-        return loss, generated_tokens, labels
+        B = generated_tokens.shape[0]
+        generated_batch_size = torch.full(
+            (B,),
+            generated_tokens.shape[1],
+            dtype=torch.long,
+            device=generated_tokens.device,
+        )
+        _prompt_length = inputs.get("input_ids").shape[1]
+        prompt_length = torch.full(
+            (B,), _prompt_length, dtype=torch.long, device=generated_tokens.device
+        )
+
+        return (
+            loss,
+            (generated_tokens, generated_batch_size, prompt_length),
+            labels,
+        )
 
     def _get_dataloader(
         self,
@@ -255,9 +327,6 @@ class SltTrainer(Seq2SeqTrainer):
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
             "persistent_workers": self.args.dataloader_persistent_workers,
-            "multiprocessing_context": "spawn"
-            if self.args.dataloader_num_workers > 0
-            else None,
         }
 
         if not isinstance(dataset, torch.utils.data.IterableDataset):

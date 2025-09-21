@@ -1,11 +1,7 @@
-from torch import select_copy
 from torch.utils.data import Dataset
-import cv2
 import numpy
 import os
-import polars as pl
 from datasets import load_dataset
-from functools import cached_property
 
 
 class Ph14TGeneralDataset(Dataset):
@@ -34,6 +30,8 @@ class Ph14TGeneralDataset(Dataset):
 
         video_frame_file_name = data_info["frames"]
         video_frame = []
+        import cv2
+
         for frame_file in video_frame_file_name:
             image = cv2.imread(os.path.join(self.data_root, frame_file))
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

@@ -9,9 +9,10 @@
       "console": "integratedTerminal",
       "env": {
         "PYTHONPATH": "./src:${env:PYTHONPATH}",
-        "CUDA_VISIBLE_DEVICES": "0"
+        "CUDA_VISIBLE_DEVICES": "0,1"
       },
       "args": [
+        "--num_processes=2",
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.train"

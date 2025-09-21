@@ -54,6 +54,29 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         self._post_init()
 
+    @property
+    def dummy_inputs(self):
+        V_TOKEN = self.config.video_soft_token_id
+        return {
+            "input_ids": torch.tensor(
+                [[0, 0, 0, 1, 2, 3, V_TOKEN, V_TOKEN, V_TOKEN, V_TOKEN, 4, 5, 6, 7]],
+                dtype=torch.long,
+                device=self.device,
+            ),
+            "pixel_values": torch.ones(
+                (4, 3, 224, 224), dtype=torch.float32, device=self.device
+            ),
+            "pixel_values_length": torch.tensor(
+                [4], dtype=torch.long, device=self.device
+            ),
+            "attention_mask": torch.ones((1, 14), dtype=torch.long, device=self.device),
+            "labels": torch.tensor(
+                [[0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]],
+                dtype=torch.long,
+                device=self.device,
+            ),
+        }
+
     def _init_llm(self):
         self.llm_config = AutoConfig.from_pretrained(self.config.llm_model_name_or_path)
 
