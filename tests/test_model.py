@@ -3,6 +3,7 @@ import sys
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
+from omegaconf import OmegaConf
 
 sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
@@ -12,7 +13,7 @@ from csi_slt.data.datamodule import DataModule
 def test_slt_model():
     with hydra.initialize(config_path="../configs"):
         cfg = hydra.compose(config_name="base_train")
-        slt_config = SltConfig(**cfg.model.config)
+        slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
         slt_model = SltModel(slt_config).cuda()
 
         # prepare datamodule
@@ -28,34 +29,92 @@ def test_slt_model():
         val_dataset = datamodule.val_dataset
 
         loader = DataLoader(
-            train_dataset,
-            # val_dataset,
+            # train_dataset,
+            val_dataset,
             batch_size=2,
             shuffle=True,
             num_workers=0,
-            # collate_fn=datamodule.val_collator,
-            collate_fn=datamodule.train_collator,
+            collate_fn=datamodule.val_collator,
+            # collate_fn=datamodule.train_collator,
         )
         slt_model.eval()
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=True):
             for batch in loader:
-                outputs = slt_model(
-                    input_ids=batch["input_ids"].cuda(),
-                    attention_mask=batch["attention_mask"].cuda(),
-                    pixel_values=batch["pixel_values"].cuda(),
-                    pixel_values_length=batch["pixel_values_length"].cuda(),
-                    labels=batch["labels"].cuda(),
-                )
-                print(outputs.loss)
-                # print("prompt_length:" + str(batch["input_ids"].shape[1]))
-                # outputs = slt_model.generate(
+                # outputs = slt_model(
                 #     input_ids=batch["input_ids"].cuda(),
+                #     attention_mask=batch["attention_mask"].cuda(),
                 #     pixel_values=batch["pixel_values"].cuda(),
                 #     pixel_values_length=batch["pixel_values_length"].cuda(),
-                #     attention_mask=batch["attention_mask"].cuda(),
+                #     labels=batch["labels"].cuda(),
                 # )
-                # print(tokenizer.batch_decode(outputs, skip_special_tokens=False)[0])
+                # print(outputs.loss)
+                print("prompt_length:" + str(batch["input_ids"].shape[1]))
+                outputs = slt_model.generate(
+                    input_ids=batch["input_ids"].cuda(),
+                    pixel_values=batch["pixel_values"].cuda(),
+                    pixel_values_length=batch["pixel_values_length"].cuda(),
+                    attention_mask=batch["attention_mask"].cuda(),
+                    max_new_tokens=100,
+                )
+                print(tokenizer.batch_decode(outputs, skip_special_tokens=False)[0])
+
+
+def test_model_save():
+    with hydra.initialize(config_path="../configs"):
+        cfg = hydra.compose(config_name="base_train")
+        slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
+        slt_model = SltModel(slt_config).cuda()
+    slt_model.save_pretrained("outputs/test_save")
+
+
+def test_model_load():
+    slt_model = SltModel.from_pretrained("outputs/test_save").cuda()
+    print(slt_model)
+
+
+def test_verify_gemma3():
+    slt_model = SltModel.from_pretrained("outputs/test_save").cuda()
+    model = slt_model.llm
+    tokenizer = AutoTokenizer.from_pretrained(
+        slt_model.config.llm_model_name_or_path,
+        use_fast=True,
+    )
+    messages = [
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are a helpful assistant."},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Write a poem on Hugging Face, the company",
+                    },
+                ],
+            },
+        ],
+    ]
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(model.device)
+
+    with torch.inference_mode():
+        outputs = model.generate(**inputs)
+
+    outputs = tokenizer.batch_decode(outputs, skip_special_tokens=False)
+    print(outputs[0])
 
 
 if __name__ == "__main__":
-    test_slt_model()
+    # test_slt_model()
+    # test_model_save()
+    # test_model_load()
+    test_verify_gemma3()

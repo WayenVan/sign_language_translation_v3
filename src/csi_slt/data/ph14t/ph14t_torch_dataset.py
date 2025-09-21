@@ -24,7 +24,7 @@ class Ph14TGeneralDataset(Dataset):
     def __len__(self):
         return len(self.ids)
 
-    @cached_property
+    @property
     def ids(self):
         return self.hg_dataset.unique("name")
 

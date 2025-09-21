@@ -1,13 +1,13 @@
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto import AutoModel, AutoConfig
-from transformers.utils import ModelOutput
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerationMixin
-from dataclasses import dataclass
 import torch
 from torch import nn
-from typing import Optional, NamedTuple
-from transformers.cache_utils import HybridCache
+from typing import Optional
+from transformers.cache_utils import DynamicCache, Cache
+
+from transformers import logging
 
 
 from ..configuration_slt.configuration import SltConfig
@@ -19,10 +19,13 @@ from .output_utils import (
     PrepareForCausalLMOutput,
 )
 
+logger = logging.get_logger(__name__)
+
 
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
     MAX_TOKEN_LENGTH = 1024
+    _tied_weights_keys = ["llm.lm_head.weight"]
 
     def __init__(self, config: SltConfig):
         super().__init__(config)
@@ -48,6 +51,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
+
         self._post_init()
 
     def _init_llm(self):
@@ -55,7 +59,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         attn_implementation = self.config.llm_init_kwargs.pop(
             "attn_implementation",
-            "eager",  # default to eager since spda produce nan
+            "eager",  # NOTE: default to eager since spda produce nan
         )
         if self.config.llm_model_name_or_path.startswith("google/gemma-3-1b"):
             from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
@@ -73,6 +77,16 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 **self.config.llm_init_kwargs,
             )
 
+        generation_config = self.llm.generation_config
+        generation_config.do_sample = False
+        generation_config.max_length = self.MAX_TOKEN_LENGTH
+        generation_config.top_k = None
+        generation_config.top_p = None
+        self.generation_config = generation_config
+
+        for param in self.llm.parameters():
+            param.requires_grad = False
+
     def _init_visual_backbone(self):
         backbone_cls = VISUAL_BACKBONES.get(self.config.visual_backbone_type)
         if backbone_cls is None:
@@ -81,6 +95,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
         self.visual_backbone = backbone_cls(**self.config.visual_backbone_kwargs)
 
+        for param in self.visual_backbone.parameters():
+            param.requires_grad = False
+
     def _init_visual_adapter(self):
         adapter_cls = VISUAL_ADAPTERS.get(self.config.visual_adapter_type)
         if adapter_cls is None:
@@ -88,6 +105,24 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 f"Unsupported visual adapter type: {self.config.visual_adapter_type}"
             )
         self.visual_adapter = adapter_cls(**self.config.visual_adapter_kwargs)
+
+    def get_input_embeddings(self):
+        return self.llm.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.llm.set_input_embeddings(value)
+
+    def get_output_embeddings(self):
+        return self.llm.get_output_embeddings()
+
+    def set_output_embeddings(self, new_embeddings):
+        self.llm.set_output_embeddings(new_embeddings)
+
+    def set_decoder(self, decoder):
+        self.llm = decoder
+
+    def get_decoder(self):
+        return self.llm
 
     @torch.no_grad()
     def _post_init(self):
@@ -214,11 +249,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
     ):
         use_cache = llm_forward_kwargs.pop("use_cache", None)
 
-        past_key_values = llm_forward_kwargs.pop("past_key_values", None)
+        past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
         # normal forward
-        if not past_key_values:
+        if not past_key_values or past_key_values[0][0] is None:
             prepare_output = self.prepare_for_casual_lm(
                 input_ids, pixel_values, pixel_values_length
             )
@@ -230,11 +265,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             inputs_embeds = self.llm.get_input_embeddings()(input_ids)
 
         if use_cache and past_key_values is None:
-            past_key_values = HybridCache(
+            past_key_values = DynamicCache(
                 self.llm.config,
-                max_batch_size=inputs_embeds.shape[0],
-                max_cache_len=self.MAX_TOKEN_LENGTH,
-                dtype=inputs_embeds.dtype,
             )
 
         outputs = self.llm(
@@ -263,3 +295,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        *args,
+        **kwargs,
+    ):
+        model = super().from_pretrained(*args, **kwargs)
+        logger.warn(
+            "NOTE: the `lm_head.weight` will be tied properly, ignore the warning above"
+        )
+        return model
