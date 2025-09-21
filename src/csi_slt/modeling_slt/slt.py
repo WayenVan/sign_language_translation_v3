@@ -48,6 +48,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
+        self.config.num_extra_tokens = 2  # start and end of video
 
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
@@ -57,25 +58,29 @@ class SltModel(PreTrainedModel, GenerationMixin):
     @property
     def dummy_inputs(self):
         V_TOKEN = self.config.video_soft_token_id
+        V_TOKEN_NUM = (
+            int(self.config.video_token_scale * 4) + 2
+        )  # NOTE: 2 extra tokens for start and end of video
+
+        # fmt: off
+        input_ids= torch.tensor(
+            [[ 0, 0, 0, 1, 2, 3,] + [V_TOKEN] * V_TOKEN_NUM + [ 4, 5, 9, 7, ]],
+            dtype=torch.long,
+            device=self.device,
+        )
+        seq_len = input_ids.shape[1]
         return {
-            "input_ids": torch.tensor(
-                [[0, 0, 0, 1, 2, 3, V_TOKEN, V_TOKEN, V_TOKEN, V_TOKEN, 4, 5, 6, 7]],
-                dtype=torch.long,
-                device=self.device,
-            ),
+            "input_ids": input_ids,
             "pixel_values": torch.ones(
                 (4, 3, 224, 224), dtype=torch.float32, device=self.device
             ),
             "pixel_values_length": torch.tensor(
                 [4], dtype=torch.long, device=self.device
             ),
-            "attention_mask": torch.ones((1, 14), dtype=torch.long, device=self.device),
-            "labels": torch.tensor(
-                [[0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]],
-                dtype=torch.long,
-                device=self.device,
-            ),
+            "attention_mask": torch.ones(1, seq_len , dtype=torch.long, device=self.device),
+            "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device)
         }
+        # fmt: on
 
     def _init_llm(self):
         self.llm_config = AutoConfig.from_pretrained(self.config.llm_model_name_or_path)
@@ -105,7 +110,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         generation_config.max_length = self.MAX_TOKEN_LENGTH
         generation_config.top_k = None
         generation_config.top_p = None
-        self.generation_config = generation_config
+        self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
 
         for param in self.llm.parameters():
             param.requires_grad = False

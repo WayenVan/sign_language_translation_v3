@@ -1,6 +1,7 @@
 config:
   hidden_size: 1152
   video_soft_token_id: 6
+  video_token_scale: 0.5
   llm_model_name_or_path: google/gemma-3-1b-it
   visual_backbone_type: dinov2
   visual_backbone_kwargs:

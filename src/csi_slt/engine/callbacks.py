@@ -4,6 +4,8 @@ import shutil
 from transformers import logging
 import torchinfo
 import torch
+from omegaconf import OmegaConf
+from accelerate import Accelerator
 
 logger = logging.get_logger(__name__)
 
@@ -64,7 +66,7 @@ class SaveBestMetricCallback(TrainerCallback):
             if current_metric is None:
                 return
 
-            if self.best_metric is None or current_metric < self.best_metric:
+            if self.best_metric is None or current_metric > self.best_metric:
                 self.best_metric = current_metric
 
                 # 删除之前的 checkpoint
@@ -88,7 +90,7 @@ class ModelInfoCallback(TrainerCallback):
     def on_train_begin(self, args, state, control, **kwargs):
         trainer = kwargs.get("trainer", None)
         if trainer and trainer.accelerator.is_local_main_process:
-            print("训练即将开始！")
+            print("Eval model ")
             model = kwargs.get("model", None)
             if model is not None and hasattr(model, "dummy_inputs"):
                 with torch.no_grad():
@@ -103,9 +105,36 @@ class ModelInfoCallback(TrainerCallback):
                                 "trainable",
                             ],
                             verbose=0,
+                            depth=4,
                         )
                         print(summary)
                     except Exception as e:
                         print(f"无法生成模型摘要: {e}")
             else:
                 print("模型不包含 dummy_inputs，无法生成摘要。")
+
+
+class LogHydraConfigCallback(TrainerCallback):
+    def __init__(self, hydra_config):
+        super().__init__()
+        self.hydra_config = hydra_config
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        acc = Accelerator()
+        if acc.is_main_process:
+            is_wandb = False
+            if isinstance(args.report_to, str):
+                is_wandb = args.report_to == "wandb"
+            elif isinstance(args.report_to, (list, tuple)):
+                is_wandb = "wandb" in args.report_to
+
+            if is_wandb:
+                import wandb
+
+                wandb.config.update(
+                    {
+                        "hydra_config": OmegaConf.to_container(
+                            self.hydra_config, resolve=True
+                        )
+                    }
+                )

@@ -1,0 +1,8 @@
+export WANDB_PROJECT=sign_language_translation_v3
+
+export PYTHONPATH=./src:$PYTHONPATH
+
+accelerate launch --num_processes=2 --mixed_precision=fp16 \
+	-m csi_slt.commands.train \
+	engine.training_args.auto_output_root=./outputs/first_demo
+# engine.training_args.report_to=none

@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
+import torchinfo
 
 
 def test_slt_model():
@@ -113,8 +114,23 @@ def test_verify_gemma3():
     print(outputs[0])
 
 
+def test_dummy_inputs():
+    with hydra.initialize(config_path="../configs"):
+        cfg = hydra.compose(config_name="base_train")
+        slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
+        slt_model = SltModel(slt_config).cuda()
+
+    torchinfo.summary(
+        slt_model,
+        input_data=slt_model.dummy_inputs,
+        col_names=["input_size", "output_size", "num_params", "trainable"],
+        depth=4,
+    )
+
+
 if __name__ == "__main__":
     # test_slt_model()
     # test_model_save()
     # test_model_load()
-    test_verify_gemma3()
+    # test_verify_gemma3()
+    test_dummy_inputs()
