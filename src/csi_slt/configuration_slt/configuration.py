@@ -16,6 +16,7 @@ class SltConfig(PretrainedConfig):
         self,
         hidden_size: int = 512,
         video_soft_token_id: int = -1,
+        video_token_scale: float = 1.0,
         llm_model_name_or_path: str = "google/gemma-3-1b-it",
         llm_init_kwargs: Optional[Dict[str, Any]] = None,
         visual_backbone_type: str = "resnet50",
@@ -30,6 +31,7 @@ class SltConfig(PretrainedConfig):
         Args:
             hidden_size: Dimensionality of the model's hidden states.
             video_soft_token_id: The video soft token id when replacing <video> token in the text input.
+            video_token_scale: Scaling factor for video token embeddings.
             llm_model_name_or_path: Path to the pre-trained LLM model or model identifier from huggingface.co/models.
             llm_init_kwargs: Additional keyword arguments for when using .from_pretrained() to load the LLM model.
             visual_backbone_type: Type of visual backbone to use. Options: 'resnet50', 'vit-base-patch16-224', etc.
@@ -57,3 +59,5 @@ class SltConfig(PretrainedConfig):
             llm_model_name_or_path
         )  # NOTE: using AutoConfig to support more models
         self.num_hidden_layers = llm_config.num_hidden_layers
+        self.video_token_scale = video_token_scale
+        self.num_extra_tokens = None

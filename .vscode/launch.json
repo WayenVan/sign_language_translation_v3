@@ -9,13 +9,16 @@
       "console": "integratedTerminal",
       "env": {
         "PYTHONPATH": "./src:${env:PYTHONPATH}",
-        "CUDA_VISIBLE_DEVICES": "0,1"
+        "CUDA_VISIBLE_DEVICES": "0,1",
+        "WANDB_PROJECT": "debugs"
       },
       "args": [
         "--num_processes=2",
         "--mixed_precision=fp16",
         "-m",
-        "csi_slt.commands.train"
+        "csi_slt.commands.train",
+        "engine.training_args.report_to=wandb",
+        "engine.training_args.auto_output_root=./outputs/debug_outputs"
       ]
     }
   ]

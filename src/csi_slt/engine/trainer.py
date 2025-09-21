@@ -3,6 +3,7 @@ from .callbacks import (
     SltTrainerCallbackHandler,
     SaveBestMetricCallback,
     ModelInfoCallback,
+    LogHydraConfigCallback,
 )
 from transformers.trainer_utils import EvalLoopOutput
 from torch import nn
@@ -32,6 +33,7 @@ logger = logging.get_logger(__name__)
 class SltTrainer(Seq2SeqTrainer):
     def __init__(
         self,
+        hydra_config=None,
         eval_data_collator=None,
         train_data_collator=None,
         test_data_collator=None,
@@ -53,8 +55,9 @@ class SltTrainer(Seq2SeqTrainer):
         )
 
         # NOTE: add custom callbacks
-        self.add_callback(SaveBestMetricCallback(metric_name="bleu4"))
+        self.add_callback(SaveBestMetricCallback(metric_name="eval_bleu4"))
         self.add_callback(ModelInfoCallback())
+        self.add_callback(LogHydraConfigCallback(hydra_config))
 
         self.callback_handler = SltTrainerCallbackHandler(
             self,
@@ -73,6 +76,7 @@ class SltTrainer(Seq2SeqTrainer):
                 "Overriding predict_with_generate to True for Customized Prediction Step"
             )
         self.args.predict_with_generate = True
+        self.hydra_config = hydra_config
 
     @staticmethod
     def _compute_metrics(pred: EvalLoopOutput, tokenizer) -> dict:
