@@ -1,7 +1,5 @@
-from torch.utils.data import DataLoader
 from omegaconf import DictConfig
 from hydra.utils import instantiate
-from typing import List
 import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset

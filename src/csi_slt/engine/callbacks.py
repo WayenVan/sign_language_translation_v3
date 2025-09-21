@@ -2,6 +2,8 @@ from transformers.trainer_callback import TrainerCallback, CallbackHandler
 import os
 import shutil
 from transformers import logging
+import torchinfo
+import torch
 
 logger = logging.get_logger(__name__)
 
@@ -80,3 +82,30 @@ class SaveBestMetricCallback(TrainerCallback):
                 logger.info(
                     f"Saved new best checkpoint at {checkpoint_path} with {self.metric_name} = {current_metric}"
                 )
+
+
+class ModelInfoCallback(TrainerCallback):
+    def on_train_begin(self, args, state, control, **kwargs):
+        trainer = kwargs.get("trainer", None)
+        if trainer and trainer.accelerator.is_local_main_process:
+            print("训练即将开始！")
+            model = kwargs.get("model", None)
+            if model is not None and hasattr(model, "dummy_inputs"):
+                with torch.no_grad():
+                    try:
+                        summary = torchinfo.summary(
+                            model,
+                            input_data=model.dummy_inputs,
+                            col_names=[
+                                "input_size",
+                                "output_size",
+                                "num_params",
+                                "trainable",
+                            ],
+                            verbose=0,
+                        )
+                        print(summary)
+                    except Exception as e:
+                        print(f"无法生成模型摘要: {e}")
+            else:
+                print("模型不包含 dummy_inputs，无法生成摘要。")
