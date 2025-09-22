@@ -6,6 +6,7 @@ import torchinfo
 import torch
 from omegaconf import OmegaConf
 from accelerate import Accelerator
+from ..misc.git_utils import save_git_state
 
 logger = logging.get_logger(__name__)
 
@@ -138,3 +139,18 @@ class LogHydraConfigCallback(TrainerCallback):
                         )
                     }
                 )
+
+
+class SaveGitInfoCallback(TrainerCallback):
+    def on_train_begin(self, args, state, control, **kwargs):
+        acc = Accelerator()
+        if acc.is_main_process:
+            try:
+                save_dir = os.path.join(args.output_dir, "git_info")
+
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir)
+                save_git_state(state_dir=save_dir)
+                logger.info(f"Saved git info at {save_dir}")
+            except Exception as e:
+                logger.warning(f"Can not save git info: {e}")
