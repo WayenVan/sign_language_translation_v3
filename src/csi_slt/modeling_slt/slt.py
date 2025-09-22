@@ -277,6 +277,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
     ):
         use_cache = llm_forward_kwargs.pop("use_cache", None)
 
+        if pixel_values_length is not None:
+            assert (pixel_values_length % 4 == 0).all(), (
+                "The length of pixel_values_length must be a multiple of 4."
+            )
+
         past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
