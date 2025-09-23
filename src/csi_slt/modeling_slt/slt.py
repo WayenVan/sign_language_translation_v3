@@ -48,7 +48,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
-        self.config.num_extra_tokens = 2  # start and end of video
+        self.config.num_extra_tokens = 2  # start and end of vlideo
 
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
@@ -104,6 +104,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 attn_implementation=attn_implementation,
                 **self.config.llm_init_kwargs,
             )
+
+        self.config.bos_token_id = self.llm_config.bos_token_id
+        self.config.eos_token_id = self.llm_config.eos_token_id
+        self.config.pad_token_id = self.llm_config.pad_token_id
 
         generation_config = self.llm.generation_config
         generation_config.do_sample = False
@@ -256,7 +260,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         inputs_embeds = torch.where(
             visual_mask_text.bool().unsqueeze(-1),  # [B, L, 1]
-            torch.stack(extened_visual_feats, dim=0),  # [B, L, D]
+            torch.stack(extened_visual_feats, dim=0).con,  # [B, L, D]
             self.llm.get_input_embeddings()(text_input_ids).contiguous(),  # [B, L, D]
         )
 
