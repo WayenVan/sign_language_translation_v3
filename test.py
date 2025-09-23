@@ -3,6 +3,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.models.gemma3 import Gemma3ForCausalLM
 from transformers.models.gemma3.configuration_gemma3 import Gemma3Config
 from safetensors import safe_open
+from trl import GRPOTrainer
 
 
 with safe_open(

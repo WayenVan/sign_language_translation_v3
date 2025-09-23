@@ -61,3 +61,7 @@ class SltConfig(PretrainedConfig):
         self.num_hidden_layers = llm_config.num_hidden_layers
         self.video_token_scale = video_token_scale
         self.num_extra_tokens = None
+
+        self.bos_token_id = None  # to be set when laoding the tokenizer
+        self.eos_token_id = None  # to be set when laoding the tokenizer
+        self.pad_token_id = None  # to be set when laoding the tokenizer

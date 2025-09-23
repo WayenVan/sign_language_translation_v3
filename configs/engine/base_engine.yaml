@@ -6,7 +6,7 @@ training_args:
   remove_unused_columns: False
   ddp_find_unused_parameters: False
   save_strategy: steps
-  save_steps: 1000
+  save_steps: 4000
   save_total_limit: 1
   logging_steps: 100
   eval_strategy: "steps"
@@ -18,5 +18,5 @@ training_args:
   lr_scheduler_type: cosine
   dataloader_persistent_workers: True
   # generation_config: null
-generation_config:
+generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128

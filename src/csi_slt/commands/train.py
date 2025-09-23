@@ -8,6 +8,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltConfig, SltModel
+from ..misc.utils import deep_merge
 from transformers.generation.configuration_utils import GenerationConfig
 
 from accelerate import Accelerator
@@ -35,10 +36,17 @@ def main(cfg: DictConfig):
     datamodule = DataModule(cfg.data, tokenizer=tokenizer)
     datamodule.setup("train")
 
+    # generation config
+    #
+    generation_config_args = OmegaConf.to_container(
+        cfg.engine.generation_config, resolve=True
+    )
+    model_generation_config = slt_model.generation_config.to_dict()
+
     # create trainer
     training_args = SltTrainingArguments(
         generation_config=GenerationConfig(
-            **OmegaConf.to_container(cfg.engine.generation_config, resolve=True)
+            **deep_merge(model_generation_config, generation_config_args)
         ),
         **cfg.engine.training_args,
     )

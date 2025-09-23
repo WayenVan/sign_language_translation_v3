@@ -129,8 +129,8 @@ def test_dummy_inputs():
 
 
 if __name__ == "__main__":
-    # test_slt_model()
+    test_slt_model()
     # test_model_save()
     # test_model_load()
     # test_verify_gemma3()
-    test_dummy_inputs()
+    # test_dummy_inputs()
