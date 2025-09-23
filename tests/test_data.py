@@ -36,7 +36,7 @@ def test_datamodule():
     for batch in loader:
         # print(batch["input_ids"][0])
         # print(batch["labels"][0])
-        print(batch["input_text"])
+        print(batch["input_text"][0])
 
 
 if __name__ == "__main__":

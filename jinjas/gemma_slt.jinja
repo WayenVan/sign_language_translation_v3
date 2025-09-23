@@ -3,11 +3,14 @@
   {{ raise_exception("The first message must be from the user") }}
 {%- endif -%}
 {{ '<start_of_turn>' + "user" +  "
-"+ "You are a native "+ messages[0]['language'] + " speaker. You are going to translate the following content to " + messages[0]["language"]}} 
-{{ '<unused1>' }}{{"
+"+ "You are a native "+ messages[0]['language'] + " speaker. You are going to translate a provided content to " + messages[0]["language"]}}
+{{"
+"+ "the output should only contains the translated text in " + messages[0]["language"] + " without any additional text or explanation.
 
-"+ "the output should only contains the translated text in " + messages[0]["language"] + " without any additional text or explanation"}}{{ '<end_of_turn>
-' }}
+"}}{{"the input is: "}}{{ '<unused1>' }}{{"
+
+the output is: "}}{{'<end_of_turn>
+'}}
 {%- if add_generation_prompt -%}
     {{'<start_of_turn>model
 '}}
