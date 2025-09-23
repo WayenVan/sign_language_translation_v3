@@ -8,15 +8,15 @@ training_args:
   save_strategy: steps
   save_steps: 4000
   save_total_limit: 1
-  logging_steps: 100
+  logging_steps: 50
   eval_strategy: "steps"
   eval_steps: 4000
   learning_rate: 1e-4
-  dataloader_num_workers: 6
+  dataloader_num_workers: 4
   auto_output_dir: True
   auto_output_root: outputs/demos
   lr_scheduler_type: cosine
-  dataloader_persistent_workers: True
+  # dataloader_persistent_workers: True
   # generation_config: null
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128

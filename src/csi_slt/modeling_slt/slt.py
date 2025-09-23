@@ -260,7 +260,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         inputs_embeds = torch.where(
             visual_mask_text.bool().unsqueeze(-1),  # [B, L, 1]
-            torch.stack(extened_visual_feats, dim=0).con,  # [B, L, D]
+            torch.stack(extened_visual_feats, dim=0).contiguous(),  # [B, L, D]
             self.llm.get_input_embeddings()(text_input_ids).contiguous(),  # [B, L, D]
         )
 

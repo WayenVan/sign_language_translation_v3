@@ -7,7 +7,6 @@
       "request": "launch",
       "module": "accelerate.commands.launch",
       "console": "integratedTerminal",
-      "justMyCode": false,
       "env": {
         "PYTHONPATH": "./src:${env:PYTHONPATH}",
         "CUDA_VISIBLE_DEVICES": "0,1",
