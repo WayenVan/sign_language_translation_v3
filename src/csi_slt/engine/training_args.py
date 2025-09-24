@@ -36,22 +36,23 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
 
     @staticmethod
     def __snyc_output_base_name(acc: Accelerator, base_name: str):
-        if acc.is_main_process:
-            bytes_base_name = base_name.encode("utf-8")
-            length = torch.tensor(
-                len(bytes_base_name), dtype=torch.long, device=acc.device
-            )
-        else:
-            length = torch.tensor(0, dtype=torch.long, device=acc.device)
+        with torch.no_grad():
+            if acc.is_main_process:
+                bytes_base_name = base_name.encode("utf-8")
+                length = torch.tensor(
+                    len(bytes_base_name), dtype=torch.long, device=acc.device
+                )
+            else:
+                length = torch.tensor(0, dtype=torch.long, device=acc.device)
 
-        length = acc.gather(length)[0].cpu().item()
+            length = acc.gather(length)[0].cpu().item()
 
-        content = torch.zeros(length, dtype=torch.uint8, device=acc.device)
-        if acc.is_main_process:
-            content = torch.tensor(
-                list(bytes_base_name), dtype=torch.uint8, device=acc.device
-            )
-        content = acc.gather(content)[:length].cpu().numpy().tobytes()
+            content = torch.zeros(length, dtype=torch.uint8, device=acc.device)
+            if acc.is_main_process:
+                content = torch.tensor(
+                    list(bytes_base_name), dtype=torch.uint8, device=acc.device
+                )
+            content = acc.gather(content)[:length].cpu().numpy().tobytes()
         return content.decode("utf-8")
 
     def __post_init__(self):
