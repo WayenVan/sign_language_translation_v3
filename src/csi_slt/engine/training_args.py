@@ -36,6 +36,10 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
 
     @staticmethod
     def __snyc_output_base_name(acc: Accelerator, base_name: str):
+        """
+        synchronize the base name of the output directory across all processes.
+        through the bytes communication of torch tensors.
+        """
         with torch.no_grad():
             if acc.is_main_process:
                 bytes_base_name = base_name.encode("utf-8")
