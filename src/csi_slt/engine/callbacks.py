@@ -7,6 +7,8 @@ import torch
 from omegaconf import OmegaConf
 from accelerate import Accelerator
 from ..misc.git_utils import save_git_state
+from transformers.modeling_utils import unwrap_model
+
 
 logger = logging.get_logger(__name__)
 
@@ -154,3 +156,26 @@ class SaveGitInfoCallback(TrainerCallback):
                 logger.info(f"Saved git info at {save_dir}")
             except Exception as e:
                 logger.warning(f"Can not save git info: {e}")
+
+
+class SaveBaseModelInPEFT(TrainerCallback):
+    def on_save(self, args, state, control, **kwargs):
+        acc = Accelerator()
+        if acc.is_local_main_process:
+            model = kwargs.get("model", None)
+            if model is not None:
+                unwrapped_model = unwrap_model(model)
+                if (
+                    hasattr(unwrapped_model, "is_peft_model")
+                    and unwrapped_model.is_peft_model
+                ):
+                    # 保存基础模型
+                    base_model = unwrapped_model.get_base_model()
+                    save_dir = os.path.join(
+                        args.output_dir, f"checkpoint-{state.global_step}"
+                    )
+                    base_model.save_pretrained(save_dir)
+                else:
+                    logger.warn("Model is not a PEFT model, skipping base model save.")
+            else:
+                raise ValueError("Model is None, cannot save base model.")

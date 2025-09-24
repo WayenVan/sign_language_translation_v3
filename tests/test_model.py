@@ -9,6 +9,7 @@ sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
 import torchinfo
+import re
 
 
 def test_slt_model():
@@ -128,9 +129,56 @@ def test_dummy_inputs():
     )
 
 
+def test_peft_model():
+    from peft import get_peft_model, LoraConfig, TaskType
+
+    with hydra.initialize(config_path="../configs"):
+        cfg = hydra.compose(config_name="base_train_ft")
+        slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
+        slt_model = SltModel(slt_config)
+
+    # for name, param in slt_model.named_parameters():
+    #     print(name)
+
+    lora_args = OmegaConf.to_container(cfg.engine.peft_config, resolve=True)
+
+    target_modules = lora_args.pop("target_modules", None)
+    target_modules_list = []
+    if target_modules is not None:
+        for name, _ in slt_model.named_modules():
+            for regex in target_modules:
+                if re.fullmatch(regex, name):
+                    target_modules_list.append(name)
+                    print(f"Found target module for LoRA: {name}")
+        if len(target_modules_list) == 0:
+            raise ValueError(
+                "No target modules found for LoRA. Please check the regex patterns."
+            )
+
+        lora_args["target_modules"] = target_modules_list
+    else:
+        lora_args["target_modules"] = []
+
+    peft_config = LoraConfig(
+        **lora_args,
+        task_type=TaskType.CAUSAL_LM,
+    )
+
+    peft_model = get_peft_model(slt_model, peft_config)
+    print(peft_model.print_trainable_parameters())
+    for param in peft_model.base_model.visual_adapter.parameters():
+        param.requires_grad = True
+
+    for name, param in peft_model.named_parameters():
+        print(name, param.requires_grad)
+
+    peft_model.save_pretrained("outputs/test_peft_save")
+
+
 if __name__ == "__main__":
     # test_slt_model()
     # test_model_save()
     # test_model_load()
     # test_verify_gemma3()
-    test_dummy_inputs()
+    # test_dummy_inputs()
+    test_peft_model()

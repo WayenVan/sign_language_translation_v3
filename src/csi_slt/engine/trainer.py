@@ -5,6 +5,7 @@ from .callbacks import (
     ModelInfoCallback,
     LogHydraConfigCallback,
     SaveGitInfoCallback,
+    SaveBaseModelInPEFT,
 )
 from transformers.trainer_utils import EvalLoopOutput
 from torch import nn
@@ -12,10 +13,12 @@ import torch
 from torch.distributed.fsdp import FullyShardedDataParallel
 from typing import Any, Optional, Union
 import contextlib
+from transformers.modeling_utils import unwrap_model
 
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.integrations.fsdp import is_fsdp_managed_module
 from transformers.trainer_utils import seed_worker
+from transformers.trainer import _is_peft_model
 from transformers.utils import is_datasets_available
 
 
@@ -60,6 +63,9 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(ModelInfoCallback())
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
+
+        if _is_peft_model(unwrap_model(self.model)):
+            self.add_callback(SaveBaseModelInPEFT())
 
         self.callback_handler = SltTrainerCallbackHandler(
             self,
