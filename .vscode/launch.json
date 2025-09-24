@@ -13,7 +13,7 @@
         "WANDB_PROJECT": "debugs"
       },
       "args": [
-        "--num_processes=1",
+        "--num_processes=2",
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.train",
