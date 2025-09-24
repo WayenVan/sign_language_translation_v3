@@ -1,0 +1,15 @@
+defaults:
+  - model: base_model
+  # - data: ph14t_*x224x224_gemmaslt_multiling
+  - data: ph14t_*x224x224_gemmaslt
+  - engine: base_engine_ft
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  sweep:
+    dir: .
+  output_subdir: null
