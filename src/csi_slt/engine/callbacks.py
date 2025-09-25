@@ -84,6 +84,25 @@ class SaveBestMetricCallback(TrainerCallback):
                     save_dir, f"best_{self.metric_name}={current_metric:.4f}"
                 )
                 trainer.save_model(checkpoint_path)
+
+                # NOTE: check if peft model
+                model = kwargs.get("model", None)
+                if model is None:
+                    model = trainer.model
+                    logger.warning(
+                        "Model is None in callback kwargs, using trainer.model instead."
+                    )
+
+                unwrapped_model = unwrap_model(model)
+                if _is_peft_model(unwrapped_model):
+                    # 保存基础模型
+                    base_model = unwrapped_model.get_base_model()
+                    base_model.save_pretrained(checkpoint_path)
+                    logger.info(
+                        f"Saved base model of PEFT at {checkpoint_path} for best {self.metric_name}"
+                    )
+                # NOTE: end peft model
+
                 self.last_checkpoint_path = checkpoint_path
                 logger.info(
                     f"Saved new best checkpoint at {checkpoint_path} with {self.metric_name} = {current_metric}"

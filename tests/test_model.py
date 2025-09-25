@@ -12,6 +12,15 @@ import torchinfo
 import re
 
 
+def test_model_params():
+    model = SltModel.from_pretrained(
+        "outputs/first_demo/2025-09-24_01-05-28/best_checkpoint/best_eval_bleu4=0.0431"
+    )
+
+    for name, param in model.named_parameters():
+        print(name, param.requires_grad)
+
+
 def test_slt_model():
     with hydra.initialize(config_path="../configs"):
         cfg = hydra.compose(config_name="base_train")
@@ -176,9 +185,10 @@ def test_peft_model():
 
 
 if __name__ == "__main__":
+    test_model_params()
     # test_slt_model()
     # test_model_save()
     # test_model_load()
     # test_verify_gemma3()
     # test_dummy_inputs()
-    test_peft_model()
+    # test_peft_model()

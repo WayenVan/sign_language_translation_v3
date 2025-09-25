@@ -1,10 +1,9 @@
-peft_config:
-  r: 4
-  lora_alpha: 16
-  target_modules:
-    - "^llm.model.layers.[0-8].self_attn.q_proj$"
-    - "^llm.model.layers.[0-8].self_attn.k_proj$"
-    - "^llm.model.layers.[0-8].self_attn.v_proj$"
-  bias: none
-
 checkpoint_dir: outputs/first_demo/2025-09-24_01-05-28/checkpoint-141920
+
+ft_config:
+  unfreeze_embedding: True
+  target_params:
+    - "^llm.model.layers.[0-9]+.self_attn.q_proj"
+    - "^llm.model.layers.[0-9]+.self_attn.k_proj"
+    - "^llm.model.layers.[0-9]+.self_attn.v_proj"
+    - "^llm.model.layers.[0-9]+.self_attn.o_proj"
