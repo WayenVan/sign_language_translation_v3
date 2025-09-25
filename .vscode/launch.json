@@ -22,6 +22,28 @@
       ]
     },
     {
+      "name": "train_ft_peft",
+      "type": "python",
+      "request": "launch",
+      "module": "accelerate.commands.launch",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "./src:${env:PYTHONPATH}",
+        "CUDA_VISIBLE_DEVICES": "0",
+        "WANDB_PROJECT": "debugs"
+      },
+      "justMyCode": false,
+      "args": [
+        "--num_processes=1",
+        "--mixed_precision=fp16",
+        "-m",
+        "csi_slt.commands.train_ft_peft",
+        "engine.training_args.report_to=none",
+        "engine.training_args.auto_output_root=./outputs/debug_outputs",
+        "engine.training_args.dataloader_num_workers=0"
+      ]
+    },
+    {
       "name": "train_ft",
       "type": "python",
       "request": "launch",

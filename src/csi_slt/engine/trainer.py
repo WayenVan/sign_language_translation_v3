@@ -76,7 +76,9 @@ class SltTrainer(Seq2SeqTrainer):
             self.lr_scheduler,
         )
 
-        self.compute_metrics = partial(self._compute_metrics, tokenizer=self.tokenizer)
+        self.compute_metrics = partial(
+            self._compute_metrics, tokenizer=self.processing_class
+        )
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
