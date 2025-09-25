@@ -49,7 +49,11 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
             else:
                 length = torch.tensor(0, dtype=torch.long, device=acc.device)
 
-            length = acc.gather(length)[0].cpu().item()
+            length = acc.gather(length)
+            if length.dim() > 0:
+                length = length.max().cpu().item()
+            else:
+                length = length.cpu().item()
 
             content = torch.zeros(length, dtype=torch.uint8, device=acc.device)
             if acc.is_main_process:

@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 from accelerate import Accelerator
 from ..misc.git_utils import save_git_state
 from transformers.modeling_utils import unwrap_model
+from transformers.trainer import _is_peft_model
 
 
 logger = logging.get_logger(__name__)
@@ -165,16 +166,16 @@ class SaveBaseModelInPEFT(TrainerCallback):
             model = kwargs.get("model", None)
             if model is not None:
                 unwrapped_model = unwrap_model(model)
-                if (
-                    hasattr(unwrapped_model, "is_peft_model")
-                    and unwrapped_model.is_peft_model
-                ):
+                if _is_peft_model(unwrapped_model):
                     # 保存基础模型
                     base_model = unwrapped_model.get_base_model()
                     save_dir = os.path.join(
                         args.output_dir, f"checkpoint-{state.global_step}"
                     )
                     base_model.save_pretrained(save_dir)
+                    logger.info(
+                        f"Saved base model of PEFT at {save_dir} for checkpoint-{state.global_step}"
+                    )
                 else:
                     logger.warn("Model is not a PEFT model, skipping base model save.")
             else:

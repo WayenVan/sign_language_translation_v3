@@ -1,7 +1,7 @@
 training_args:
   num_train_epochs: 80
-  per_device_train_batch_size: 2
-  per_device_eval_batch_size: 2
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
   report_to: wandb
   remove_unused_columns: False
   ddp_find_unused_parameters: False
@@ -11,21 +11,12 @@ training_args:
   logging_steps: 50
   eval_strategy: "steps"
   eval_steps: 4000
-  learning_rate: 1e-4
+  learning_rate: 1e-5
   dataloader_num_workers: 4
   auto_output_dir: True
-  auto_output_root: outputs/demos
+  auto_output_root: outputs/demos_ft
   lr_scheduler_type: cosine
   # dataloader_persistent_workers: True
   # generation_config: null
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128
-
-peft_config:
-  r: 4
-  lora_alpha: 16
-  target_modules:
-    - "^llm.model.layers.[1-5].self_attn.q_proj$"
-    - "^llm.model.layers.[1-5].self_attn.k_proj$"
-    - "^llm.model.layers.[1-5].self_attn.v_proj$"
-  bias: none
