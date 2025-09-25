@@ -27,19 +27,21 @@ set_seed(42)
 
 
 @hydra.main(
-    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="base_train"
+    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="base_train_ft"
 )
 def main(cfg: DictConfig):
     # accelerate initialize
     acc = Accelerator()
 
     # create model
-    slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-    slt_model = SltModel(slt_config).cuda()
+    # slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
+    # slt_model = SltModel(slt_config).cuda()
+    slt_model = SltModel.from_pretrained(
+        cfg.model.checkpoint_dir,
+    )
 
     # create datamodule
-    llm_name = cfg.model.config.llm_model_name_or_path
-    tokenizer = AutoTokenizer.from_pretrained(llm_name)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)
 
     datamodule = DataModule(cfg.data, tokenizer=tokenizer)
     datamodule.setup("train")
@@ -52,7 +54,7 @@ def main(cfg: DictConfig):
     model_generation_config = slt_model.generation_config.to_dict()
 
     # peft confg
-    lora_args = OmegaConf.to_container(cfg.engine.peft_config, resolve=True)
+    lora_args = OmegaConf.to_container(cfg.model.peft_config, resolve=True)
 
     target_modules = lora_args.pop("target_modules", None)
     target_modules_list = []
