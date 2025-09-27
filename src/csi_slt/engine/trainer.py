@@ -6,6 +6,7 @@ from .callbacks import (
     LogHydraConfigCallback,
     SaveGitInfoCallback,
     SaveBaseModelInPEFT,
+    SaveHydraConfigCallback,
 )
 from transformers.trainer_utils import EvalLoopOutput
 from torch import nn
@@ -62,6 +63,7 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(SaveBestMetricCallback(metric_name="eval_bleu4"))
         self.add_callback(ModelInfoCallback())
         self.add_callback(LogHydraConfigCallback(hydra_config))
+        self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
 
         if _is_peft_model(unwrap_model(self.model)):

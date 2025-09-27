@@ -163,6 +163,25 @@ class LogHydraConfigCallback(TrainerCallback):
                 )
 
 
+class SaveHydraConfigCallback(TrainerCallback):
+    def __init__(self, hydra_config):
+        super().__init__()
+        self.hydra_config = hydra_config
+
+    def on_save(self, args, state, control, **kwargs):
+        acc = Accelerator()
+        if acc.is_local_main_process:
+            save_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
+            # 保存 hydra 配置
+            config_path = os.path.join(save_dir, "hydra_config.yaml")
+            with open(config_path, "w") as f:
+                OmegaConf.save(self.hydra_config, f)
+            logger.info(f"Saved Hydra config at {config_path}")
+
+
 class SaveGitInfoCallback(TrainerCallback):
     def on_train_begin(self, args, state, control, **kwargs):
         acc = Accelerator()
