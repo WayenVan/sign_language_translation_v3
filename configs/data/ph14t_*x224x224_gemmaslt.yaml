@@ -26,16 +26,30 @@ val:
     _target_: csi_slt.data.piplines.SLTGeneralPiplineTest
     height: 224
     width: 224
-    downsample_rate: 2
+    downsample_rate: 1
   collator:
     _target_: csi_slt.data.collators.Gemma3SLTCollator
     mode: val
     video_token_scale: 0.5
     num_extra_video_tokens: 2
 
-test: null
+test:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TGeneralDataset
+    data_root: ${data.data_root}
+    mode: test
+  pipline:
+    _target_: csi_slt.data.piplines.SLTGeneralPiplineTest
+    height: 224
+    width: 224
+    downsample_rate: 1
+  collator:
+    _target_: csi_slt.data.collators.Gemma3SLTCollator
+    mode: val
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
 
 fraction_dataset: False
 train_fraction: 1.0
 val_fraction: 0.01
-test_fraction: 1.0
+test_fraction: 0.05

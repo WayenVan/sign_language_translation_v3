@@ -18,3 +18,5 @@ config:
     mlp_depth: 2
     attn_drop: 0.0
     proj_drop: 0.0
+    use_temporal_shuffle: True
+    temporal_scale_factor: 2
