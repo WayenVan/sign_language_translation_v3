@@ -64,6 +64,26 @@
         "engine.training_args.auto_output_root=./outputs/debug_outputs",
         "engine.training_args.dataloader_num_workers=0"
       ]
+    },
+    {
+      "name": "eval",
+      "type": "python",
+      "request": "launch",
+      "module": "accelerate.commands.launch",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "./src:${env:PYTHONPATH}",
+        "CUDA_VISIBLE_DEVICES": "0,1",
+        "WANDB_PROJECT": "debugs"
+      },
+      "justMyCode": false,
+      "args": [
+        "--num_processes=2",
+        "--mixed_precision=fp16",
+        "-m",
+        "csi_slt.commands.evaluate",
+        "engine.training_args.dataloader_num_workers=4"
+      ]
     }
   ]
 }

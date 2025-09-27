@@ -1,0 +1,14 @@
+training_args:
+  num_train_epochs: 80
+  # per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  report_to: none
+  remove_unused_columns: False
+  ddp_find_unused_parameters: False
+  dataloader_num_workers: 4
+  auto_output_dir: True
+  auto_output_root: outputs/eval
+  # dataloader_persistent_workers: True
+  # generation_config: null
+generation_config: # NOTE: override the generation config in model config
+  max_new_tokens: 128

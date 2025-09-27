@@ -1,0 +1,14 @@
+defaults:
+  - model: base_eval_model
+  - data: ph14t_*x224x224_gemmaslt
+  - engine: base_eval_engine
+  - override hydra/hydra_logging: none
+  - override hydra/job_logging: none
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  sweep:
+    dir: .
+  output_subdir: null
