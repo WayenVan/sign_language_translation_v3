@@ -10,7 +10,7 @@ from timm.models.vision_transformer import (
     LayerScale,
 )
 from transformers.models.gemma3.modeling_gemma3 import Gemma3RMSNorm
-from ..output_utils import VisualAdapterOutput
+from ..output_utils import VisualAdapterOutput, VisualBackboneOutput
 
 
 def build_mlp(depth, hidden_size, output_hidden_size):
@@ -73,8 +73,14 @@ class TokenSampleAdapter(nn.Module):
                 scale_factor=temporal_scale_factor,
             )
 
-    def forward(self, x, v_length):
+    def forward(self, visual_backbone_output: VisualBackboneOutput):
         # x: (B, T, HW, C)
+        x = visual_backbone_output.visual_features
+        v_length = visual_backbone_output.visual_length
+
+        if x is None or v_length is None:
+            raise ValueError("visual_features and visual_length cannot be None")
+
         BT, HW, C = x.shape
 
         extra_queries = repeat(self.extra_queries, "1 n c -> bt n c", bt=BT)

@@ -80,6 +80,8 @@ class Ph14TMultiLinglDataset(Dataset):
 
         import cv2
 
+        cv2.setNumThreads(1)
+
         for frame_file in video_frame_file_name:
             image = cv2.imread(os.path.join(self.data_root, frame_file))
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)

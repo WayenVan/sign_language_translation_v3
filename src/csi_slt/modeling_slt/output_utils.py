@@ -7,7 +7,9 @@ from typing import Optional
 
 @dataclass
 class VisualBackboneOutput(ModelOutput):
-    visual_features: torch.Tensor  # [visual_length_1+visual_length_2..., ...,feature_dim] raw visual features, might contains spatial dimensions
+    visual_features: Optional[torch.Tensor] = (
+        None  # [visual_length_1+visual_length_2..., feature_dim] visual features, might contains spatial dimensions
+    )
     pooled_visual_features: Optional[torch.Tensor] = (
         None  # [visual_length_1+visual_length_2..., feature_dim] pooled visual features
     )

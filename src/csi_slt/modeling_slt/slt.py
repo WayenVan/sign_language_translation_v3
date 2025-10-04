@@ -199,7 +199,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             video, video_length
         )  # [BT, CLS+HW+REGISTIRY, C]
         visual_adapter_output: VisualAdapterOutput = self.visual_adapter(
-            visual_backbone_output.visual_features, visual_backbone_output.visual_length
+            visual_backbone_output
         )  # [BT,  D]
 
         return visual_adapter_output

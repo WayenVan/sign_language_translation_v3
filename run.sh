@@ -4,12 +4,12 @@ export PYTHONPATH=./src:$PYTHONPATH
 
 accelerate launch --num_processes=2 --mixed_precision=fp16 \
 	-m csi_slt.commands.train \
-	engine.training_args.auto_output_root=./outputs/pretrain_adapter \
-	data.train.collator.video_token_scale=1.0 \
-	data.val.collator.video_token_scale=1.0 \
-	data.test.collator.video_token_scale=1.0 \
-	model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
-	model.config.video_token_scale=1.0
+	engine.training_args.auto_output_root=./outputs/pretrain_adapter
+# data.train.collator.video_token_scale=1.0 \
+# data.val.collator.video_token_scale=1.0 \
+# data.test.collator.video_token_scale=1.0 \
+# model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
+# model.config.video_token_scale=1.0
 
 # -m csi_slt.commands.train_ft # accelerate launch --num_processes=2 --mixed_precision=fp16 \
 # 	engine.training_args.auto_output_root=./outputs/first_demo_ft

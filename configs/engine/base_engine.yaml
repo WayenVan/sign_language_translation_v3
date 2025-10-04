@@ -12,10 +12,11 @@ training_args:
   eval_strategy: "steps"
   eval_steps: 4000
   learning_rate: 1e-4
-  dataloader_num_workers: 4
+  dataloader_num_workers: 5
   auto_output_dir: True
   auto_output_root: outputs/demos
   lr_scheduler_type: cosine
+  dataloader_prefetch_factor: 4
   # dataloader_persistent_workers: True
   # generation_config: null
 generation_config: # NOTE: override the generation config in model config

@@ -1,5 +1,6 @@
 defaults:
-  - model: base_model
+  # - model: base_model
+  - model: pretrained_encoder_model
   # - data: ph14t_*x224x224_gemmaslt_multiling
   - data: ph14t_*x224x224_gemmaslt
   - engine: base_engine
