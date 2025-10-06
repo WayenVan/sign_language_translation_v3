@@ -10,7 +10,7 @@ train:
     _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
     video_token_scale: 0.5
     num_extra_video_tokens: 2
-    model: train
+    mode: train
     video_processor:
       _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
       height: 224
@@ -28,7 +28,7 @@ val:
     _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
     video_token_scale: 0.5
     num_extra_video_tokens: 2
-    model: eval
+    mode: eval
     video_processor:
       _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
       height: 224
@@ -46,7 +46,7 @@ test:
     _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
     video_token_scale: 0.5
     num_extra_video_tokens: 2
-    model: test
+    mode: test
     video_processor:
       _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
       height: 224

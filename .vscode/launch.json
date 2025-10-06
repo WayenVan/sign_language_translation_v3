@@ -19,7 +19,7 @@
         "csi_slt.commands.train",
         "engine.training_args.report_to=none",
         "engine.training_args.auto_output_root=./outputs/debug_outputs",
-        "engine.training_args.save_steps=5"
+        "engine.training_args.save_steps=1000"
       ]
     },
     {

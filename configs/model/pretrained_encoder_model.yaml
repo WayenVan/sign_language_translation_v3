@@ -5,7 +5,15 @@ config:
   llm_model_name_or_path: google/gemma-3-1b-it
   visual_backbone_type: pretrained
   visual_backbone_kwargs:
-    ckpt_path: /root/projects/sign_langauge_visual_pretrain/outputs/info_nce_pretrain/2025-10-04_03-47-05/checkpoint-10500
+    hidden_size: 768
+    backbone_type: "dinov2-with-token-sampler"
+    backbone_kwargs:
+      id: "facebook/dinov2-with-registers-base"
+      output_layer: -2
+      num_extra_queries: 4
+      num_heads: 12
+      num_adapter_layers: 4
+    ckpt_path: outputs/pretrained_ckpt_v0.1/checkpoint-10500
   visual_adapter_type: temporal_shuffle
   visual_adapter_kwargs:
     input_hidden_size: 768

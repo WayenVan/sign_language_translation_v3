@@ -79,7 +79,7 @@ class SltTrainer(Seq2SeqTrainer):
         )
 
         self.compute_metrics = partial(
-            self._compute_metrics, tokenizer=self.processing_class
+            self._compute_metrics, processor=self.processing_class
         )
 
         # adjust arguments for seq2seq training
@@ -91,7 +91,9 @@ class SltTrainer(Seq2SeqTrainer):
         self.hydra_config = hydra_config
 
     @staticmethod
-    def _compute_metrics(pred: EvalLoopOutput, tokenizer) -> dict:
+    def _compute_metrics(pred: EvalLoopOutput, processor) -> dict:
+        tokenizer = processor.tokenizer
+
         preds_ids, pred_length, prompt_length = pred.predictions
         labels_ids = pred.label_ids
 

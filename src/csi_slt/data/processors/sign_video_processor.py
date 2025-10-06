@@ -46,7 +46,7 @@ class SignVideoProcessor(BaseVideoProcessor):
         )
 
     @property
-    def prediction_transform(self):
+    def predict_transform(self):
         return Compose(
             [
                 Resize(height=256, width=256),
