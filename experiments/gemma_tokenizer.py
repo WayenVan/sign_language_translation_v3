@@ -22,3 +22,4 @@ chat_prompt = tokenizer.apply_chat_template(
 )
 
 print(tokenizer.decode(chat_prompt + label_ids, skip_special_tokens=False))
+tokenizer.save_pretrained("outputs/gemma_tokenizer")
