@@ -6,7 +6,7 @@ from csi_slt.data.processors.sign_video_processor import SignVideoProcessor
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
 from csi_slt.data.ph14t.ph14t_torch_dataset import Ph14TGeneralDataset
 from csi_slt.data.collators.general_collator import GeneralSLTCollator
-from transformers import AutoTokenizer, AutoVideoProcessor
+from transformers import AutoTokenizer, AutoVideoProcessor, AutoProcessor
 from torch.utils.data import DataLoader
 
 
@@ -28,7 +28,7 @@ def test_slt_processor_save_load():
         tokenizer=tokenizer,
     )
     processor.save_pretrained("outputs/slt_processor_test")
-    processor = SignTranslationProcessor.from_pretrained(
+    processor = AutoProcessor.from_pretrained(
         "outputs/slt_processor_test", trust_remote_code=True
     )
     assert processor is not None
@@ -50,6 +50,7 @@ def test_slt_processor():
         mode="train",
     )
     collator = GeneralSLTCollator(processor=processor)
+    collator.debug = True
     dataloader = DataLoader(
         dataset, batch_size=2, shuffle=True, num_workers=0, collate_fn=collator
     )
@@ -58,7 +59,17 @@ def test_slt_processor():
         print(batch)
 
 
+def test_slt_processor_checkpoint():
+    processor = AutoProcessor.from_pretrained(
+        "/root/projects/sign_language_translation_v3/outputs/debug_outputs/2025-10-06_04-07-31/checkpoint-10",
+        trust_remote_code=True,
+    )
+    assert processor.video_processor.train_transform is not None
+    assert processor is not None
+
+
 if __name__ == "__main__":
     # test_processor_save_load()
-    test_slt_processor()
-    # test_slt_processor_save_load()
+    # test_slt_processor()
+    # test_slt_processor_checkpoint()
+    test_slt_processor_save_load()

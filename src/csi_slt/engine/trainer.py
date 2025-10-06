@@ -231,7 +231,14 @@ class SltTrainer(Seq2SeqTrainer):
             )
 
             # NOTE: pop possible unused keys for generation
-            unsed_keys = ["names", "target_text", "prompts", "input_text", "lang"]
+            unsed_keys = [
+                "names",
+                "target_text",
+                "prompts",
+                "input_text",
+                "lang",
+                "original_videos",
+            ]
             for key in unsed_keys:
                 if key in generation_inputs:
                     generation_inputs.pop(key)

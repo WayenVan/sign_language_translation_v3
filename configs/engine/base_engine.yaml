@@ -17,7 +17,7 @@ training_args:
   auto_output_root: outputs/demos
   lr_scheduler_type: cosine
   dataloader_prefetch_factor: 1
-  # dataloader_persistent_workers: True
+  dataloader_persistent_workers: True
   # generation_config: null
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128

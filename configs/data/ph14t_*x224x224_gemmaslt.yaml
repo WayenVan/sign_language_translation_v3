@@ -6,48 +6,54 @@ train:
     _target_: csi_slt.data.ph14t.Ph14TGeneralDataset
     data_root: ${data.data_root}
     mode: train
-  pipline:
-    _target_: csi_slt.data.piplines.SLTGeneralPiplineTrain
-    height: 224
-    width: 224
-    downsample_rate: 1
-  collator:
-    _target_: csi_slt.data.collators.Gemma3SLTCollator
-    mode: train
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
     video_token_scale: 0.5
     num_extra_video_tokens: 2
+    model: train
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
 
 val:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TGeneralDataset
     data_root: ${data.data_root}
     mode: dev
-  pipline:
-    _target_: csi_slt.data.piplines.SLTGeneralPiplineTest
-    height: 224
-    width: 224
-    downsample_rate: 1
-  collator:
-    _target_: csi_slt.data.collators.Gemma3SLTCollator
-    mode: val
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
     video_token_scale: 0.5
     num_extra_video_tokens: 2
+    model: eval
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
 
 test:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TGeneralDataset
     data_root: ${data.data_root}
     mode: test
-  pipline:
-    _target_: csi_slt.data.piplines.SLTGeneralPiplineTest
-    height: 224
-    width: 224
-    downsample_rate: 1
-  collator:
-    _target_: csi_slt.data.collators.Gemma3SLTCollator
-    mode: val
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
     video_token_scale: 0.5
     num_extra_video_tokens: 2
+    model: test
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
 
 fraction_dataset: False
 train_fraction: 1.0

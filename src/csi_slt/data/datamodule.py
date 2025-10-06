@@ -15,16 +15,11 @@ class DataModule:
         super().__init__()
         self.cfg = cfg
 
-        self.pipline_train = instantiate(getattr(cfg.train, "pipline", None))
-        self.pipline_val = instantiate(getattr(cfg.val, "pipline", None))
-        self.pipline_test = instantiate(
-            getattr(cfg.test, "pipline", cfg.val.pipline),
-        )
-
-        self.tokenizer = tokenizer
         with open(cfg.chat_template_jinjia, "r", encoding="utf-8") as f:
             chat_template = f.read()
-        self.tokenizer.chat_template = chat_template
+
+        self.tokenizer = tokenizer
+        self.chat_template = chat_template
 
     @staticmethod
     def get_fraction_subset_dataset(
@@ -73,12 +68,8 @@ class DataModule:
     def setup(self, stage: Literal["train", "test", None] = None):
         # Set up the dataset for training, validation, and testing
         if stage == "train" or stage is None:
-            self.train_dataset = instantiate(
-                self.cfg.train.dataset, pipline=self.pipline_train
-            )
-            self.val_dataset = instantiate(
-                self.cfg.val.dataset, pipline=self.pipline_val
-            )
+            self.train_dataset = instantiate(self.cfg.train.dataset)
+            self.val_dataset = instantiate(self.cfg.val.dataset)
             if self.cfg.fraction_dataset:
                 # If fraction_dataset is True, create a subset of the training dataset
                 #
@@ -96,9 +87,7 @@ class DataModule:
 
         if stage == "test" or stage is None:
             if self.cfg.test is not None:
-                self.test_dataset = instantiate(
-                    self.cfg.test.dataset, pipline=self.pipline_test
-                )
+                self.test_dataset = instantiate(self.cfg.test.dataset)
                 if self.cfg.fraction_dataset:
                     # If fraction_dataset is True, create a subset of the test dataset
                     if self.cfg.test_fraction < 1.0:
@@ -108,16 +97,40 @@ class DataModule:
                         )
 
     @property
+    def train_processor(self):
+        return instantiate(
+            self.cfg.train.processor,
+            tokenizer=self.tokenizer,
+            chat_template=self.chat_template,
+        )
+
+    @property
+    def val_processor(self):
+        return instantiate(
+            self.cfg.val.processor,
+            tokenizer=self.tokenizer,
+            chat_template=self.chat_template,
+        )
+
+    @property
+    def test_processor(self):
+        return instantiate(
+            self.cfg.test.processor,
+            tokenizer=self.tokenizer,
+            chat_template=self.chat_template,
+        )
+
+    @property
     def train_collator(self):
         return instantiate(
             self.cfg.train.collator,
-            tokenizer=self.tokenizer,
+            processor=self.train_processor,
         )
 
     @property
     def val_collator(self):
-        return instantiate(self.cfg.val.collator, tokenizer=self.tokenizer)
+        return instantiate(self.cfg.val.collator, processor=self.val_processor)
 
     @property
     def test_collator(self):
-        return instantiate(self.cfg.test.collator, tokenizer=self.tokenizer)
+        return instantiate(self.cfg.test.collator, processor=self.test_processor)
