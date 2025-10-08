@@ -29,6 +29,13 @@ def main(cfg: DictConfig):
     slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
     slt_model = SltModel(slt_config).cuda()
 
+    # fix parameters
+    for param in slt_model.llm.parameters():
+        param.requires_grad = False
+
+    # for param in slt_model.visual_backbone.backbone.parameters():
+    #     param.requires_grad = False
+
     # create datamodule
     llm_name = cfg.model.config.llm_model_name_or_path
     tokenizer = AutoTokenizer.from_pretrained(llm_name)

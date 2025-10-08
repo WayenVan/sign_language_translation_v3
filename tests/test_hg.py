@@ -1,0 +1,1 @@
+from transformers.video_processing_utils import BatchFeature

@@ -6,12 +6,17 @@ tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
 
 tokenizer.add_bos_token = False
 tokenizer.add_eos_token = True
+tokenizer.eos_token = "<end_of_turn>"
+tokenizer.eos_token_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
+print(tokenizer.eos_token_id)
+print(tokenizer.eos_token)
 
 # output the tokens rather than the ids
 label_ids = tokenizer(
     "Hello, my dog is cute",
-    add_special_tokens=False,
-).input_ids + [tokenizer.convert_tokens_to_ids("<end_of_turn>")]
+    add_special_tokens=True,
+).input_ids
+print(label_ids)
 
 
 messages = [{"role": "user", "content": "Hello, my dog is cute"}]

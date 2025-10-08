@@ -36,6 +36,7 @@ class SignTranslationProcessor(ProcessorMixin):
         chat_template=None,
         VIDEO_SOFT_TOKEN="<unused0>",
         VIDEO_START_TOKEN="<unused1>",
+        eos_token="<end_of_turn>",
         video_padding_to_multiple_of=4,
         video_token_scale=0.5,
         num_extra_video_tokens=2,  # for video start and end tokens
@@ -48,6 +49,7 @@ class SignTranslationProcessor(ProcessorMixin):
         self.mode = mode
         self.video_token_scale = video_token_scale
         self.num_extra_video_tokens = num_extra_video_tokens
+        self.eos_token = eos_token
         super().__init__(
             video_processor=video_processor,
             tokenizer=tokenizer,
@@ -92,8 +94,9 @@ class SignTranslationProcessor(ProcessorMixin):
         video_lengths = video_batch_features.pixel_values_lengths.cpu().numpy()
         video_lengths_tensor = video_batch_features.pixel_values_lengths
 
-        all_input_ids = []
-        all_label_ids = []
+        prompts = []
+        labels = []
+        input_texts = []
         for i, t in enumerate(text):
             if src_lang[i] == "en":
                 message = [{"role": "user", "language": Language.EN.value}]
@@ -118,42 +121,38 @@ class SignTranslationProcessor(ProcessorMixin):
                     + self.num_extra_video_tokens,
                 )
 
-            prompt_ids = self.tokenizer(prompt, add_special_tokens=False).input_ids
-            target_ids = self.tokenizer(t, add_special_tokens=False).input_ids + [
-                self.tokenizer.convert_tokens_to_ids("<end_of_turn>")
-            ]
+            label = t + self.eos_token
+            prompts.append(prompt)
+            labels.append(label)
 
-            label_ids = [-100] * len(
-                prompt_ids
-            ) + target_ids  # mask prompt part for loss calculation
-
-            if self.mode == "train":
-                input_ids = prompt_ids + target_ids
-                assert len(input_ids) == len(label_ids)
-            else:
-                # For inference, we only use the prompt
-                input_ids = prompt_ids
-
-            all_input_ids.append(input_ids)
-            all_label_ids.append(label_ids)
+            input_text = prompt + label if self.mode == "train" else prompt
+            input_texts.append(input_text)
 
         # pad on the left
         self.tokenizer.padding_side = "left"
-        all_input_ids = self.tokenizer.pad(
-            {"input_ids": all_input_ids},
+
+        inputs_pt = self.tokenizer(
+            input_texts,
+            add_special_tokens=False,
+            return_tensors="pt",
             padding=True,
-            return_tensors="pt",  # or "tf" / "np"
         )
-        all_label_ids = self.tokenizer.pad(
-            {"input_ids": all_label_ids},
-            padding=True,
-            return_tensors="pt",  # or "tf" / "np"
-        )["input_ids"]
-        all_label_ids[all_label_ids == self.tokenizer.pad_token_id] = -100
+
+        max_length = inputs_pt.input_ids.size(1)
+
+        labels_pt = self.tokenizer(
+            labels,
+            add_special_tokens=False,
+            padding="max_length",
+            max_length=max_length,
+            return_tensors="pt",
+        )
+
+        labels_pt.input_ids[labels_pt.input_ids == self.tokenizer.pad_token_id] = -100
 
         # Prepare source input
         assert torch.all(
-            all_input_ids.input_ids.eq(self.image_soft_token_id).sum(-1)
+            inputs_pt.input_ids.eq(self.image_soft_token_id).sum(-1)
             == (
                 video_lengths_tensor * self.video_token_scale
                 + self.num_extra_video_tokens
@@ -163,8 +162,8 @@ class SignTranslationProcessor(ProcessorMixin):
         data = {
             "pixel_values": video_batch_features.pixel_values,
             "pixel_values_length": video_lengths_tensor,
-            "attention_mask": all_input_ids.attention_mask,
-            "input_ids": all_input_ids.input_ids,
-            "labels": all_label_ids,
+            "attention_mask": inputs_pt.attention_mask,
+            "input_ids": inputs_pt.input_ids,
+            "labels": labels_pt.input_ids,
         }
         return BatchFeature(data=data, tensor_type=TensorType.PYTORCH)

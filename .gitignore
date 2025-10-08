@@ -2,6 +2,7 @@
 outputs/
 wandb/
 dataset
+*.mp4
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

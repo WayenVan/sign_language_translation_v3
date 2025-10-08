@@ -3,6 +3,9 @@ import numpy
 import os
 from datasets import load_dataset
 
+# from PIL import Image
+import pyspng
+
 
 class Ph14TGeneralDataset(Dataset):
     def __init__(self, data_root: str, mode: str = "train", pipline=None):
@@ -30,11 +33,14 @@ class Ph14TGeneralDataset(Dataset):
 
         video_frame_file_name = data_info["frames"]
         video_frame = []
-        import cv2
 
         for frame_file in video_frame_file_name:
-            image = cv2.imread(os.path.join(self.data_root, frame_file))
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            with open(os.path.join(self.data_root, frame_file), "rb") as f:
+                image = pyspng.load(f.read())
+            image = image[:, :, :3]
+
+            # image = Image.open(os.path.join(self.data_root, frame_file)).convert("RGB")
+            # image = numpy.array(image)
             video_frame.append(image)
 
         ret = dict(

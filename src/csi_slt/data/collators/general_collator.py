@@ -66,4 +66,3 @@ class GeneralSLTCollator:
             "input_text": input_text,
             "label_text": label_text,
         }
-        return

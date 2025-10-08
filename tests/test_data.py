@@ -24,13 +24,15 @@ def test_datamodule():
     )
     datamodule.setup("train")
     train_dataset = datamodule.train_dataset
+    collator = datamodule.train_collator
+    collator.debug = True
 
     loader = DataLoader(
         train_dataset,
         batch_size=2,
         shuffle=True,
         num_workers=0,
-        collate_fn=datamodule.train_collator,
+        collate_fn=collator,
     )
 
     for batch in loader:

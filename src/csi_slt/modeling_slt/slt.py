@@ -116,9 +116,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         generation_config.top_p = None
         self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
 
-        for param in self.llm.parameters():
-            param.requires_grad = False
-
     def _init_visual_backbone(self):
         backbone_cls = VISUAL_BACKBONES.get(self.config.visual_backbone_type)
         if backbone_cls is None:
@@ -126,9 +123,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 f"Unsupported visual backbone type: {self.config.visual_backbone_type}"
             )
         self.visual_backbone = backbone_cls(**self.config.visual_backbone_kwargs)
-
-        for param in self.visual_backbone.parameters():
-            param.requires_grad = False
 
     def _init_visual_adapter(self):
         adapter_cls = VISUAL_ADAPTERS.get(self.config.visual_adapter_type)
