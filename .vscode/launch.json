@@ -23,6 +23,17 @@
       ]
     },
     {
+      "name": "preprocess",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/preprocess/dataset_preprocess-T.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--process-image"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
       "name": "train_ft_peft",
       "type": "python",
       "request": "launch",

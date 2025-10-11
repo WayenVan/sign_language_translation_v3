@@ -17,6 +17,10 @@ from albumentations import (
     ColorJitter,
 )
 
+from transformers.utils import logging
+
+logger = logging.get_logger(__name__)
+
 
 VIDEO_SOFT_TOKEN = "<unused0>"
 VIDEO_START_TOKEN = "<unused1>"
@@ -38,7 +42,7 @@ class SignVideoProcessor(BaseVideoProcessor):
     def train_transform(self):
         return Compose(
             [
-                Resize(height=256, width=256),
+                # Resize(height=256, width=256),
                 RandomCrop(height=self.height, width=self.width, p=1.0),
                 ColorJitter(p=0.75),
                 Normalize(
@@ -55,7 +59,7 @@ class SignVideoProcessor(BaseVideoProcessor):
     def prediction_transform(self):
         return Compose(
             [
-                Resize(height=256, width=256),
+                # Resize(height=256, width=256),
                 CenterCrop(height=self.height, width=self.width, p=1.0),
                 Normalize(
                     mean=self.image_mean,
@@ -94,6 +98,11 @@ class SignVideoProcessor(BaseVideoProcessor):
     ):
         if isinstance(videos, np.ndarray):
             videos = [videos]
+
+        if videos[0].shape[1:3] != (256, 256):
+            logger.warning(
+                f"Input video frames are expected to have size (256, 256), but got {videos[0].shape[1:3]}. Resizing might affect the performance of the model."
+            )
 
         processs_fn = self.train_transform if training else self.predict_transform
 

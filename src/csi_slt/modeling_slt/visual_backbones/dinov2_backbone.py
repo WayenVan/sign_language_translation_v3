@@ -29,6 +29,9 @@ class DinoV2Backbone(nn.Module):
 
         self.output_layer = output_layer
 
+        for param in self.visual_encoder.parameters():
+            param.requires_grad = False
+
     def _init_lora_model(self, lora_kwargs):
         visual_encoder = Dinov2WithRegistersModel.from_pretrained(self.id)
         # for name, p in visual_encoder.named_parameters():

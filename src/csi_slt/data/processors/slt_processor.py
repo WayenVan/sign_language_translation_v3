@@ -159,10 +159,15 @@ class SignTranslationProcessor(ProcessorMixin):
             )
         ), "The number of image soft tokens does not match the expected number."
 
+        # calcuate the postional ids
+        pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
+        pos_ids = pos_ids.clamp(min=0)
+
         data = {
             "pixel_values": video_batch_features.pixel_values,
             "pixel_values_length": video_lengths_tensor,
             "attention_mask": inputs_pt.attention_mask,
+            "position_ids": pos_ids,
             "input_ids": inputs_pt.input_ids,
             "labels": labels_pt.input_ids,
         }

@@ -51,23 +51,24 @@ def test_slt_model():
         slt_model.eval()
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=True):
             for batch in loader:
-                # outputs = slt_model(
-                #     input_ids=batch["input_ids"].cuda(),
-                #     attention_mask=batch["attention_mask"].cuda(),
-                #     pixel_values=batch["pixel_values"].cuda(),
-                #     pixel_values_length=batch["pixel_values_length"].cuda(),
-                #     labels=batch["labels"].cuda(),
-                # )
-                # print(outputs.loss)
-                print("prompt_length:" + str(batch["input_ids"].shape[1]))
-                outputs = slt_model.generate(
+                outputs = slt_model(
                     input_ids=batch["input_ids"].cuda(),
+                    attention_mask=batch["attention_mask"].cuda(),
                     pixel_values=batch["pixel_values"].cuda(),
                     pixel_values_length=batch["pixel_values_length"].cuda(),
-                    attention_mask=batch["attention_mask"].cuda(),
-                    max_new_tokens=100,
+                    labels=batch["labels"].cuda(),
+                    position_ids=batch["position_ids"].cuda(),
                 )
-                print(tokenizer.batch_decode(outputs, skip_special_tokens=False)[0])
+                print(outputs.loss)
+                # print("prompt_length:" + str(batch["input_ids"].shape[1]))
+                # outputs = slt_model.generate(
+                #     input_ids=batch["input_ids"].cuda(),
+                #     pixel_values=batch["pixel_values"].cuda(),
+                #     pixel_values_length=batch["pixel_values_length"].cuda(),
+                #     attention_mask=batch["attention_mask"].cuda(),
+                #     max_new_tokens=100,
+                # )
+                # print(tokenizer.batch_decode(outputs, skip_special_tokens=False)[0])
 
 
 def test_model_save():
@@ -185,8 +186,8 @@ def test_peft_model():
 
 
 if __name__ == "__main__":
-    test_model_params()
-    # test_slt_model()
+    # test_model_params()
+    test_slt_model()
     # test_model_save()
     # test_model_load()
     # test_verify_gemma3()

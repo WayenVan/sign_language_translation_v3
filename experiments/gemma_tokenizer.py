@@ -1,6 +1,7 @@
 from transformers import AutoTokenizer, BitsAndBytesConfig
 
 from transformers.models.gemma.tokenization_gemma import GemmaTokenizer
+from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
 

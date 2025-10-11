@@ -78,7 +78,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 [4], dtype=torch.long, device=self.device
             ),
             "attention_mask": torch.ones(1, seq_len , dtype=torch.long, device=self.device),
-            "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device)
+            "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device),
+            "position_ids": torch.arange(seq_len, dtype=torch.long, device=self.device).unsqueeze(0),
         }
         # fmt: on
 
@@ -270,6 +271,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         pixel_values: torch.Tensor,  # [BT, C, H, W]
         pixel_values_length: torch.Tensor,  # [B], length of each video in the batch
         attention_mask: Optional[torch.Tensor] = None,  # [B, L]
+        position_ids: Optional[torch.Tensor] = None,  # [B, L]
         labels: Optional[torch.Tensor] = None,  # [B, L]
         **llm_forward_kwargs: dict,
     ):
@@ -305,6 +307,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             attention_mask=attention_mask,
             use_cache=use_cache,
             past_key_values=past_key_values,
+            position_ids=position_ids,
             **llm_forward_kwargs,
         )
 
