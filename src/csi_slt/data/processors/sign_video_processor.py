@@ -22,17 +22,16 @@ class SignVideoProcessor(BaseVideoProcessor):
     image_mean = [0.5, 0.5, 0.5]
     image_std = [0.5, 0.5, 0.5]
 
-    def __init__(self, height=224, width=224, downsample_rate=1, **kwargs):
+    def __init__(self, height=224, width=224, **kwargs):
         super().__init__(**kwargs)
         self.height = height
         self.width = width
-        self.downsample_rate = downsample_rate
 
     @property
     def train_transform(self):
         return Compose(
             [
-                Resize(height=256, width=256),
+                # Resize(height=256, width=256),
                 RandomCrop(height=self.height, width=self.width, p=1.0),
                 ColorJitter(p=0.75),
                 Normalize(
@@ -49,7 +48,7 @@ class SignVideoProcessor(BaseVideoProcessor):
     def predict_transform(self):
         return Compose(
             [
-                Resize(height=256, width=256),
+                # Resize(height=256, width=256),
                 CenterCrop(height=self.height, width=self.width, p=1.0),
                 Normalize(
                     mean=self.image_mean,
@@ -97,7 +96,6 @@ class SignVideoProcessor(BaseVideoProcessor):
             video = self.pad_dim_to_multiple_of(
                 video, dim=0, multiple=padding_to_multiple_of
             )
-            video = video[:: self.downsample_rate]  # downsample video
 
             video_lengths.append(video.shape[0])
             processed = processs_fn(images=video)["images"]

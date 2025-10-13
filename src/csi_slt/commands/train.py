@@ -27,7 +27,7 @@ def main(cfg: DictConfig):
 
     # create model
     slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-    slt_model = SltModel(slt_config).cuda()
+    slt_model = SltModel(slt_config)
 
     # fix parameters
     for param in slt_model.llm.parameters():

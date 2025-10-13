@@ -245,6 +245,11 @@ class SltTrainer(Seq2SeqTrainer):
                 if key in generation_inputs:
                     generation_inputs.pop(key)
 
+            if "position_ids" in generation_inputs:
+                raise ValueError(
+                    "position_ids should not be passed to generate function"
+                )  # NOTE: this is important
+
             with summon_full_params_context:
                 generated_tokens = self.model.generate(
                     **generation_inputs, **gen_kwargs

@@ -60,7 +60,7 @@ def sign_dict_update(total_dict, info):
 def resize_img(img_path, dsize="210x260px"):
     dsize = tuple(int(res) for res in re.findall("\d+", dsize))
     img = cv2.imread(img_path)
-    img = cv2.resize(img, dsize, interpolation=cv2.INTER_LANCZOS4)
+    img = cv2.resize(img, dsize, interpolation=cv2.INTER_CUBIC)
     return img
 
 

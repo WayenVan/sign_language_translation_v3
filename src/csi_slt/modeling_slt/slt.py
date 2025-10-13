@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from typing import Optional
 from transformers.cache_utils import DynamicCache, Cache
+from transformers.generation.configuration_utils import GenerationConfig
 
 from transformers import logging
 
@@ -24,7 +25,7 @@ logger = logging.get_logger(__name__)
 
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
-    MAX_TOKEN_LENGTH = 1024
+    MAX_TOKEN_LENGTH = 512
     _tied_weights_keys = ["llm.lm_head.weight"]
 
     def __init__(self, config: SltConfig):
@@ -90,6 +91,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             "attn_implementation",
             "eager",  # NOTE: default to eager since spda produce nan
         )
+
         if self.config.llm_model_name_or_path.startswith("google/gemma-3-1b"):
             from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 
@@ -98,11 +100,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 attn_implementation=attn_implementation,
                 **self.config.llm_init_kwargs,
             )
+        elif self.config.llm_model_name_or_path.startswith("google/gemma-3"):
+            from transformers.models.gemma3.modeling_gemma3 import (
+                Gemma3ForConditionalGeneration,
+            )
 
+            self.llm = Gemma3ForConditionalGeneration.from_pretrained(
+                self.config.llm_model_name_or_path,
+                attn_implementation=attn_implementation,
+                **self.config.llm_init_kwargs,
+            )
         else:
             self.llm = AutoModel.from_pretrained(
                 self.config.llm_model_name_or_path,
-                attn_implementation=attn_implementation,
                 **self.config.llm_init_kwargs,
             )
 
@@ -111,10 +121,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.config.pad_token_id = self.llm_config.pad_token_id
 
         generation_config = self.llm.generation_config
+        if generation_config is None:
+            generation_config = GenerationConfig()
+
         generation_config.do_sample = False
         generation_config.max_length = self.MAX_TOKEN_LENGTH
         generation_config.top_k = None
         generation_config.top_p = None
+
         self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
 
     def _init_visual_backbone(self):

@@ -58,7 +58,11 @@ class SltConfig(PretrainedConfig):
         llm_config = AutoConfig.from_pretrained(
             llm_model_name_or_path
         )  # NOTE: using AutoConfig to support more models
-        self.num_hidden_layers = llm_config.num_hidden_layers
+        if hasattr(llm_config, "num_hidden_layers"):
+            self.num_hidden_layers = llm_config.num_hidden_layers
+        elif hasattr(llm_config, "text_config"):
+            self.num_hidden_layers = llm_config.text_config.num_hidden_layers
+
         self.video_token_scale = video_token_scale
         self.num_extra_tokens = None
 

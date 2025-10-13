@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.15.2"
+__generated_with = "0.16.5"
 app = marimo.App(width="medium")
 
 with app.setup:
@@ -14,7 +14,7 @@ with app.setup:
     import cv2
     from transformers import AutoTokenizer
 
-    sys.path.append("../src")
+    sys.path.append("./src")
     from csi_slt.data.datamodule import DataModule
 
     BATCH_SIZE = 2
@@ -23,19 +23,19 @@ with app.setup:
 
 @app.cell
 def _():
-    with hydra.initialize_config_dir(config_dir=os.path.abspath("../configs")):
+    with hydra.initialize_config_dir(config_dir=os.path.abspath("configs")):
         cfg = hydra.compose(config_name="base_train")
-        cfg.data.data_root = "/root/projects/sign_langauge_visual_pretrain/dataset/PHOENIX-2014-T-release-v3"
+        cfg.data.data_root = "dataset/PHOENIX-2014-T-release-v3"
 
-    cfg.data.chat_template_jinjia = "../jinjas/gemma_slt.jinja"
+    cfg.data.chat_template_jinjia = "jinjas/gemma_slt.jinja"
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
     datamodule = DataModule(
         cfg.data,
         tokenizer=tokenizer,
     )
-    datamodule.setup("train")
-    train_dataset = datamodule.train_dataset
-    collator = datamodule.train_collator
+    datamodule.setup()
+    train_dataset = datamodule.val_dataset
+    collator = datamodule.val_collator
     collator.debug = True
 
     loader = DataLoader(
@@ -67,6 +67,7 @@ def visualize_batch(loader):
         pixel_values = batch["pixel_values"]
         pixel_values_lengths = batch["pixel_values_length"]
         original_videos = batch["original_videos"]
+        position_ids = batch["position_ids"]
         break
 
     videos = tensor_to_image(pixel_values)
@@ -85,6 +86,9 @@ def visualize_batch(loader):
     plt.show()
     print(input_text)
     print(label_text)
+    print(position_ids)
+    print(batch["input_ids"])
+    print(batch["labels"])
     return (original_videos,)
 
 
@@ -137,7 +141,7 @@ def float_frames_to_video(
 def videos_splitsave_video(original_videos):
     float_frames_to_video(
         original_videos[0],
-        output_path="./sample_video.mp4",
+        output_path="./outputs/sample_video.mp4",
         fps=30.0,
         is_color=True,
     )
