@@ -41,6 +41,7 @@ class SignTranslationProcessor(ProcessorMixin):
         video_token_scale=0.5,
         num_extra_video_tokens=2,  # for video start and end tokens
         mode="train",
+        position_shift_range=(0, 20),
         **kwargs,
     ):
         self.VIDEO_SOFT_TOKEN = VIDEO_SOFT_TOKEN
@@ -50,6 +51,7 @@ class SignTranslationProcessor(ProcessorMixin):
         self.video_token_scale = video_token_scale
         self.num_extra_video_tokens = num_extra_video_tokens
         self.eos_token = eos_token
+        self.position_shift_range = position_shift_range
         super().__init__(
             video_processor=video_processor,
             tokenizer=tokenizer,
@@ -167,6 +169,7 @@ class SignTranslationProcessor(ProcessorMixin):
             pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
             pos_ids = pos_ids.clamp(min=0)
             pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
+            pos_ids = self.position_augmentation(pos_ids, inputs_pt.attention_mask)
 
         data = {
             "pixel_values": video_batch_features.pixel_values,
@@ -180,3 +183,75 @@ class SignTranslationProcessor(ProcessorMixin):
             data["position_ids"] = pos_ids
 
         return BatchFeature(data=data, tensor_type=TensorType.PYTORCH)
+
+    def position_augmentation(self, position_ids, attention_mask):
+        # 50% 进行随机偏移
+        position_ids = self.random_shift_position_ids(
+            position_ids, attention_mask, shift_range=self.position_shift_range, p=0.5
+        )
+        # # 20% 进行缩放
+        # if torch.rand(1).item() < 0.2:
+        #     position_ids = self..random_scale_position_ids(
+        #         position_ids, attention_mask, scale_range=(0.95, 1.05)
+        #     )
+        return position_ids
+
+    @staticmethod
+    def random_shift_position_ids(
+        position_ids, attention_mask, p=1.0, shift_range=(-4, 4), training=True
+    ):
+        """
+        对 position_ids 增加随机偏移，模拟不同的起点位置。
+        Args:
+            position_ids: (batch, seq_len)
+            attention_mask: (batch, seq_len)
+            shift_range: 偏移范围 (min, max)
+            training: 是否在训练阶段启用
+        """
+        if not training:
+            return position_ids  # 推理时不增强
+        # 为每个 batch 生成一个独立的偏移量
+        batch_size = position_ids.size(0)
+        shifts = torch.randint(
+            shift_range[0],
+            shift_range[1] + 1,
+            (batch_size,),
+            device=position_ids.device,
+        )
+        # 广播到整行
+        shifts = shifts.unsqueeze(1).expand_as(position_ids)
+
+        # 以概率 p 应用偏移
+        probs = torch.full((batch_size, 1), p, device=position_ids.device)
+        mask = torch.bernoulli(probs).long().expand_as(position_ids)
+        shifts = shifts * mask
+
+        # 只对非 padding token 加偏移（防止 pad token pos 出界）
+        augmented_pos = position_ids + shifts * attention_mask
+        return augmented_pos
+
+    @staticmethod
+    def random_scale_position_ids(
+        position_ids, attention_mask, scale_range=(0.9, 1.1), training=True
+    ):
+        """
+        对 position_ids 做随机缩放，模拟序列密度变化。
+        """
+        if not training:
+            return position_ids
+        batch_size = position_ids.size(0)
+        scales = torch.empty(batch_size, device=position_ids.device).uniform_(
+            *scale_range
+        )
+        scales = scales.unsqueeze(1).expand_as(position_ids)
+        # 只缩放有效部分
+        scaled_pos = (position_ids.float() * scales) * attention_mask
+        return scaled_pos.long()
+
+    @staticmethod
+    def jitter_position_ids(position_ids, attention_mask, noise_std=0.5, training=True):
+        if not training:
+            return position_ids
+        noise = torch.randn_like(position_ids.float()) * noise_std
+        noisy_pos = position_ids.float() + noise * attention_mask
+        return noisy_pos.long()
