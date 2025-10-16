@@ -60,7 +60,7 @@ class SignTranslationProcessor(ProcessorMixin):
         if chat_template is not None:
             self.tokenizer.chat_template = chat_template  # WARN: really needed?
 
-        self.image_soft_token_id = self.tokenizer.convert_tokens_to_ids(
+        self.video_soft_token_id = self.tokenizer.convert_tokens_to_ids(
             self.VIDEO_SOFT_TOKEN
         )
 
@@ -154,7 +154,7 @@ class SignTranslationProcessor(ProcessorMixin):
 
         # Prepare source input
         assert torch.all(
-            inputs_pt.input_ids.eq(self.image_soft_token_id).sum(-1)
+            inputs_pt.input_ids.eq(self.video_soft_token_id).sum(-1)
             == (
                 video_lengths_tensor * self.video_token_scale
                 + self.num_extra_video_tokens
@@ -167,9 +167,14 @@ class SignTranslationProcessor(ProcessorMixin):
             self.mode == "train"
         ):  # WARN: ONLY train need position ids, we don't need it when generating sequence, there is a bug
             pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
-            pos_ids = pos_ids.clamp(min=0)
-            pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
-            pos_ids = self.position_augmentation(pos_ids, inputs_pt.attention_mask)
+            # pos_ids = pos_ids.clamp(min=0)
+            # pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
+            # pos_ids = self.position_augmentation(pos_ids, inputs_pt.attention_mask)
+            # pos_ids = torch.arange(
+            #     0,
+            #     inputs_pt.input_ids.shape[1],
+            #     device=inputs_pt.input_ids.device,
+            # ).unsqueeze(0)
 
         data = {
             "pixel_values": video_batch_features.pixel_values,
@@ -177,6 +182,7 @@ class SignTranslationProcessor(ProcessorMixin):
             "attention_mask": inputs_pt.attention_mask,
             "input_ids": inputs_pt.input_ids,
             "labels": labels_pt.input_ids,
+            "token_type_ids": (inputs_pt.input_ids == self.video_soft_token_id).long(),
         }
 
         if pos_ids is not None:

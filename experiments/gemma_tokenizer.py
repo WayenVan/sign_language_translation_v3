@@ -4,6 +4,11 @@ from transformers.models.gemma.tokenization_gemma import GemmaTokenizer
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
+model = Gemma3ForCausalLM.from_pretrained("google/gemma-3-1b-it")
+print(model.config.eos_token_id)
+exit()
+
+model.config
 
 tokenizer.add_bos_token = False
 tokenizer.add_eos_token = True

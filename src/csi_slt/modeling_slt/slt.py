@@ -7,8 +7,15 @@ from torch import nn
 from typing import Optional
 from transformers.cache_utils import DynamicCache, Cache
 from transformers.generation.configuration_utils import GenerationConfig
+from transformers import PretrainedConfig
 
 from transformers import logging
+from transformers.masking_utils import (
+    create_causal_mask,
+    create_sliding_window_causal_mask,
+    create_masks_for_generate,
+)
+from typing import Callable
 
 
 from ..configuration_slt.configuration import SltConfig
@@ -21,6 +28,26 @@ from .output_utils import (
 )
 
 logger = logging.get_logger(__name__)
+
+
+def token_type_ids_mask_function(
+    token_type_ids: Optional[torch.Tensor],
+) -> Optional[Callable]:
+    """
+    This function adds the correct offsets to the `q_idx` and `kv_idx` as the torch API can only accept lengths,
+    not start and end indices.
+    """
+    # Do not return an additional mask in this case
+    if token_type_ids is None:
+        return None
+
+    def inner_mask(batch_idx: int, head_idx: int, q_idx: int, kv_idx: int) -> bool:
+        is_video_block_q = token_type_ids[batch_idx, q_idx] == 1
+        is_video_block_kv = token_type_ids[batch_idx, kv_idx] == 1
+
+        return is_video_block_q & is_video_block_kv
+
+    return inner_mask
 
 
 class SltModel(PreTrainedModel, GenerationMixin):
@@ -117,6 +144,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
 
         self.config.bos_token_id = self.llm_config.bos_token_id
+
+        # NOTE: fix the eos_token_id issue for gemma3, it could be a list, but not supported in huggingface
+        if isinstance(self.llm_config.eos_token_id, list):
+            self.config.eos_token_id = self.llm_config.eos_token_id[0]
+        else:
+            self.config.eos_token_id = self.llm_config.eos_token_id
+
         self.config.eos_token_id = self.llm_config.eos_token_id
         self.config.pad_token_id = self.llm_config.pad_token_id
 
@@ -282,15 +316,27 @@ class SltModel(PreTrainedModel, GenerationMixin):
     def forward(
         self,
         input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <video_soft_token>, ...]
-        pixel_values: torch.Tensor,  # [BT, C, H, W]
-        pixel_values_length: torch.Tensor,  # [B], length of each video in the batch
+        pixel_values: Optional[torch.Tensor] = None,  # [BT, C, H, W]
+        pixel_values_length: Optional[
+            torch.Tensor
+        ] = None,  # [B], length of each video in the batch
         attention_mask: Optional[torch.Tensor] = None,  # [B, L]
+        token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,  # [B, L]
         labels: Optional[torch.Tensor] = None,  # [B, L]
+        use_cache: Optional[bool] = None,
+        cache_position: Optional[torch.Tensor] = None,
         **llm_forward_kwargs: dict,
     ):
-        use_cache = llm_forward_kwargs.pop("use_cache", None)
-
+        # if pixel_values is provided, pixel_values_length is not provcided, we assume there is only one video in the batch
+        if pixel_values_length is None and pixel_values is not None:
+            assert input_ids.shape[0] == 1, (
+                "When pixel_values_length is not provided, input_ids batch size must be 1."
+            )
+            pixel_values_length = torch.tensor(
+                [pixel_values.shape[0]], dtype=torch.long, device=pixel_values.device
+            )
+        # length must be a multiple of 4
         if pixel_values_length is not None:
             assert (pixel_values_length % 4 == 0).all(), (
                 "The length of pixel_values_length must be a multiple of 4."
@@ -299,29 +345,76 @@ class SltModel(PreTrainedModel, GenerationMixin):
         past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
-        # normal forward
-        if not past_key_values or past_key_values[0][0] is None:
-            prepare_output = self.prepare_for_casual_lm(
-                input_ids, pixel_values, pixel_values_length
-            )
-            inputs_embeds = prepare_output.inputs_embeds
-        else:
-            assert use_cache is True, (
-                "use_cache must be True when past_key_values is provided"
-            )
-            inputs_embeds = self.llm.get_input_embeddings()(input_ids)
+        if inputs_embeds is None:
+            if pixel_values is not None:
+                prepare_output = self.prepare_for_casual_lm(
+                    input_ids, pixel_values, pixel_values_length
+                )
+                inputs_embeds = prepare_output.inputs_embeds
+            else:
+                assert input_ids.shape[1] == 1, (
+                    "When inputs_embeds is None, input_ids sequence length must be 1."
+                )
+                inputs_embeds = self.llm.get_input_embeddings()(input_ids)
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache(
                 self.llm.config,
             )
 
+        if cache_position is None:
+            past_seen_tokens = (
+                past_key_values.get_seq_length() if past_key_values is not None else 0
+            )
+            cache_position = torch.arange(
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+                device=inputs_embeds.device,
+            )
+
+        # It may already have been prepared by e.g. `generate`
+        if not isinstance(causal_mask_mapping := attention_mask, dict):
+            # Prepare mask arguments
+            mask_kwargs = {
+                "config": self.llm.config.get_text_config(),
+                "input_embeds": inputs_embeds,
+                "attention_mask": attention_mask,
+                "cache_position": cache_position,
+                "past_key_values": past_key_values,
+                "position_ids": position_ids,
+            }
+            # NOTE: this `is_prefill` logic is not flawless, it fails when we're using a cache eagerly initialized
+            # (e.g. compiled prefill) AND `pixel_values` are not provided. Determining prefill in that case requires
+            # checking data values, which is not compile-compatible.
+            is_prefill = (
+                not use_cache
+                or past_key_values is None
+                or not past_key_values.is_initialized
+                or pixel_values is not None
+            )
+            if token_type_ids is not None and is_prefill:
+                mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+                    token_type_ids.to(cache_position.device),
+                )
+
+            # Create the masks
+            causal_mask_mapping = {
+                "full_attention": create_causal_mask(**mask_kwargs),
+                "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
+            }
+            # import matplotlib.pyplot as plt
+            #
+            # plt.imshow(causal_mask_mapping["full_attention"][0, 0].cpu().numpy())
+            # plt.savefig("outputs/causal_mask.png")
+
         outputs = self.llm(
             inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
+            attention_mask=causal_mask_mapping,
+            position_ids=position_ids,
+            token_type_ids=token_type_ids,
+            cache_position=cache_position,
             use_cache=use_cache,
             past_key_values=past_key_values,
-            position_ids=position_ids,
             **llm_forward_kwargs,
         )
 
@@ -343,6 +436,64 @@ class SltModel(PreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+    @staticmethod
+    def create_masks_for_generate(
+        config: PretrainedConfig,
+        input_embeds: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+        cache_position: torch.Tensor,
+        past_key_values: Optional[Cache],
+        position_ids: Optional[torch.Tensor],
+        token_type_ids: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> dict:
+        # Prepare mask arguments
+        mask_kwargs = {
+            "config": config.get_text_config(),
+            "input_embeds": input_embeds,
+            "attention_mask": attention_mask,
+            "cache_position": cache_position,
+            "past_key_values": past_key_values,
+            "position_ids": position_ids,
+        }
+        # Add the token type ids mask for generate as well
+        if token_type_ids is not None and input_embeds.shape[1] != 1:
+            # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
+            mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+                token_type_ids.to(cache_position.device),
+            )
+        return create_masks_for_generate(**mask_kwargs)
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        pixel_values=None,
+        pixel_values_length=None,
+        cache_position=None,
+        position_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        labels=None,
+        **kwargs,
+    ):
+        # Overwritten -- custom `position_ids` and `pixel_values` handling
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            cache_position=cache_position,
+            token_type_ids=token_type_ids,
+            **kwargs,
+        )
+
+        # If we're in cached decoding stage, pixel values should be None because input ids do not contain special image token anymore
+        # Otherwise we need pixel values to be passed to model. NOTE: use_cache=False needs pixel_values always
+        if cache_position[0] == 0:
+            model_inputs["pixel_values"] = pixel_values
+            model_inputs["pixel_values_length"] = pixel_values_length
+
+        return model_inputs
 
     @classmethod
     def from_pretrained(

@@ -58,6 +58,7 @@ def test_slt_model():
                 #     pixel_values_length=batch["pixel_values_length"].cuda(),
                 #     labels=batch["labels"].cuda(),
                 #     position_ids=batch["position_ids"].cuda(),
+                #     token_type_ids=batch["token_type_ids"].cuda(),
                 # )
                 # print(outputs.loss)
                 print("prompt_length:" + str(batch["input_ids"].shape[1]))
@@ -65,7 +66,7 @@ def test_slt_model():
                     input_ids=batch["input_ids"].cuda(),
                     pixel_values=batch["pixel_values"].cuda(),
                     pixel_values_length=batch["pixel_values_length"].cuda(),
-                    position_ids=batch["position_ids"].cuda(),
+                    # position_ids=batch["position_ids"].cuda(),
                     attention_mask=batch["attention_mask"].cuda(),
                     max_new_tokens=100,
                 )
