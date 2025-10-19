@@ -7,4 +7,6 @@ peft_config:
     - "^llm.model.layers.[0-9]+.self_attn.v_proj$"
   bias: none
 
-checkpoint_dir: outputs/first_demo/2025-09-24_01-05-28/checkpoint-141920
+unfreeze_embedding: False
+
+checkpoint_dir: outputs/pretrain_adapter/2025-10-16_19-24-55/checkpoint-92000

@@ -84,6 +84,15 @@ def main(cfg: DictConfig):
     for param in slt_model.base_model.visual_adapter.parameters():
         param.requires_grad = True
 
+    for param in slt_model.base_model.visual_position_embedding.parameters():
+        param.requires_grad = True
+
+    if cfg.model.unfreeze_embedding:
+        if acc.is_main_process:
+            print("Unfreeze input embedding")
+        for param in slt_model.base_model.get_input_embeddings().parameters():
+            param.requires_grad = True
+
     # create trainer
     training_args = SltTrainingArguments(
         generation_config=GenerationConfig(

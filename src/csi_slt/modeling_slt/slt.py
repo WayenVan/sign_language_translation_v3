@@ -411,7 +411,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             inputs_embeds=inputs_embeds,
             attention_mask=causal_mask_mapping,
             position_ids=position_ids,
-            token_type_ids=token_type_ids,
+            # token_type_ids=token_type_ids,
             cache_position=cache_position,
             use_cache=use_cache,
             past_key_values=past_key_values,

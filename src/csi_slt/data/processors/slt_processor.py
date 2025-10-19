@@ -167,8 +167,8 @@ class SignTranslationProcessor(ProcessorMixin):
             self.mode == "train"
         ):  # WARN: ONLY train need position ids, we don't need it when generating sequence, there is a bug
             pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
-            # pos_ids = pos_ids.clamp(min=0)
-            # pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
+            pos_ids = pos_ids.clamp(min=0)
+            pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
             # pos_ids = self.position_augmentation(pos_ids, inputs_pt.attention_mask)
             # pos_ids = torch.arange(
             #     0,
