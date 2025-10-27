@@ -14,10 +14,10 @@ logger = logging.get_logger(__name__)
 class PretrainedBackbone(nn.Module):
     def __init__(self, norm_output=True, ckpt_path=None, **cfg_kwargs):
         super().__init__()
-        self.config = SignPretrainConfig(**cfg_kwargs)
+        self.config: SignPretrainConfig = SignPretrainConfig(**cfg_kwargs)
         self.backbone = SignVisualModelForPretrain(self.config).backbone
 
-        self.norm_output = norm_output
+        self.norm_output: bool = norm_output
 
         if ckpt_path is not None:
             self._load_from_ckpt(ckpt_path)

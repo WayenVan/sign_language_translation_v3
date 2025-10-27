@@ -22,11 +22,14 @@ from transformers.trainer_utils import seed_worker
 from transformers.trainer import _is_peft_model
 from transformers.utils import is_datasets_available
 
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+
 
 import datasets
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers.utils import logging
+import numpy as np
 
 from typing import Callable, Literal, Tuple
 from functools import partial
@@ -134,13 +137,35 @@ class SltTrainer(Seq2SeqTrainer):
             references=[[l] for l in label_texts],
             max_order=4,
         )
-        dummy = bleu.compute(
-            predictions=predction_texts,
-            references=[[l] for l in predction_texts],
-            max_order=4,
-        )
 
-        return {"bleu1": results_bleu_1["bleu"], "bleu4": results_bleu_4["bleu"]}
+        # calculate sentence-level BLEU for analysis purpose
+        sentence_bleu_1: list = []
+        sentence_bleu_4: list = []
+        for label, pred in zip(label_texts, predction_texts):
+            smoothie = SmoothingFunction().method3
+            sentence_bleu_1.append(
+                sentence_bleu(
+                    [tokenizer.tokenize(label)],
+                    tokenizer.tokenize(pred),
+                    weights=(1, 0, 0, 0),
+                    smoothing_function=smoothie,
+                )
+            )
+            sentence_bleu_4.append(
+                sentence_bleu(
+                    [tokenizer.tokenize(label)],
+                    tokenizer.tokenize(pred),
+                    weights=(0, 0, 0, 1),
+                    smoothing_function=smoothie,
+                )
+            )
+
+        return {
+            "bleu1": results_bleu_1["bleu"],
+            "bleu4": results_bleu_4["bleu"],
+            "sentence_bleu_1": np.mean(sentence_bleu_1),
+            "sentence_bleu_4": np.mean(sentence_bleu_4),
+        }
 
     def prediction_step(
         self,

@@ -267,6 +267,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_output.visual_length
         )  # [B], number of video tokens in visual feats
 
+        if t_length is None:
+            raise ValueError("video_length is required for prepare_for_casual_lm")
+
         visual_feats = torch.split(
             visual_feats, t_length.tolist(), dim=0
         )  # list of [T, D]

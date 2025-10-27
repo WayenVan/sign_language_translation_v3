@@ -12,8 +12,8 @@ config:
       output_layer: -2
       num_extra_queries: 4
       num_heads: 12
-      num_adapter_layers: 4
-    ckpt_path: outputs/pretrained_ckpt_v0.1/checkpoint-10500
+      num_adapter_layers: 1
+    ckpt_path: "outputs/downloaded_ckpt/visual_pretrain/2025-10-20_15-05-17/checkpoint-42000"
   visual_adapter_type: temporal_shuffle
   visual_adapter_kwargs:
     input_hidden_size: 768

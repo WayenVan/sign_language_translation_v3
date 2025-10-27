@@ -20,7 +20,6 @@ from albumentations import (
     Resize,
     ColorJitter,
 )
-from 
 
 
 class SignTranslationProcessor(ProcessorMixin):

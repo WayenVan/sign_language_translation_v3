@@ -1,18 +1,18 @@
 config:
-  hidden_size: 2560
+  hidden_size: 1152
   video_soft_token_id: 6
   video_token_scale: 0.5
-  llm_model_name_or_path: google/gemma-3-4b-it
+  llm_model_name_or_path: google/gemma-3-1b-it
   visual_backbone_type: dinov2
   visual_backbone_kwargs:
-    id: facebook/dinov2-with-registers-base
+    id: facebook/dinov2-with-registers-large
     output_layer: -2
     enable_lora: False
   visual_adapter_type: token_sampler
   visual_adapter_kwargs:
-    hidden_size: 768
-    target_hidden_size: 2560
-    num_heads: 12
+    hidden_size: 1024
+    target_hidden_size: 1152
+    num_heads: 16
     num_layers: 2
     num_extra_queries: 4
     mlp_depth: 2

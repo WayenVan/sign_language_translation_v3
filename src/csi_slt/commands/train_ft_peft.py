@@ -104,7 +104,7 @@ def main(cfg: DictConfig):
         model=slt_model,
         args=training_args,
         hydra_config=cfg,
-        tokenizer=tokenizer,
+        processing_class=datamodule.val_processor,
         train_dataset=datamodule.train_dataset,
         eval_dataset=datamodule.val_dataset,
         train_data_collator=datamodule.train_collator,

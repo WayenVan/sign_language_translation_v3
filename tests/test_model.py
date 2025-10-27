@@ -8,6 +8,8 @@ from omegaconf import OmegaConf
 sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
+
+
 import torchinfo
 import re
 
@@ -152,7 +154,7 @@ def test_peft_model():
     # for name, param in slt_model.named_parameters():
     #     print(name)
 
-    lora_args = OmegaConf.to_container(cfg.engine.peft_config, resolve=True)
+    lora_args: dict = OmegaConf.to_container(cfg.engine.peft_config, resolve=True)
 
     target_modules = lora_args.pop("target_modules", None)
     target_modules_list = []
