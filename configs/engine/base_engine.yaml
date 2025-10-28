@@ -4,7 +4,7 @@ training_args:
   per_device_eval_batch_size: 1
   report_to: wandb
   remove_unused_columns: False
-  ddp_find_unused_parameters: False
+  ddp_find_unused_parameters: True
   save_strategy: steps
   save_steps: 4000
   save_total_limit: 1

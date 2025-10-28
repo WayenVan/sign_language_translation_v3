@@ -9,12 +9,12 @@
       "console": "integratedTerminal",
       "env": {
         "PYTHONPATH": "./src:${env:PYTHONPATH}",
-        "CUDA_VISIBLE_DEVICES": "0,1",
+        "CUDA_VISIBLE_DEVICES": "0",
         "WANDB_PROJECT": "debugs"
       },
       "justMyCode": false,
       "args": [
-        "--num_processes=2",
+        "--num_processes=1",
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.train",
@@ -23,7 +23,7 @@
         "engine.training_args.save_steps=1000",
         "engine.training_args.eval_steps=2",
         "data.fraction_dataset=True",
-        "model=base_model"
+        "model=pretrained_encoder_convnext"
       ]
     },
     {

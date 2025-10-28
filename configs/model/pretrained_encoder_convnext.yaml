@@ -6,14 +6,11 @@ config:
   visual_backbone_type: pretrained
   visual_backbone_kwargs:
     hidden_size: 768
-    backbone_type: "dinov2-with-token-sampler"
+    backbone_type: "convnext"
     backbone_kwargs:
-      id: "facebook/dinov2-with-registers-base"
-      output_layer: -2
-      num_extra_queries: 4
-      num_heads: 12
-      num_adapter_layers: 4
-    ckpt_path: "outputs/downloaded_ckpt/visual_pretrain/2025-10-05_20-29-56/checkpoint-21000"
+      id: "convnext_tiny"
+      pretrained: false
+    ckpt_path: "outputs/downloaded_ckpt/visual_pretrain/2025-10-27_16-09-42/checkpoint-53600"
   visual_adapter_type: temporal_shuffle
   visual_adapter_kwargs:
     input_hidden_size: 768

@@ -3,6 +3,7 @@ import numpy
 import os
 import polars as pl
 from datasets import load_dataset
+import pyspng
 
 
 class Ph14TMultiLinglDataset(Dataset):
@@ -81,9 +82,10 @@ class Ph14TMultiLinglDataset(Dataset):
         import cv2
 
         for frame_file in video_frame_file_name:
-            image = cv2.imread(os.path.join(self.data_root, frame_file))
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            video_frame.append(image)
+            frame_file = frame_file.replace("210x260px", "256x256px")
+            with open(os.path.join(self.data_root, frame_file), "rb") as f:
+                image = pyspng.load(f.read())
+            image = image[:, :, :3]
 
         if lang == "zh":
             text = self.zh_df.filter(pl.col("name") == id)["translation"].to_list()[0]

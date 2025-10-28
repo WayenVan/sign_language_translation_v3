@@ -3,6 +3,7 @@ outputs/
 wandb/
 dataset
 *.mp4
+download-ripgrepBnnefY/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

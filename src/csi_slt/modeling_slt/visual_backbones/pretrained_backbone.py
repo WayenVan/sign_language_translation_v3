@@ -22,6 +22,10 @@ class PretrainedBackbone(nn.Module):
         if ckpt_path is not None:
             self._load_from_ckpt(ckpt_path)
 
+        # if self.config.backbone_type == "convnext":
+        #     for param in self.backbone.parameters():
+        #         param.requires_grad = False
+
     def _load_from_ckpt(self, ckpt_path):
         try:
             _pretrained_model = SignVisualModelForPretrain.from_pretrained(ckpt_path)
@@ -33,7 +37,7 @@ class PretrainedBackbone(nn.Module):
             # NOTE: verify_config
             src_config = _pretrained_model.config
             tgt_config = self.config
-            for key in ["hidden_size", "backbone_type", "backbone_kwargs"]:
+            for key in ["hidden_size", "backbone_type"]:
                 if getattr(src_config, key) != getattr(tgt_config, key):
                     raise ValueError(
                         f"The config of the pretrained model does not match the provided config. Mismatch found in key: {key} (src: {getattr(src_config, key)}, tgt: {getattr(tgt_config, key)})"
