@@ -1,5 +1,5 @@
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.auto import AutoModel, AutoConfig
+from transformers.models.auto import AutoModel, AutoConfig, AutoModelForCausalLM
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerationMixin
 import torch
@@ -119,29 +119,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
             "eager",  # NOTE: default to eager since spda produce nan
         )
 
-        if self.config.llm_model_name_or_path.startswith("google/gemma-3-1b"):
-            from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
-
-            self.llm = Gemma3ForCausalLM.from_pretrained(
-                self.config.llm_model_name_or_path,
-                attn_implementation=attn_implementation,
-                **self.config.llm_init_kwargs,
-            )
-        elif self.config.llm_model_name_or_path.startswith("google/gemma-3"):
-            from transformers.models.gemma3.modeling_gemma3 import (
-                Gemma3ForConditionalGeneration,
-            )
-
-            self.llm = Gemma3ForConditionalGeneration.from_pretrained(
-                self.config.llm_model_name_or_path,
-                attn_implementation=attn_implementation,
-                **self.config.llm_init_kwargs,
-            )
-        else:
-            self.llm = AutoModel.from_pretrained(
-                self.config.llm_model_name_or_path,
-                **self.config.llm_init_kwargs,
-            )
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            self.config.llm_model_name_or_path,
+            attn_implementation=attn_implementation,
+            **self.config.llm_init_kwargs,
+        )
 
         self.config.bos_token_id = self.llm_config.bos_token_id
 
@@ -162,6 +144,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         generation_config.max_length = self.MAX_TOKEN_LENGTH
         generation_config.top_k = None
         generation_config.top_p = None
+        generation_config.temperature = None
 
         self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
 
@@ -399,12 +382,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
                     token_type_ids.to(cache_position.device),
                 )
-
             # Create the masks
             causal_mask_mapping = {
                 "full_attention": create_causal_mask(**mask_kwargs),
-                "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
             }
+            if self.llm.model.has_sliding_layers:
+                causal_mask_mapping["sliding_attention"] = (
+                    create_sliding_window_causal_mask(**mask_kwargs),
+                )
             # import matplotlib.pyplot as plt
             #
             # plt.imshow(causal_mask_mapping["full_attention"][0, 0].cpu().numpy())
@@ -414,7 +399,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             inputs_embeds=inputs_embeds,
             attention_mask=causal_mask_mapping,
             position_ids=position_ids,
-            # token_type_ids=token_type_ids,
             cache_position=cache_position,
             use_cache=use_cache,
             past_key_values=past_key_values,
@@ -439,34 +423,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-    @staticmethod
-    def create_masks_for_generate(
-        config: PretrainedConfig,
-        input_embeds: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        cache_position: torch.Tensor,
-        past_key_values: Optional[Cache],
-        position_ids: Optional[torch.Tensor],
-        token_type_ids: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> dict:
-        # Prepare mask arguments
-        mask_kwargs = {
-            "config": config.get_text_config(),
-            "input_embeds": input_embeds,
-            "attention_mask": attention_mask,
-            "cache_position": cache_position,
-            "past_key_values": past_key_values,
-            "position_ids": position_ids,
-        }
-        # Add the token type ids mask for generate as well
-        if token_type_ids is not None and input_embeds.shape[1] != 1:
-            # We need to pass an additional mask function to account for token type ids, and it needs to be an `or`
-            mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-                token_type_ids.to(cache_position.device),
-            )
-        return create_masks_for_generate(**mask_kwargs)
 
     def prepare_inputs_for_generation(
         self,

@@ -1,0 +1,19 @@
+{%- if (messages|length != 1) or (messages[0]['role'] != 'user') -%}
+  {{ raise_exception("The first message must be from the user") }}
+{%- endif -%}
+{{ '<|im_start|>' + "user" +  "
+"+ "You are a native "+ messages[0]['language'] + " speaker. You are going to translate a provided content to " + messages[0]["language"]}}
+{{"
+"+ "the output should only contains the translated text in " + messages[0]["language"] + " without any additional text or explanation.
+
+"}}{{"the input is: "}}{{ '<|vision_start|>' }}{{"
+
+the output is: "}}{{'<|im_end|>
+'}}
+{%- if add_generation_prompt -%}
+    {{'<|im_start|>assistant
+'}}
+{%- endif -%}
+{%- if enable_thinking is defined and enable_thinking is false %}
+    {{- '<think>\n\n</think>\n\n' }}
+{%- endif %}

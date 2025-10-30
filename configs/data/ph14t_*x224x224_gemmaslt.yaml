@@ -1,4 +1,4 @@
-chat_template_jinjia: jinjas/gemma_slt.jinja
+chat_template_jinjia: jinjas/qwen_chat_template_slt.jinja
 data_root: dataset/PHOENIX-2014-T-release-v3
 
 train:

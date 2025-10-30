@@ -33,6 +33,8 @@ def test_slt_model():
         llm_name = cfg.model.config.llm_model_name_or_path
         tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
+        print(tokenizer.convert_tokens_to_ids("<|video_pad|>"))
+
         datamodule = DataModule(
             cfg.data,
             tokenizer=tokenizer,

@@ -34,9 +34,9 @@ class SignTranslationProcessor(ProcessorMixin):
         video_processor,
         tokenizer,
         chat_template=None,
-        VIDEO_SOFT_TOKEN="<unused0>",
-        VIDEO_START_TOKEN="<unused1>",
-        eos_token="<end_of_turn>",
+        VIDEO_SOFT_TOKEN="<|video_pad|>",
+        VIDEO_START_TOKEN="<|vision_start|>",
+        eos_token="<|im_end|>",
         video_padding_to_multiple_of=4,
         video_token_scale=0.5,
         num_extra_video_tokens=2,  # for video start and end tokens
