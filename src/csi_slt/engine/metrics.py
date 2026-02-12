@@ -2,7 +2,7 @@ import evaluate
 import numpy as np
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from transformers.trainer_utils import EvalLoopOutput
-from ..data.constants import LANGUAGE_MAP
+from ..constants import LANGUAGE_MAP
 from collections import defaultdict
 
 

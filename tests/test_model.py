@@ -49,32 +49,32 @@ def test_slt_model():
             batch_size=2,
             # shuffle=True,
             num_workers=0,
-            collate_fn=datamodule.val_collator,
-            # collate_fn=datamodule.train_collator,
+            # collate_fn=datamodule.val_collator,
+            collate_fn=datamodule.train_collator,
         )
         slt_model.eval()
         with torch.no_grad(), torch.cuda.amp.autocast(enabled=True):
             for batch in loader:
-                # outputs = slt_model(
-                #     input_ids=batch["input_ids"].cuda(),
-                #     attention_mask=batch["attention_mask"].cuda(),
-                #     pixel_values=batch["pixel_values"].cuda(),
-                #     pixel_values_length=batch["pixel_values_length"].cuda(),
-                #     labels=batch["labels"].cuda(),
-                #     position_ids=batch["position_ids"].cuda(),
-                #     token_type_ids=batch["token_type_ids"].cuda(),
-                # )
-                # print(outputs.loss)
-                print("prompt_length:" + str(batch["input_ids"].shape[1]))
-                outputs = slt_model.generate(
+                outputs = slt_model(
                     input_ids=batch["input_ids"].cuda(),
+                    attention_mask=batch["attention_mask"].cuda(),
                     pixel_values=batch["pixel_values"].cuda(),
                     pixel_values_length=batch["pixel_values_length"].cuda(),
-                    # position_ids=batch["position_ids"].cuda(),
-                    attention_mask=batch["attention_mask"].cuda(),
-                    max_new_tokens=100,
+                    labels=batch["labels"].cuda(),
+                    position_ids=batch["position_ids"].cuda(),
+                    token_type_ids=batch["token_type_ids"].cuda(),
                 )
-                print(tokenizer.batch_decode(outputs, skip_special_tokens=False)[0])
+                print(outputs.loss)
+                # print("prompt_length:" + str(batch["input_ids"].shape[1]))
+                # outputs = slt_model.generate(
+                #     input_ids=batch["input_ids"].cuda(),
+                #     pixel_values=batch["pixel_values"].cuda(),
+                #     pixel_values_length=batch["pixel_values_length"].cuda(),
+                #     # position_ids=batch["position_ids"].cuda(),
+                #     attention_mask=batch["attention_mask"].cuda(),
+                #     max_new_tokens=100,
+                # )
+                # print(tokenizer.batch_decode(outputs, skip_special_tokens=False)[0])
 
 
 def test_model_save():

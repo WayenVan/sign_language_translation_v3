@@ -20,6 +20,10 @@ from transformers.integrations.fsdp import is_fsdp_managed_module
 from transformers.trainer_utils import seed_worker
 from transformers.trainer import _is_peft_model
 from transformers.utils import is_datasets_available
+from transformers.trainer_utils import PredictionOutput
+
+import json
+import os
 
 
 import datasets
@@ -30,6 +34,7 @@ from typing import Callable, Literal, Tuple
 from functools import partial
 
 from .metrics import SLTMetric
+from ..constants import LANGUAGE_MAP
 
 logger = logging.get_logger(__name__)
 
@@ -421,3 +426,50 @@ class SltTrainer(Seq2SeqTrainer):
             sampler_fn=self._get_eval_sampler,
             mode="test",
         )
+
+    def predict(self, test_dataset: Dataset, test_collator=None, **gen_kwargs):
+        if test_collator is not None:
+            self.test_data_collator = test_collator
+        return super().predict(test_dataset=test_dataset, **gen_kwargs)
+
+    def save_predictions(self, eval_preds: PredictionOutput):
+        tokenizer = self.processing_class.tokenizer
+
+        preds_ids, pred_length, prompt_length = eval_preds.predictions
+        labels_ids, language_ids = eval_preds.label_ids
+
+        prediction_results = []
+        B = labels_ids.shape[0]
+        for b in range(B):
+            full_prediction = preds_ids[b][: pred_length[b]]
+            prediction = full_prediction[prompt_length[b] :]
+            label = labels_ids[b]
+            # replace -100 in the labels as we can't decode them
+            label = [l if l != -100 else tokenizer.pad_token_id for l in label]
+            # decode
+            full_pred_text = tokenizer.decode(
+                full_prediction,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            pred_text = tokenizer.decode(
+                prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )
+            label_text = tokenizer.decode(
+                label, skip_special_tokens=True, clean_up_tokenization_spaces=True
+            )
+            prediction_results.append(
+                {
+                    "full_prediction": full_pred_text,
+                    "prediction": pred_text,
+                    "label": label_text,
+                    "language": LANGUAGE_MAP.inverse[language_ids[b].item()],
+                }
+            )
+
+        with open(os.path.join(self.args.output_dir, "predictions.jsonl"), "w") as f:
+            for item in prediction_results:
+                f.write(json.dumps(item) + "\n")
+
+        with open(os.path.join(self.args.output_dir, "metrics.json"), "w") as f:
+            json.dump(eval_preds.metrics, f, indent=4)

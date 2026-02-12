@@ -15,7 +15,7 @@ from typing import Union, Optional
 from transformers import AutoVideoProcessor
 from enum import Enum
 import torch
-from ..constants import LANGUAGE_MAP
+from ...constants import LANGUAGE_MAP
 
 
 class SignTranslationProcessor(ProcessorMixin):
@@ -49,6 +49,9 @@ class SignTranslationProcessor(ProcessorMixin):
         self.position_shift_range = position_shift_range
         self.add_bos_token = add_bos_token
         self.add_eos_token = add_eos_token
+
+        self.pad_token_id = tokenizer.pad_token_id
+
         super().__init__(
             video_processor=video_processor,
             tokenizer=tokenizer,

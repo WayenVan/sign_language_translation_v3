@@ -1,5 +1,7 @@
 training_args:
-  num_train_epochs: 80
+  do_train: true
+  do_predict: true
+  num_train_epochs: 60
   per_device_train_batch_size: 2
   per_device_eval_batch_size: 1
   report_to: wandb
@@ -11,13 +13,17 @@ training_args:
   logging_steps: 50
   eval_strategy: "steps"
   eval_steps: 4000
+  load_best_model_at_end: True # ⭐ 关键
+  metric_for_best_model: "eval_overall_bleu4" # ⭐ 用哪个 metric 判断最佳
+  greater_is_better: False # ⭐ 这个非常重要
   learning_rate: 1e-4
-  dataloader_num_workers: 1
-  auto_output_dir: True
-  auto_output_root: outputs/demos
+  dataloader_num_workers: 6
+  auto_output_dir: False
+  # auto_output_root: outputs/demos
+  output_dir: outputs/qwen3-1.7b-dino2-b-shuffle-2
   lr_scheduler_type: cosine
   # dataloader_prefetch_factor: 2
-  # dataloader_persistent_workers: True
+  dataloader_persistent_workers: True
   # generation_config: null
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128

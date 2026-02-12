@@ -11,8 +11,6 @@ from ..modeling_slt.slt import SltConfig, SltModel
 from ..misc.utils import deep_merge
 from transformers.generation.configuration_utils import GenerationConfig
 
-from accelerate import Accelerator
-
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 
@@ -41,7 +39,7 @@ def main(cfg: DictConfig):
     tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
     datamodule = DataModule(cfg.data, tokenizer=tokenizer)
-    datamodule.setup("train")
+    datamodule.setup()
 
     # generation config
     #
@@ -57,6 +55,7 @@ def main(cfg: DictConfig):
         ),
         **cfg.engine.training_args,
     )
+
     trainer = SltTrainer(
         model=slt_model,
         args=training_args,
@@ -67,6 +66,16 @@ def main(cfg: DictConfig):
         train_data_collator=datamodule.train_collator,
         eval_data_collator=datamodule.val_collator,
     )
+
+    if training_args.do_train:
+        trainer.train()
+
+    if training_args.do_predict:
+        predictions = trainer.predict(
+            test_dataset=datamodule.test_dataset,
+            test_collator=datamodule.test_collator,
+        )
+        trainer.save_predictions(predictions)
 
     # trainer.evaluate()
     trainer.train()

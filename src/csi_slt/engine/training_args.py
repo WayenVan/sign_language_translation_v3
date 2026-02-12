@@ -98,3 +98,6 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
                     "auto_output_root must not be specified when auto_output_dir is False. "
                     "The `output_dir` will be set to the value of `output_dir`."
                 )
+
+            if self.run_name is None:
+                self.run_name = self.output_dir

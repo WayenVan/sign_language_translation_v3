@@ -3,14 +3,14 @@ export WANDB_PROJECT=sign_language_translation_v3
 export PYTHONPATH=./src:$PYTHONPATH
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-	model=base_model \
-	engine.training_args.auto_output_root=./outputs/pretrain_adapter_qwen \
-	engine.training_args.per_device_train_batch_size=2 \
-	engine.training_args.per_device_eval_batch_size=2 \
-	engine.training_args.dataloader_num_workers=18 \
-	engine.training_args.eval_steps=4000 \
-	engine.training_args.save_steps=4000 \
-	engine.training_args.logging_steps=15
+  model=base_model \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-dino2-b-shuffle-2 \
+  engine.training_args.per_device_train_batch_size=2 \
+  engine.training_args.per_device_eval_batch_size=2 \
+  engine.training_args.dataloader_num_workers=18 \
+  engine.training_args.eval_steps=4000 \
+  engine.training_args.save_steps=4000 \
+  engine.training_args.logging_steps=15
 # data.train.processor.video_token_scale=1.0 \
 # data.val.processor.video_token_scale=1.0 \
 # data.test.processor.video_token_scale=1.0 \

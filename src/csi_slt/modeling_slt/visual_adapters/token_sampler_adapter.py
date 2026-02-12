@@ -62,16 +62,16 @@ class TokenSampleAdapter(nn.Module):
         self.mlp = build_mlp(
             mlp_depth, hidden_size * self.num_extra_queries, target_hidden_size
         )
-        self.norm = Gemma3RMSNorm(hidden_size, eps=eps)
+        self.norm = Gemma3RMSNorm(target_hidden_size, eps=eps)
         # self.positional_embedding = nn.Embedding(max_length, target_hidden_size)
         #
         self.use_temporal_shuffle = use_temporal_shuffle
-        if use_temporal_shuffle:
-            self.temporal_shuffle_connector = TemporalShuffleConnector(
-                target_hidden_size,
-                target_hidden_size,
-                scale_factor=temporal_scale_factor,
-            )
+        self.temporal_shuffle_connector = TemporalShuffleConnector(
+            target_hidden_size,
+            target_hidden_size,
+            scale_factor=temporal_scale_factor,
+            use_shuffle=use_temporal_shuffle,
+        )
 
     def forward(self, visual_backbone_output: VisualBackboneOutput):
         # x: (B, T, HW, C)
@@ -87,20 +87,16 @@ class TokenSampleAdapter(nn.Module):
         for block in self.blocks:
             extra_queries = block(extra_queries, x)
 
-        extra_queries = self.norm(
-            extra_queries
-        )  # (B*T, num_extra_queries, hidden_size)
-
         extra_queries = rearrange(
             extra_queries, "bt n c -> bt (n c)"
-        )  # (B, T, num_extra_queries * hidden_size)
-        feats = self.mlp(extra_queries)  # (B, T, Target_hidden_size)
+        )  # (B*T, num_extra_queries * hidden_size)
+        feats = self.mlp(extra_queries)  # (B*T, Target_hidden_size)
 
-        if self.use_temporal_shuffle:
-            feats, v_length = self.temporal_shuffle_connector(feats, t_length=v_length)
+        feats, v_length = self.temporal_shuffle_connector(feats, t_length=v_length)
+        feats = self.norm(feats)
 
         return VisualAdapterOutput(
-            visual_features=feats,  # (B, T', Target_hidden_size)
+            visual_features=feats,  # (B*T', Target_hidden_size)
             visual_length=v_length,  # (B,)
         )
 
@@ -157,9 +153,18 @@ class Block(nn.Module):
 
 
 class TemporalShuffleConnector(nn.Module):
-    def __init__(self, input_hidden_size, output_hidden_size, scale_factor):
+    def __init__(
+        self, input_hidden_size, output_hidden_size, scale_factor, use_shuffle=True
+    ):
         super().__init__()
         self.scale_factor = scale_factor
+        self.use_shuffle = use_shuffle
+
+        if not use_shuffle and scale_factor > 1:
+            raise ValueError(
+                "Temporal shuffle must be enabled if scale_factor is greater than 1"
+            )
+
         self.modality_projection = nn.Linear(
             input_hidden_size * scale_factor, output_hidden_size, bias=False
         )
@@ -175,9 +180,11 @@ class TemporalShuffleConnector(nn.Module):
         return x
 
     def forward(self, video_hidden_states, t_length=None):
-        video_hidden_states = self.temporal_shuffle(
-            video_hidden_states, t_length, self.scale_factor
-        )
+        if self.use_shuffle:
+            video_hidden_states = self.temporal_shuffle(
+                video_hidden_states, t_length, self.scale_factor
+            )
+
         video_hidden_states = self.modality_projection(video_hidden_states)
 
         if t_length is not None:
