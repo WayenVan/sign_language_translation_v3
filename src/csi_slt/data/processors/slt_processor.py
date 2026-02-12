@@ -15,12 +15,7 @@ from typing import Union, Optional
 from transformers import AutoVideoProcessor
 from enum import Enum
 import torch
-
-
-class Language(Enum):
-    DE = "German"
-    EN = "English"
-    ZH = "Chinese"
+from ..constants import LANGUAGE_MAP
 
 
 class SignTranslationProcessor(ProcessorMixin):
@@ -34,24 +29,26 @@ class SignTranslationProcessor(ProcessorMixin):
         video_processor,
         tokenizer,
         chat_template=None,
-        VIDEO_SOFT_TOKEN="<|video_pad|>",
-        VIDEO_START_TOKEN="<|vision_start|>",
-        eos_token="<|im_end|>",
+        video_soft_token="<|video_pad|>",
+        video_start_token="<|vision_start|>",
         video_padding_to_multiple_of=4,
         video_token_scale=0.5,
         num_extra_video_tokens=2,  # for video start and end tokens
+        add_bos_token=False,
+        add_eos_token=True,
         mode="train",
         position_shift_range=(0, 20),
         **kwargs,
     ):
-        self.VIDEO_SOFT_TOKEN = VIDEO_SOFT_TOKEN
-        self.VIDEO_START_TOKEN = VIDEO_START_TOKEN
+        self.video_soft_token = video_soft_token
+        self.video_start_token = video_start_token
         self.video_padding_to_multiple_of = video_padding_to_multiple_of
         self.mode = mode
         self.video_token_scale = video_token_scale
         self.num_extra_video_tokens = num_extra_video_tokens
-        self.eos_token = eos_token
         self.position_shift_range = position_shift_range
+        self.add_bos_token = add_bos_token
+        self.add_eos_token = add_eos_token
         super().__init__(
             video_processor=video_processor,
             tokenizer=tokenizer,
@@ -61,12 +58,12 @@ class SignTranslationProcessor(ProcessorMixin):
             self.tokenizer.chat_template = chat_template  # WARN: really needed?
 
         self.video_soft_token_id = self.tokenizer.convert_tokens_to_ids(
-            self.VIDEO_SOFT_TOKEN
+            self.video_soft_token
         )
 
     def inject_images(self, prompt: str, n: int) -> str:
-        sentinel = self.VIDEO_START_TOKEN
-        replacement = self.VIDEO_SOFT_TOKEN * n
+        sentinel = self.video_start_token
+        replacement = self.video_soft_token * n
         return prompt.replace(sentinel, replacement)
 
     def __call__(
@@ -96,16 +93,19 @@ class SignTranslationProcessor(ProcessorMixin):
         video_lengths = video_batch_features.pixel_values_lengths.cpu().numpy()
         video_lengths_tensor = video_batch_features.pixel_values_lengths
 
+        # NOTE: convert text to prompts and labels ids
+
         prompts = []
         labels = []
         input_texts = []
+        language_ids = []
         for i, t in enumerate(text):
             if src_lang[i] == "en":
-                message = [{"role": "user", "language": Language.EN.value}]
+                message = [{"role": "user", "language": "English"}]
             elif src_lang[i] == "de":
-                message = [{"role": "user", "language": Language.DE.value}]
+                message = [{"role": "user", "language": "German"}]
             elif src_lang[i] == "zh":
-                message = [{"role": "user", "language": Language.ZH.value}]
+                message = [{"role": "user", "language": "Chinese"}]
             else:
                 raise ValueError(f"Unsupported language: {src_lang[i]}")
 
@@ -115,17 +115,25 @@ class SignTranslationProcessor(ProcessorMixin):
                 enable_thinking=False,
                 tokenize=False,
             )
+
             # inject images if needed
-            if self.VIDEO_START_TOKEN in prompt:
+            if self.video_start_token in prompt:
                 prompt = self.inject_images(
                     prompt,
                     int(video_lengths[i] * self.video_token_scale)
                     + self.num_extra_video_tokens,
                 )
 
-            label = t + self.eos_token
+            label = t
+
+            if self.add_bos_token:
+                prompt = self.tokenizer.bos_token + prompt
+            if self.add_eos_token:
+                label = label + self.tokenizer.eos_token
+
             prompts.append(prompt)
             labels.append(label)
+            language_ids.append(LANGUAGE_MAP[src_lang[i]])
 
             input_text = prompt + label if self.mode == "train" else prompt
             input_texts.append(input_text)
@@ -183,6 +191,7 @@ class SignTranslationProcessor(ProcessorMixin):
             "input_ids": inputs_pt.input_ids,
             "labels": labels_pt.input_ids,
             "token_type_ids": (inputs_pt.input_ids == self.video_soft_token_id).long(),
+            "lang_ids": torch.tensor(language_ids).long(),
         }
 
         if pos_ids is not None:

@@ -1,0 +1,72 @@
+chat_template_jinjia: jinjas/qwen_chat_template_slt.jinja
+data_root: dataset/PHOENIX-2014-T-release-v3
+
+en_data_root: large_files/ph14t_english
+zh_data_root: large_files/ph14t_chinese
+
+assemble: True
+
+train:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    zh_data_root: ${data.zh_data_root}
+    en_data_root: ${data.en_data_root}
+    mode: train
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    mode: train
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+
+val:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    zh_data_root: ${data.zh_data_root}
+    en_data_root: ${data.en_data_root}
+    mode: dev
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    mode: eval
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+
+test:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    zh_data_root: ${data.zh_data_root}
+    en_data_root: ${data.en_data_root}
+    mode: test
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    mode: test
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+
+fraction_dataset: False
+train_fraction: 1.0
+val_fraction: 0.01
+test_fraction: 0.05

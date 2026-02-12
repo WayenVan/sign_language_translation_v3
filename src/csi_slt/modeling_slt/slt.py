@@ -20,6 +20,7 @@ from typing import Callable
 
 from ..configuration_slt.configuration import SltConfig
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
+from .llm_loader import load_llm
 
 from .output_utils import (
     VisualBackboneOutput,
@@ -112,17 +113,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # fmt: on
 
     def _init_llm(self):
-        self.llm_config = AutoConfig.from_pretrained(self.config.llm_model_name_or_path)
-
-        attn_implementation = self.config.llm_init_kwargs.pop(
-            "attn_implementation",
-            "eager",  # NOTE: default to eager since spda produce nan
-        )
-
-        self.llm = AutoModelForCausalLM.from_pretrained(
-            self.config.llm_model_name_or_path,
-            attn_implementation=attn_implementation,
-            **self.config.llm_init_kwargs,
+        self.llm, self.llm_config = load_llm(
+            self.config.llm_model_name_or_path, self.config.llm_init_kwargs
         )
 
         self.config.bos_token_id = self.llm_config.bos_token_id

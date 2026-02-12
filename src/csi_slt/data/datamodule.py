@@ -2,7 +2,7 @@ from omegaconf import DictConfig
 from hydra.utils import instantiate
 import torch
 from sklearn.model_selection import train_test_split
-from torch.utils.data import Subset
+from torch.utils.data import Subset, ConcatDataset
 from typing import Literal
 
 
@@ -85,6 +85,11 @@ class DataModule:
                         fraction=self.cfg.val_fraction,
                     )
 
+            if self.cfg.assemble:
+                self.train_dataset = ConcatDataset(
+                    [self.train_dataset, self.val_dataset]
+                )
+
         if stage == "test" or stage is None:
             if self.cfg.test is not None:
                 self.test_dataset = instantiate(self.cfg.test.dataset)
@@ -134,3 +139,28 @@ class DataModule:
     @property
     def test_collator(self):
         return instantiate(self.cfg.test.collator, processor=self.test_processor)
+
+    def print_batch(self, batch_size, num_workers=1):
+        dataloader = torch.utils.data.DataLoader(
+            self.train_dataset,
+            batch_size=batch_size,
+            collate_fn=self.train_collator,
+            num_workers=num_workers,
+        )
+        for batch in dataloader:
+            input_text = self.tokenizer.batch_decode(
+                batch["input_ids"], skip_special_tokens=False
+            )
+            if "labels" in batch:
+                labels = batch["labels"]
+                mask = labels == -100
+                labels = labels.masked_fill(mask, self.tokenizer.pad_token_id)
+                label_text = self.tokenizer.batch_decode(
+                    labels, skip_special_tokens=False
+                )
+                for i in range(len(input_text)):
+                    print(f"INPUT: \n {input_text[i]}")
+                    print(f"LABEL: \n {label_text[i]}")
+                    print("-" * 50)
+
+            break

@@ -38,10 +38,10 @@ class Ph14TMultiLinglDataset(Dataset):
             has_header=True,
             separator="|",
         )
-        self._create_assemble_df()
-
-        self.pipline = pipline
         self.ids = self.hg_dataset.unique("name")
+        self.pipline = pipline
+
+        self._create_assemble_df()
 
     def _create_assemble_df(self):
         # Merge
@@ -79,13 +79,12 @@ class Ph14TMultiLinglDataset(Dataset):
         video_frame_file_name = data_info["frames"]
         video_frame = []
 
-        import cv2
-
         for frame_file in video_frame_file_name:
             frame_file = frame_file.replace("210x260px", "256x256px")
             with open(os.path.join(self.data_root, frame_file), "rb") as f:
                 image = pyspng.load(f.read())
             image = image[:, :, :3]
+            video_frame.append(image)
 
         if lang == "zh":
             text = self.zh_df.filter(pl.col("name") == id)["translation"].to_list()[0]
@@ -135,8 +134,9 @@ if __name__ == "__main__":
     print(f"Dataset size: {len(ph14t_dataset)}")
 
     for i in range(10):
-        data_info = ph14t_dataset[i + 10000]
+        data_info = ph14t_dataset[i + 10]
         print(data_info["text"])
+        print(data_info["video"].shape)
         # print(
         #     f"ID: {data_info['id']}, Video shape: {data_info['video'].shape}, Text: {data_info['text']}"
         # )

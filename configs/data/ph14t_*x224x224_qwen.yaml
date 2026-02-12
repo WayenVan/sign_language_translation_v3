@@ -1,6 +1,8 @@
 chat_template_jinjia: jinjas/qwen_chat_template_slt.jinja
 data_root: dataset/PHOENIX-2014-T-release-v3
 
+assemble: false,
+
 train:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TGeneralDataset

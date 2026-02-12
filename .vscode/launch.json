@@ -12,7 +12,7 @@
         "CUDA_VISIBLE_DEVICES": "0",
         "WANDB_PROJECT": "debugs"
       },
-      "justMyCode": false,
+      "justMyCode": true,
       "args": [
         "--num_processes=1",
         "--mixed_precision=fp16",
@@ -21,9 +21,9 @@
         "engine.training_args.report_to=none",
         "engine.training_args.auto_output_root=./outputs/debug_outputs",
         "engine.training_args.save_steps=1000",
-        "engine.training_args.eval_steps=2",
-        "data.fraction_dataset=True",
-        "model=pretrained_encoder_convnext"
+        "engine.training_args.eval_steps=1",
+        "engine.training_args.dataloader_num_workers=2",
+        "data.fraction_dataset=True"
       ]
     },
     {

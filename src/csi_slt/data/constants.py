@@ -1,7 +1,11 @@
 from enum import Enum
+from bidict import bidict
 
 
-class Language(Enum):
-    DE = "German"
-    EN = "English"
-    ZH = "Chinese"
+LANGUAGE_MAP = bidict(
+    {
+        "en": 1,
+        "de": 2,
+        "zh": 3,
+    }
+)

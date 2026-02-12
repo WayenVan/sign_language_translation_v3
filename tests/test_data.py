@@ -27,19 +27,21 @@ def test_datamodule():
     collator = datamodule.train_collator
     collator.debug = True
 
-    loader = DataLoader(
-        train_dataset,
-        batch_size=2,
-        shuffle=True,
-        num_workers=0,
-        collate_fn=collator,
-    )
+    datamodule.print_batch(batch_size=2, num_workers=4)
 
-    for batch in loader:
-        # print(batch["input_ids"][0])
-        # print(batch["labels"][0])
-        # print(batch["input_ids"][0])
-        print(batch)
+    # loader = DataLoader(
+    #     train_dataset,
+    #     batch_size=2,
+    #     shuffle=True,
+    #     num_workers=0,
+    #     collate_fn=collator,
+    # )
+    #
+    # for batch in loader:
+    #     # print(batch["input_ids"][0])
+    #     # print(batch["labels"][0])
+    #     # print(batch["input_ids"][0])
+    #     print(batch)
 
 
 if __name__ == "__main__":

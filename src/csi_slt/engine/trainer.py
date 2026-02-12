@@ -8,7 +8,6 @@ from .callbacks import (
     SaveBaseModelInPEFT,
     SaveHydraConfigCallback,
 )
-from transformers.trainer_utils import EvalLoopOutput
 from torch import nn
 import torch
 from torch.distributed.fsdp import FullyShardedDataParallel
@@ -22,18 +21,15 @@ from transformers.trainer_utils import seed_worker
 from transformers.trainer import _is_peft_model
 from transformers.utils import is_datasets_available
 
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-
 
 import datasets
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers.utils import logging
-import numpy as np
-
 from typing import Callable, Literal, Tuple
 from functools import partial
-import evaluate
+
+from .metrics import SLTMetric
 
 logger = logging.get_logger(__name__)
 
@@ -81,9 +77,7 @@ class SltTrainer(Seq2SeqTrainer):
             self.lr_scheduler,
         )
 
-        self.compute_metrics = partial(
-            self._compute_metrics, processor=self.processing_class
-        )
+        self.compute_metrics = SLTMetric(self.processing_class)
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
@@ -92,80 +86,6 @@ class SltTrainer(Seq2SeqTrainer):
             )
         self.args.predict_with_generate = True
         self.hydra_config = hydra_config
-
-    @staticmethod
-    def _compute_metrics(pred: EvalLoopOutput, processor) -> dict:
-        tokenizer = processor.tokenizer
-
-        preds_ids, pred_length, prompt_length = pred.predictions
-        labels_ids = pred.label_ids
-
-        full_prediction_texts = []
-        predction_texts = []
-        label_texts = []
-        B = labels_ids.shape[0]
-        for b in range(B):
-            full_prediction = preds_ids[b][: pred_length[b]]
-            prediction = full_prediction[prompt_length[b] :]
-            label = labels_ids[b]
-            # replace -100 in the labels as we can't decode them
-            label = [l if l != -100 else tokenizer.pad_token_id for l in label]
-            # decode
-            full_pred_text = tokenizer.decode(
-                full_prediction,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-            )
-            pred_text = tokenizer.decode(
-                prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )
-            label_text = tokenizer.decode(
-                label, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )
-            full_prediction_texts.append(full_pred_text)
-            predction_texts.append(pred_text)
-            label_texts.append(label_text)
-
-        bleu = evaluate.load("bleu")
-        results_bleu_1 = bleu.compute(
-            predictions=predction_texts,
-            references=[[l] for l in label_texts],
-            max_order=1,
-        )
-        results_bleu_4 = bleu.compute(
-            predictions=predction_texts,
-            references=[[l] for l in label_texts],
-            max_order=4,
-        )
-
-        # calculate sentence-level BLEU for analysis purpose
-        sentence_bleu_1: list = []
-        sentence_bleu_4: list = []
-        for label, pred in zip(label_texts, predction_texts):
-            smoothie = SmoothingFunction().method3
-            sentence_bleu_1.append(
-                sentence_bleu(
-                    [tokenizer.tokenize(label)],
-                    tokenizer.tokenize(pred),
-                    weights=(1, 0, 0, 0),
-                    smoothing_function=smoothie,
-                )
-            )
-            sentence_bleu_4.append(
-                sentence_bleu(
-                    [tokenizer.tokenize(label)],
-                    tokenizer.tokenize(pred),
-                    weights=(0, 0, 0, 1),
-                    smoothing_function=smoothie,
-                )
-            )
-
-        return {
-            "bleu1": results_bleu_1["bleu"],
-            "bleu4": results_bleu_4["bleu"],
-            "sentence_bleu_1": np.mean(sentence_bleu_1),
-            "sentence_bleu_4": np.mean(sentence_bleu_4),
-        }
 
     def prediction_step(
         self,
@@ -257,6 +177,11 @@ class SltTrainer(Seq2SeqTrainer):
                 else contextlib.nullcontext()
             )
 
+            # NOTE: language_ids will be save per batch
+            lang_ids = None
+            if "lang_ids" in generation_inputs:
+                lang_ids = generation_inputs.pop("lang_ids")
+
             # NOTE: pop possible unused keys for generation
             unsed_keys = [
                 "names",
@@ -273,7 +198,7 @@ class SltTrainer(Seq2SeqTrainer):
             if "position_ids" in generation_inputs:
                 raise ValueError(
                     "position_ids should not be passed to generate function"
-                )  # NOTE: this is important
+                )  # NOTE: this is important, or will lead to bug behavior
 
             with summon_full_params_context:
                 generated_tokens = self.model.generate(
@@ -355,7 +280,7 @@ class SltTrainer(Seq2SeqTrainer):
         return (
             loss,
             (generated_tokens, generated_batch_size, prompt_length),
-            labels,
+            (labels, lang_ids if lang_ids is not None else None),
         )
 
     def _get_dataloader(
