@@ -62,9 +62,9 @@ def main(cfg: DictConfig):
         hydra_config=cfg,
         processing_class=datamodule.val_processor,
         train_dataset=datamodule.train_dataset,
-        eval_dataset=datamodule.val_dataset,
+        eval_dataset=datamodule.test_dataset,
         train_data_collator=datamodule.train_collator,
-        eval_data_collator=datamodule.val_collator,
+        eval_data_collator=datamodule.test_collator,
     )
 
     if training_args.do_train:
@@ -76,9 +76,6 @@ def main(cfg: DictConfig):
             test_collator=datamodule.test_collator,
         )
         trainer.save_predictions(predictions)
-
-    # trainer.evaluate()
-    trainer.train()
 
 
 if __name__ == "__main__":

@@ -12,8 +12,6 @@ from torch.utils.data import DataLoader
 
 def test_processor_save_load():
     processor = SignVideoProcessor()
-    processor.train_transform
-    processor.prediction_transform
     processor.save_pretrained("outputs/processor_test")
 
     loaded_processor = AutoVideoProcessor.from_pretrained("outputs/processor_test")

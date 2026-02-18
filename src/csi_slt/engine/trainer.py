@@ -64,7 +64,9 @@ class SltTrainer(Seq2SeqTrainer):
         )
 
         # NOTE: add custom callbacks
-        self.add_callback(SaveBestMetricCallback(metric_name="eval_bleu4"))
+        self.add_callback(
+            SaveBestMetricCallback(metric_name="test_overall_sentence_bleu_4")
+        )
         self.add_callback(ModelInfoCallback())
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveHydraConfigCallback(hydra_config))
@@ -433,6 +435,9 @@ class SltTrainer(Seq2SeqTrainer):
         return super().predict(test_dataset=test_dataset, **gen_kwargs)
 
     def save_predictions(self, eval_preds: PredictionOutput):
+        if self.args.local_rank > 0:
+            return
+
         tokenizer = self.processing_class.tokenizer
 
         preds_ids, pred_length, prompt_length = eval_preds.predictions

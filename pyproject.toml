@@ -1,0 +1,13 @@
+[project]
+name = "sign-language-translation-v3"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "accelerate>=1.12.0",
+    "albumentations>=2.0.8",
+    "bidict>=0.23.1",
+    "torch==2.8.0",
+    "transformers>=5.2.0",
+]

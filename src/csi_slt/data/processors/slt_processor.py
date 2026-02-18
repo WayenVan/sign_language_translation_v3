@@ -15,7 +15,7 @@ from typing import Union, Optional
 from transformers import AutoVideoProcessor
 from enum import Enum
 import torch
-from ...constants import LANGUAGE_MAP
+from csi_slt.constants import LANGUAGE_MAP
 
 
 class SignTranslationProcessor(ProcessorMixin):
