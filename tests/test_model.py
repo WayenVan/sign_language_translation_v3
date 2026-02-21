@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
+from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 
 
 import torchinfo

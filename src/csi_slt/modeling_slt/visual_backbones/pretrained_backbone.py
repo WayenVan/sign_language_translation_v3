@@ -1,8 +1,3 @@
-from csi_sign_pretrain.modeling_sign_visual.sign_pt_model import (
-    SignVisualModelForPretrain,
-)
-from csi_sign_pretrain.configuration_sign_visual.configuration import SignPretrainConfig
-
 import torch.nn as nn
 from ..output_utils import VisualBackboneOutput
 import torch.nn.functional as F
@@ -14,6 +9,14 @@ logger = logging.get_logger(__name__)
 class PretrainedBackbone(nn.Module):
     def __init__(self, norm_output=True, ckpt_path=None, **cfg_kwargs):
         super().__init__()
+
+        from csi_sign_pretrain.modeling_sign_visual.sign_pt_model import (
+            SignVisualModelForPretrain,
+        )
+        from csi_sign_pretrain.configuration_sign_visual.configuration import (
+            SignPretrainConfig,
+        )
+
         self.config: SignPretrainConfig = SignPretrainConfig(**cfg_kwargs)
         self.backbone = SignVisualModelForPretrain(self.config).backbone
 

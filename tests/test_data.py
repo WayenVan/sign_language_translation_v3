@@ -12,7 +12,13 @@ from csi_slt.data.datamodule import DataModule
 
 def test_datamodule():
     with hydra.initialize(config_path="../configs"):
-        cfg = hydra.compose(config_name="base_train")
+        cfg = hydra.compose(
+            config_name="base_train",
+            overrides=[
+                "data=ph14t_*x224x224_gemma_multiling",
+                "model=gemma3-1b-dino-base",
+            ],
+        )
 
     llm_name = cfg.model.config.llm_model_name_or_path
     tokenizer = AutoTokenizer.from_pretrained(llm_name)

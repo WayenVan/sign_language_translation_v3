@@ -10,6 +10,9 @@ from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltConfig, SltModel
 from ..misc.utils import deep_merge
 from transformers.generation.configuration_utils import GenerationConfig
+from huggingface_hub import login
+
+login(token=os.getenv("HF_TOKEN"))
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))

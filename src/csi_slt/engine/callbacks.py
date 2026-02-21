@@ -5,6 +5,7 @@ from transformers import logging
 import torchinfo
 import torch
 from omegaconf import OmegaConf
+import time
 from accelerate import Accelerator
 from ..misc.git_utils import save_git_state
 from transformers.modeling_utils import unwrap_model
@@ -218,3 +219,57 @@ class SaveBaseModelInPEFT(TrainerCallback):
                     logger.warn("Model is not a PEFT model, skipping base model save.")
             else:
                 raise ValueError("Model is None, cannot save base model.")
+
+
+class ETACallback(TrainerCallback):
+    def __init__(self, print_interval_seconds=300):
+        self.print_interval = print_interval_seconds
+        self.start_time = None
+        self.last_print_time = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return
+
+        self.start_time = time.time()
+        self.last_print_time = self.start_time
+
+        print(f"Total training steps: {state.max_steps}")
+        print("Training started...")
+
+    def on_log(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return
+
+        if state.global_step == 0:
+            return
+
+        now = time.time()
+
+        if now - self.last_print_time < self.print_interval:
+            return
+
+        elapsed = now - self.start_time
+        steps_done = state.global_step
+        total_steps = state.max_steps
+
+        steps_per_sec = steps_done / elapsed
+        remaining_steps = total_steps - steps_done
+
+        eta_seconds = remaining_steps / steps_per_sec if steps_per_sec > 0 else 0
+        eta_hours = eta_seconds / 3600
+
+        print(
+            f"[Step {steps_done}/{total_steps}] "
+            f"Elapsed: {elapsed / 3600:.2f}h | "
+            f"ETA: {eta_hours:.2f}h"
+        )
+
+        self.last_print_time = now
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return
+
+        total_time = time.time() - self.start_time
+        print(f"Training finished. Total time: {total_time / 3600:.2f}h")

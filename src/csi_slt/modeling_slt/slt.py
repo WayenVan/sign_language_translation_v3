@@ -54,7 +54,7 @@ def token_type_ids_mask_function(
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
     MAX_TOKEN_LENGTH = 512
-    _tied_weights_keys = ["llm.lm_head.weight"]
+    _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config: SltConfig):
         super().__init__(config)
@@ -361,6 +361,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 "past_key_values": past_key_values,
                 "position_ids": position_ids,
             }
+            sliding_mask_kwargs = mask_kwargs.copy()
+
+            if self.llm.config.use_bidirectional_attention:
+                logger.warn(
+                    "The LLM is configured to use bidirectional, which is not fully supported by our current implementation. The causal mask will be disabled, but the model may still not work as expected."
+                )
             # NOTE: this `is_prefill` logic is not flawless, it fails when we're using a cache eagerly initialized
             # (e.g. compiled prefill) AND `pixel_values` are not provided. Determining prefill in that case requires
             # checking data values, which is not compile-compatible.
@@ -370,18 +376,22 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 or not past_key_values.is_initialized
                 or pixel_values is not None
             )
+
+            # apply bidirectional atteninon for video tokens if needed
             if token_type_ids is not None and is_prefill:
                 mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
+                    token_type_ids.to(cache_position.device),
+                )
+                sliding_mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
                     token_type_ids.to(cache_position.device),
                 )
             # Create the masks
             causal_mask_mapping = {
                 "full_attention": create_causal_mask(**mask_kwargs),
+                "sliding_attention": create_sliding_window_causal_mask(
+                    **sliding_mask_kwargs
+                ),
             }
-            if self.llm.model.has_sliding_layers:
-                causal_mask_mapping["sliding_attention"] = (
-                    create_sliding_window_causal_mask(**mask_kwargs),
-                )
             # import matplotlib.pyplot as plt
             #
             # plt.imshow(causal_mask_mapping["full_attention"][0, 0].cpu().numpy())

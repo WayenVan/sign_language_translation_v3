@@ -18,6 +18,7 @@ training_args:
   greater_is_better: True # ⭐ 这个非常重要
   learning_rate: 1e-4
   dataloader_num_workers: 6
+  disable_tqdm: True
   auto_output_dir: False
   # auto_output_root: outputs/demos
   output_dir: outputs/qwen3-1.7b-dino2-b-shuffle-2

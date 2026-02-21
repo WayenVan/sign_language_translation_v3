@@ -7,6 +7,7 @@ from .callbacks import (
     SaveGitInfoCallback,
     SaveBaseModelInPEFT,
     SaveHydraConfigCallback,
+    ETACallback,
 )
 from torch import nn
 import torch
@@ -71,6 +72,7 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
+        self.add_callback(ETACallback())
 
         if _is_peft_model(unwrap_model(self.model)):
             self.add_callback(SaveBaseModelInPEFT())
