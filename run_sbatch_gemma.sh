@@ -3,7 +3,7 @@
 #SBATCH --job-name=slt_gemma
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
-#SBATCH --partition=gpu-l40s
+#SBATCH --partition=gpu-h100
 #SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256g
@@ -20,7 +20,7 @@ accelerate launch --num_processes=3 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.output_dir=outputs/gemma3-1b-dino2-b-shuffle-2 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=2 \
-  engine.training_args.dataloader_num_workers=8 \
+  engine.training_args.dataloader_num_workers=10 \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \

@@ -480,3 +480,9 @@ class SltTrainer(Seq2SeqTrainer):
 
         with open(os.path.join(self.args.output_dir, "metrics.json"), "w") as f:
             json.dump(eval_preds.metrics, f, indent=4)
+
+        with open(
+            os.path.join(self.args.output_dir, "predictions.view.jsonl"), "w"
+        ) as f:
+            for item in prediction_results:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")

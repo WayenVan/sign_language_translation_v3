@@ -9,6 +9,7 @@ sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
+from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
 
 import torchinfo
@@ -26,7 +27,13 @@ def test_model_params():
 
 def test_slt_model():
     with hydra.initialize(config_path="../configs"):
-        cfg = hydra.compose(config_name="base_train")
+        cfg = hydra.compose(
+            config_name="base_train",
+            # overrides=[
+            #     "data=ph14t_*x224x224_gemma_multiling",
+            #     "model=gemma3-1b-dino-base",
+            # ],
+        )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
         slt_model = SltModel(slt_config).cuda()
 

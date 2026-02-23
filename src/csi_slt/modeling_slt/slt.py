@@ -86,9 +86,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     @property
     def dummy_inputs(self):
+        N_FRAMES = 64
         V_TOKEN = self.config.video_soft_token_id
         V_TOKEN_NUM = (
-            int(self.config.video_token_scale * 4) + 2
+            int(self.config.video_token_scale * N_FRAMES) + 2
         )  # NOTE: 2 extra tokens for start and end of video
 
         # fmt: off
@@ -101,10 +102,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return {
             "input_ids": input_ids,
             "pixel_values": torch.ones(
-                (4, 3, 224, 224), dtype=torch.float32, device=self.device
+                (N_FRAMES, 3, 224, 224), dtype=torch.float32, device=self.device
             ),
             "pixel_values_length": torch.tensor(
-                [4], dtype=torch.long, device=self.device
+                [N_FRAMES], dtype=torch.long, device=self.device
             ),
             "attention_mask": torch.ones(1, seq_len , dtype=torch.long, device=self.device),
             "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device),
@@ -139,6 +140,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         generation_config.temperature = None
 
         self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
+        self.has_sliding_layers = "sliding_attention" in self.llm_config.layer_types
 
     def _init_visual_backbone(self):
         backbone_cls = VISUAL_BACKBONES.get(self.config.visual_backbone_type)
@@ -355,7 +357,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # Prepare mask arguments
             mask_kwargs = {
                 "config": self.llm.config.get_text_config(),
-                "input_embeds": inputs_embeds,
+                "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
                 "cache_position": cache_position,
                 "past_key_values": past_key_values,
@@ -363,7 +365,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
             }
             sliding_mask_kwargs = mask_kwargs.copy()
 
-            if self.llm.config.use_bidirectional_attention:
+            if (
+                hasattr(self.llm.config, "use_bidirectional_attention")
+                and self.llm.config.use_bidirectional_attention
+            ):
                 logger.warn(
                     "The LLM is configured to use bidirectional, which is not fully supported by our current implementation. The causal mask will be disabled, but the model may still not work as expected."
                 )
@@ -382,16 +387,23 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
                     token_type_ids.to(cache_position.device),
                 )
-                sliding_mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
-                    token_type_ids.to(cache_position.device),
-                )
+                if self.has_sliding_layers:
+                    sliding_mask_kwargs["or_mask_function"] = (
+                        token_type_ids_mask_function(
+                            token_type_ids.to(cache_position.device),
+                        )
+                    )
             # Create the masks
             causal_mask_mapping = {
                 "full_attention": create_causal_mask(**mask_kwargs),
-                "sliding_attention": create_sliding_window_causal_mask(
-                    **sliding_mask_kwargs
-                ),
             }
+            if self.has_sliding_layers:
+                causal_mask_mapping["sliding_attention"] = (
+                    create_sliding_window_causal_mask(
+                        **sliding_mask_kwargs,
+                    )
+                )
+
             # import matplotlib.pyplot as plt
             #
             # plt.imshow(causal_mask_mapping["full_attention"][0, 0].cpu().numpy())

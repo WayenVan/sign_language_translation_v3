@@ -18,12 +18,21 @@
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.train",
+        "model=qwen3-1.7b-dino-base-tsamplerv2",
+        "model.config.visual_adapter_kwargs.num_layers_connector=3",
         "engine.training_args.report_to=none",
         "engine.training_args.save_steps=1000",
-        "engine.training_args.eval_steps=1",
-        "engine.training_args.do_train=False",
+        "engine.training_args.eval_steps=1000",
+        "engine.training_args.do_train=True",
         "engine.training_args.dataloader_num_workers=4",
-        "data.fraction_dataset=True"
+        "engine.training_args.output_dir=outputs/debug_outputs",
+        "data.fraction_dataset=True",
+        "data.train.processor.video_token_scale=0.125",
+        "data.val.processor.video_token_scale=0.125",
+        "data.test.processor.video_token_scale=0.125",
+        "data.train.processor.video_padding_to_multiple_of=8",
+        "data.val.processor.video_padding_to_multiple_of=8",
+        "data.test.processor.video_padding_to_multiple_of=8"
       ]
     },
     {

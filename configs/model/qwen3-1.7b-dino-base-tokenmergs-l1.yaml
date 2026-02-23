@@ -1,0 +1,22 @@
+config:
+  hidden_size: 2048
+  video_soft_token_id: 151656
+  video_token_scale: 0.125
+  llm_model_name_or_path: Qwen/Qwen3-1.7B
+  visual_backbone_type: dinov2
+  visual_backbone_kwargs:
+    id: facebook/dinov2-with-registers-base
+    output_layer: -2
+    enable_lora: False
+  visual_adapter_type: temporal_merge
+  visual_adapter_kwargs:
+    hidden_size: 768
+    target_hidden_size: 2048
+    num_heads_spatial: 12
+    num_layers_spatial: 2
+    num_extra_queries_spatial: 4
+    num_heads_temporal: 16
+    num_layers_temporal: 1
+    use_temporal_shuffle: True
+    mlp_depth_spatial: 2
+    drop_out: 0.1
