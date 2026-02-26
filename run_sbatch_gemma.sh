@@ -1,9 +1,9 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_gemma
+#SBATCH --job-name=slt_gemma_shuffle4
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
-#SBATCH --partition=gpu-h100
+#SBATCH --partition=gpu-l40s
 #SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256g
@@ -15,16 +15,24 @@ export PYTHONPATH=./src:$PYTHONPATH
 source .venv/bin/activate
 
 accelerate launch --num_processes=3 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=gemma3-1b-dino-base \
+  model=gemma3-4b-dino-base-tsamplerv2 \
   data=ph14t_*x224x224_gemma_multiling \
-  engine.training_args.output_dir=outputs/gemma3-1b-dino2-b-shuffle-2 \
+  engine.training_args.output_dir=outputs/gemma3-4b-dino2-b-tsamplev2-shuffle-4 \
+  model.config.visual_adapter_kwargs.num_layers_connector=4 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=2 \
   engine.training_args.dataloader_num_workers=10 \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
-  engine.training_args.disable_tqdm=True
+  engine.training_args.disable_tqdm=True \
+  model.config.video_token_scale=0.0625 \
+  data.train.processor.video_token_scale=0.0625 \
+  data.val.processor.video_token_scale=0.0625 \
+  data.test.processor.video_token_scale=0.0625 \
+  data.train.processor.video_padding_to_multiple_of=16 \
+  data.val.processor.video_padding_to_multiple_of=16 \
+  data.test.processor.video_padding_to_multiple_of=16
 # data.train.processor.video_token_scale=1.0 \
 # data.val.processor.video_token_scale=1.0 \
 # data.test.processor.video_token_scale=1.0 \

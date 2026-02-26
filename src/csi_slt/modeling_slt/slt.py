@@ -86,7 +86,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     @property
     def dummy_inputs(self):
-        N_FRAMES = 64
+        N_FRAMES = 32 * int(
+            1.0 / self.config.video_token_scale
+        )  # NOTE: make sure the number of video tokens is a integer
         V_TOKEN = self.config.video_soft_token_id
         V_TOKEN_NUM = (
             int(self.config.video_token_scale * N_FRAMES) + 2
@@ -316,10 +318,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
             pixel_values_length = torch.tensor(
                 [pixel_values.shape[0]], dtype=torch.long, device=pixel_values.device
             )
-        # length must be a multiple of 4
+        # length must be a multiple of (1/video_token_scale)
         if pixel_values_length is not None:
-            assert (pixel_values_length % 4 == 0).all(), (
-                "The length of pixel_values_length must be a multiple of 4."
+            assert (
+                pixel_values_length % int(1.0 / self.config.video_token_scale) == 0
+            ).all(), (
+                "The length of pixel_values_length must be a multiple of (1/video_token_scale)."
             )
 
         past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)

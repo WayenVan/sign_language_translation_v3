@@ -4,6 +4,7 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from transformers.trainer_utils import EvalLoopOutput
 from ..constants import LANGUAGE_MAP
 from collections import defaultdict
+import math
 
 
 class SLTMetric:
@@ -16,6 +17,7 @@ class SLTMetric:
         preds_ids, pred_length, prompt_length = pred.predictions
         labels_ids, language_ids = pred.label_ids
 
+        n_tokens = []
         full_prediction_texts = []
         predction_texts = []
         label_texts = []
@@ -43,8 +45,9 @@ class SLTMetric:
             predction_texts.append(pred_text)
             label_texts.append(label_text)
             languages.append(LANGUAGE_MAP.inverse[language_ids[b].item()])  #
+            n_tokens.append((full_prediction != tokenizer.pad_token_id).sum().item())
 
-        return full_prediction_texts, predction_texts, label_texts, languages
+        return full_prediction_texts, predction_texts, label_texts, languages, n_tokens
 
     def calculate_bleus(self, predictions, references, prefix=""):
         tokenizer = self.processor.tokenizer
@@ -102,7 +105,7 @@ class SLTMetric:
 
     def get_language_buckets(self, pred: EvalLoopOutput):
         """获取按语言分组的桶，使用defaultdict简化代码"""
-        _, prediction_texts, label_texts, languages = self._parse_prediction(pred)
+        _, prediction_texts, label_texts, languages, _ = self._parse_prediction(pred)
 
         buckets = defaultdict(lambda: {"predictions": [], "references": []})
         for pred_text, label_text, lang in zip(
@@ -114,7 +117,7 @@ class SLTMetric:
         return dict(buckets)  # 转换为普通dict以便于使用
 
     def __call__(self, pred: EvalLoopOutput) -> dict:
-        full_prediction_texts, prediction_texts, label_texts, langauges = (
+        full_prediction_texts, prediction_texts, label_texts, langauges, n_tokens = (
             self._parse_prediction(pred)
         )
 
@@ -133,4 +136,5 @@ class SLTMetric:
                 )
                 all_metrics.update(lang_metrics)
 
+        all_metrics["avg_n_tokens"] = np.mean(n_tokens)
         return all_metrics

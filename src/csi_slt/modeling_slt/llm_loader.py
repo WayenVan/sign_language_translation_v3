@@ -7,9 +7,15 @@ def load_llm(model_name, llm_init_kwargs={}):
 
         model_cls = Qwen3ForCausalLM
     elif "gemma" in model_name.lower():
-        from transformers.models.gemma3 import Gemma3ForCausalLM
+        from transformers.models.gemma3 import (
+            Gemma3ForCausalLM,
+            Gemma3ForConditionalGeneration,
+        )
 
-        model_cls = Gemma3ForCausalLM
+        if "1b" in model_name.lower():
+            model_cls = Gemma3ForCausalLM
+        else:
+            model_cls = Gemma3ForConditionalGeneration
     else:
         raise ValueError(f"Unsupported LLM model: {model_name}")
 
@@ -21,5 +27,8 @@ def load_llm(model_name, llm_init_kwargs={}):
         model_name, attn_implementation=attn_implementation, **llm_init_kwargs
     )
     config = AutoConfig.from_pretrained(model_name)
+
+    if hasattr(config, "text_config"):
+        config = config.text_config
 
     return model, config

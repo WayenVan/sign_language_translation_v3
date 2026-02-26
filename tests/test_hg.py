@@ -1,15 +1,13 @@
-from transformers.models.gemma.tokenization_gemma_fast import GemmaTokenizerFast
 import numpy as np
 
 import torch
 
 import torchinfo
 from torchinfo import summary
+from transformers import AutoConfig
 
 
-tokenizer: GemmaTokenizerFast = GemmaTokenizerFast.from_pretrained(
-    "google/gemma-3-1b-it"
-)
+config = AutoConfig.from_pretrained("google/gemma-3-4b-it")
 
 
 c_s: str = "你 好世界"
