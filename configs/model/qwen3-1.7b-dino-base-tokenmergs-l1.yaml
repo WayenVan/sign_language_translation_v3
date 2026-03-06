@@ -1,3 +1,5 @@
+type: auto
+
 config:
   hidden_size: 2048
   video_soft_token_id: 151656

@@ -1,6 +1,6 @@
 defaults:
   - model: base_eval_model
-  - data: ph14t_*x224x224_gemmaslt
+  - data: ph14t_*x224x224_qwen_multiling
   - engine: base_eval_engine
   - override hydra/hydra_logging: none
   - override hydra/job_logging: none

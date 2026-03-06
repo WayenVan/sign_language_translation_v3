@@ -28,7 +28,13 @@ def main(cfg: DictConfig):
 
     # create model
     slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-    slt_model = SltModel(slt_config)
+
+    if cfg.model.type == "qwenvl":
+        from ..modeling_slt.slt_qwen_vl import SltQwenVLModel
+
+        slt_model = SltQwenVLModel(slt_config)
+    else:
+        slt_model = SltModel(slt_config)
 
     # fix parameters
     for param in slt_model.llm.parameters():

@@ -1,7 +1,7 @@
 from transformers import AutoConfig
 
 
-def load_llm(model_name, llm_init_kwargs={}):
+def load_llm(model_name, llm_init_kwargs={}, is_meta_model=False):
     if "qwen" in model_name.lower():
         from transformers.models.qwen3 import Qwen3ForCausalLM
 
@@ -23,12 +23,20 @@ def load_llm(model_name, llm_init_kwargs={}):
         "attn_implementation",
         "eager",  # NOTE: default to eager since spda produce nan
     )
-    model = model_cls.from_pretrained(
-        model_name, attn_implementation=attn_implementation, **llm_init_kwargs
-    )
     config = AutoConfig.from_pretrained(model_name)
+
+    if is_meta_model:
+        model = model_cls._from_config(
+            config, attn_implementation=attn_implementation, **llm_init_kwargs
+        )
+    else:
+        model = model_cls.from_pretrained(
+            model_name, attn_implementation=attn_implementation, **llm_init_kwargs
+        )
 
     if hasattr(config, "text_config"):
         config = config.text_config
+
+    model.tie_weights()
 
     return model, config

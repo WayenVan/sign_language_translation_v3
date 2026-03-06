@@ -5,6 +5,8 @@ from transformers.trainer_utils import EvalLoopOutput
 from ..constants import LANGUAGE_MAP
 from collections import defaultdict
 import math
+import jieba
+from sacrebleu.metrics import BLEU
 
 
 class SLTMetric:
@@ -18,6 +20,7 @@ class SLTMetric:
         labels_ids, language_ids = pred.label_ids
 
         n_tokens = []
+        n_tokens_generated = []
         full_prediction_texts = []
         predction_texts = []
         label_texts = []
@@ -46,12 +49,31 @@ class SLTMetric:
             label_texts.append(label_text)
             languages.append(LANGUAGE_MAP.inverse[language_ids[b].item()])  #
             n_tokens.append((full_prediction != tokenizer.pad_token_id).sum().item())
+            n_tokens_generated.append(prediction.shape[0])
 
-        return full_prediction_texts, predction_texts, label_texts, languages, n_tokens
+        return (
+            full_prediction_texts,
+            predction_texts,
+            label_texts,
+            languages,
+            n_tokens,
+            n_tokens_generated,
+        )
 
-    def calculate_bleus(self, predictions, references, prefix=""):
-        tokenizer = self.processor.tokenizer
+    def calculate_bleus(self, predictions, references, langs=None, prefix=""):
+        # tokenizer = self.processor.tokenizer
         bleu = evaluate.load("bleu")
+
+        if langs is not None:  # 对中文进行分词处理
+            predictions = [
+                " ".join(jieba.cut(pred)) if lang == "zh" else pred
+                for pred, lang in zip(predictions, langs)
+            ]
+            references = [
+                " ".join(jieba.cut(ref)) if lang == "zh" else ref
+                for ref, lang in zip(references, langs)
+            ]
+
         results_bleu_1 = bleu.compute(
             predictions=predictions,
             references=[[l] for l in references],
@@ -63,49 +85,61 @@ class SLTMetric:
             max_order=4,
         )
 
-        # calculate sentence-level BLEU for analysis purpose
-        sentence_bleu_1: list = []
-        sentence_bleu_4: list = []
-        for label, pred in zip(references, predictions):
-            smoothie = SmoothingFunction().method3
-            sentence_bleu_1.append(
-                sentence_bleu(
-                    [tokenizer.tokenize(label)],
-                    tokenizer.tokenize(pred),
-                    weights=(1, 0, 0, 0),
-                    smoothing_function=smoothie,
-                )
-            )
-            sentence_bleu_4.append(
-                sentence_bleu(
-                    [tokenizer.tokenize(label)],
-                    tokenizer.tokenize(pred),
-                    weights=(0, 0, 0, 1),
-                    smoothing_function=smoothie,
-                )
-            )
+        sacre_bleu1 = BLEU(max_ngram_order=1, tokenize="13a")
+        sacre_bleu4 = BLEU(max_ngram_order=4, tokenize="13a")
 
+        # calculate sentence-level BLEU for analysis purpose
+        sentence_bleu_1 = sacre_bleu1.corpus_score(
+            predictions, [[l] for l in references]
+        ).score
+
+        sentence_bleu_4 = sacre_bleu4.corpus_score(
+            predictions, [[l] for l in references]
+        ).score
         return {
             f"{prefix}bleu1": results_bleu_1["bleu"],
             f"{prefix}bleu4": results_bleu_4["bleu"],
-            f"{prefix}sentence_bleu_1": np.mean(sentence_bleu_1),
-            f"{prefix}sentence_bleu_4": np.mean(sentence_bleu_4),
+            f"{prefix}sentence_bleu_1": sentence_bleu_1 / 100.0,
+            f"{prefix}sentence_bleu_4": sentence_bleu_4 / 100.0,
         }
 
-    def calcuate_rouge(self, predictions, references, prefix=""):
+    def calcuate_rouge(self, predictions, references, langs=None, prefix=""):
+
         rouge = evaluate.load("rouge")
+
+        if langs is not None:
+            predictions = [
+                " ".join(list(pred)) if lang == "zh" else pred
+                for pred, lang in zip(predictions, langs)
+            ]
+            references = [
+                " ".join(list(ref)) if lang == "zh" else ref
+                for ref, lang in zip(references, langs)
+            ]
+
         results = rouge.compute(predictions=predictions, references=references)
+
         return {f"{prefix}{k}": v for k, v in results.items()}
 
-    def calculate_metrics(self, predictions, references, prefix=""):
+    def calculate_metrics(
+        self,
+        predictions,
+        references,
+        langs=None,
+        prefix="",
+    ):
         metrics = {}
-        metrics.update(self.calculate_bleus(predictions, references, prefix))
-        metrics.update(self.calcuate_rouge(predictions, references, prefix))
+        metrics.update(
+            self.calculate_bleus(predictions, references, prefix=prefix, langs=langs)
+        )
+        metrics.update(
+            self.calcuate_rouge(predictions, references, prefix=prefix, langs=langs)
+        )
         return metrics
 
     def get_language_buckets(self, pred: EvalLoopOutput):
         """获取按语言分组的桶，使用defaultdict简化代码"""
-        _, prediction_texts, label_texts, languages, _ = self._parse_prediction(pred)
+        _, prediction_texts, label_texts, languages, _, _ = self._parse_prediction(pred)
 
         buckets = defaultdict(lambda: {"predictions": [], "references": []})
         for pred_text, label_text, lang in zip(
@@ -117,13 +151,18 @@ class SLTMetric:
         return dict(buckets)  # 转换为普通dict以便于使用
 
     def __call__(self, pred: EvalLoopOutput) -> dict:
-        full_prediction_texts, prediction_texts, label_texts, langauges, n_tokens = (
-            self._parse_prediction(pred)
-        )
+        (
+            full_prediction_texts,
+            prediction_texts,
+            label_texts,
+            langauges,
+            n_tokens,
+            n_tokens_generated,
+        ) = self._parse_prediction(pred)
 
         # 计算总体指标
         all_metrics = self.calculate_metrics(
-            prediction_texts, label_texts, prefix="overall_"
+            prediction_texts, label_texts, prefix="overall_", langs=langauges
         )
 
         # 使用语言桶计算每个语言的指标
@@ -131,10 +170,14 @@ class SLTMetric:
 
         for lang, bucket in language_buckets.items():
             if bucket["predictions"]:
-                lang_metrics = self.calculate_bleus(
-                    bucket["predictions"], bucket["references"], prefix=f"{lang}_"
+                lang_metrics = self.calculate_metrics(
+                    bucket["predictions"],
+                    bucket["references"],
+                    prefix=f"{lang}_",
+                    langs=[lang] * len(bucket["predictions"]),
                 )
                 all_metrics.update(lang_metrics)
 
         all_metrics["avg_n_tokens"] = np.mean(n_tokens)
+        all_metrics["all_n_tokens_generated"] = np.sum(n_tokens_generated)
         return all_metrics

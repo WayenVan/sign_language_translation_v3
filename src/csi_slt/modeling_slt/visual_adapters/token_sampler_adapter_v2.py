@@ -83,6 +83,9 @@ class TokenSampleAdapterV2(nn.Module):
             visual_length=connected_length,
         )
 
+    def get_temporal_downsample_factor(self):
+        return self.temporal_shuffle_connector.temporal_scale_factor
+
 
 class TokenSampler(nn.Module):
     def __init__(

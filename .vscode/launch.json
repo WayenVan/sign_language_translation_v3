@@ -100,15 +100,16 @@
       "console": "integratedTerminal",
       "env": {
         "PYTHONPATH": "./src:${env:PYTHONPATH}",
-        "CUDA_VISIBLE_DEVICES": "0,1",
+        "CUDA_VISIBLE_DEVICES": "0",
         "WANDB_PROJECT": "debugs"
       },
       "justMyCode": false,
       "args": [
-        "--num_processes=2",
+        "--num_processes=1",
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.evaluate",
+        "model.checkpoint_dir=outputs/qwen3-1.7b-dino-base-tsamplerv2-shuffle-2/checkpoint-164000",
         "engine.training_args.dataloader_num_workers=4"
       ]
     }

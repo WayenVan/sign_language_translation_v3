@@ -32,7 +32,7 @@ def main(cfg: DictConfig):
 
     # create datamodule
     llm_name = slt_model.config.llm_model_name_or_path
-    tokenizer = AutoTokenizer.from_pretrained(llm_name)
+    tokenizer = AutoTokenizer.from_pretrained(llm_name, map_location="cpu")
 
     datamodule = DataModule(cfg.data, tokenizer=tokenizer)
     datamodule.setup()
@@ -55,52 +55,16 @@ def main(cfg: DictConfig):
         model=slt_model,
         args=training_args,
         hydra_config=cfg,
-        tokenizer=tokenizer,
+        processing_class=datamodule.val_processor,
         test_data_collator=datamodule.test_collator,
     )
 
-    pred: PredictionOutput = trainer.predict(datamodule.test_dataset)
-
-    if acc.is_main_process:
-        preds_ids, pred_length, prompt_length = pred.predictions
-        labels_ids = pred.label_ids
-
-        full_prediction_texts = []
-        predction_texts = []
-        label_texts = []
-        B = labels_ids.shape[0]
-        for b in range(B):
-            full_prediction = preds_ids[b][: pred_length[b]]
-            prediction = full_prediction[prompt_length[b] :]
-            label = labels_ids[b]
-            # replace -100 in the labels as we can't decode them
-            label = [l if l != -100 else tokenizer.pad_token_id for l in label]
-            # decode
-            full_pred_text = tokenizer.decode(
-                full_prediction,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-            )
-            pred_text = tokenizer.decode(
-                prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )
-            label_text = tokenizer.decode(
-                label, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )
-            full_prediction_texts.append(full_pred_text)
-            predction_texts.append(pred_text)
-            label_texts.append(label_text)
-
-        # save to file
-        with open(os.path.join(training_args.output_dir, "predictions.txt"), "w") as f:
-            for i in range(B):
-                f.write(f"=== Example {i} ===\n")
-                f.write(f"Full Prediction: {full_prediction_texts[i]}\n")
-                f.write(f"Prediction: {predction_texts[i]}\n")
-                f.write(f"Label: {label_texts[i]}\n")
-                f.write("\n")
+    predictions = trainer.predict(
+        test_dataset=datamodule.test_dataset,
+        test_collator=datamodule.test_collator,
+    )
+    trainer.save_predictions(predictions)
 
 
 if __name__ == "__main__":
     main()
-

@@ -1,6 +1,9 @@
 from transformers.models.dinov2_with_registers.modeling_dinov2_with_registers import (
     Dinov2WithRegistersModel,
 )
+from transformers.models.dinov2_with_registers.configuration_dinov2_with_registers import (
+    Dinov2WithRegistersConfig,
+)
 from torch import nn
 import torch
 from peft import LoraConfig, TaskType, get_peft_model, PeftConfig
@@ -17,11 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 class DinoV2Backbone(nn.Module):
-    def __init__(self, id, output_layer=-1, enable_lora=False, **lora_kwargs):
+    def __init__(
+        self, id, output_layer=-1, enable_lora=False, is_meta=False, **lora_kwargs
+    ):
         super().__init__()
         self.id = id
+        self.is_meta = is_meta
         if not enable_lora:
-            self.visual_encoder = Dinov2WithRegistersModel.from_pretrained(id)
+            if is_meta:
+                config = Dinov2WithRegistersConfig.from_pretrained(id)
+                self.visual_encoder = Dinov2WithRegistersModel._from_config(config)
+            else:
+                self.visual_encoder = Dinov2WithRegistersModel.from_pretrained(id)
             self.is_lora = False
         else:
             self._init_lora_model(lora_kwargs)

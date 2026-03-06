@@ -6,6 +6,7 @@ from transformers import AutoTokenizer
 from omegaconf import OmegaConf
 
 sys.path.append("./src")
+from csi_slt.modeling_slt.slt_qwen_vl import SltQwenVLModel
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
@@ -29,13 +30,14 @@ def test_slt_model():
     with hydra.initialize(config_path="../configs"):
         cfg = hydra.compose(
             config_name="base_train",
-            # overrides=[
-            #     "data=ph14t_*x224x224_gemma_multiling",
-            #     "model=gemma3-1b-dino-base",
-            # ],
+            overrides=[
+                "data=ph14t_*x224x224_qwen_multiling",
+                "model=qwen3vl-2.5b-dino-base-tsamplerv2",
+            ],
         )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-        slt_model = SltModel(slt_config).cuda()
+        # slt_model = SltModel(slt_config).cuda()
+        slt_model = SltQwenVLModel(slt_config).cuda()
 
         # prepare datamodule
         llm_name = cfg.model.config.llm_model_name_or_path
@@ -61,7 +63,7 @@ def test_slt_model():
             collate_fn=datamodule.train_collator,
         )
         slt_model.eval()
-        with torch.no_grad(), torch.cuda.amp.autocast(enabled=True):
+        with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
             for batch in loader:
                 outputs = slt_model(
                     input_ids=batch["input_ids"].cuda(),
@@ -141,7 +143,9 @@ def test_verify_gemma3():
 
 def test_dummy_inputs():
     with hydra.initialize(config_path="../configs"):
-        cfg = hydra.compose(config_name="base_train")
+        cfg = hydra.compose(
+            config_name="base_train",
+        )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
         slt_model = SltModel(slt_config).cuda()
 
@@ -150,7 +154,26 @@ def test_dummy_inputs():
         input_data=slt_model.dummy_inputs,
         col_names=["input_size", "output_size", "num_params", "trainable"],
         depth=4,
+        dtype=torch.float32,
     )
+
+
+def test_dummy_inputs_vl():
+    with hydra.initialize(config_path="../configs"):
+        cfg = hydra.compose(
+            config_name="base_train",
+            overrides=["model=qwen3vl-2.5b-dino-base-tsamplerv2"],
+        )
+        slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
+        slt_model = SltQwenVLModel(slt_config).cuda()
+
+    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        torchinfo.summary(
+            slt_model,
+            input_data=slt_model.dummy_inputs,
+            col_names=["input_size", "output_size", "num_params", "trainable"],
+            depth=4,
+        )
 
 
 def test_peft_model():
@@ -207,3 +230,4 @@ if __name__ == "__main__":
     # test_verify_gemma3()
     # test_dummy_inputs()
     # test_peft_model()
+    # test_dummy_inputs_vl()
