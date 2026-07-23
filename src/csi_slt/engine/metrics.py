@@ -7,6 +7,7 @@ from collections import defaultdict
 import math
 import jieba
 from sacrebleu.metrics import BLEU
+import sacrebleu
 
 
 class SLTMetric:
@@ -64,15 +65,16 @@ class SLTMetric:
         # tokenizer = self.processor.tokenizer
         bleu = evaluate.load("bleu")
 
-        if langs is not None:  # 对中文进行分词处理
-            predictions = [
-                " ".join(jieba.cut(pred)) if lang == "zh" else pred
-                for pred, lang in zip(predictions, langs)
-            ]
-            references = [
-                " ".join(jieba.cut(ref)) if lang == "zh" else ref
-                for ref, lang in zip(references, langs)
-            ]
+        # if langs is not None:  # 对中文进行分词处理
+        #     predictions = [
+        #         " ".join(jieba.cut(pred)) if lang == "zh" else pred
+        #         for pred, lang in zip(predictions, langs)
+        #     ]
+        #     references = [
+        #         " ".join(jieba.cut(ref)) if lang == "zh" else ref
+        #
+        #         for ref, lang in zip(references, langs)
+        #     ]
 
         results_bleu_1 = bleu.compute(
             predictions=predictions,
@@ -85,17 +87,16 @@ class SLTMetric:
             max_order=4,
         )
 
-        sacre_bleu1 = BLEU(max_ngram_order=1, tokenize="13a")
-        sacre_bleu4 = BLEU(max_ngram_order=4, tokenize="13a")
-
         # calculate sentence-level BLEU for analysis purpose
-        sentence_bleu_1 = sacre_bleu1.corpus_score(
-            predictions, [[l] for l in references]
-        ).score
+        precesions = sacrebleu.corpus_bleu(
+            predictions,
+            [[l] for l in references],
+            tokenize="zh",
+        ).precisions
 
-        sentence_bleu_4 = sacre_bleu4.corpus_score(
-            predictions, [[l] for l in references]
-        ).score
+        sentence_bleu_1 = precesions[0]
+        sentence_bleu_4 = precesions[3]
+
         return {
             f"{prefix}bleu1": results_bleu_1["bleu"],
             f"{prefix}bleu4": results_bleu_4["bleu"],
@@ -117,7 +118,9 @@ class SLTMetric:
                 for ref, lang in zip(references, langs)
             ]
 
-        results = rouge.compute(predictions=predictions, references=references)
+        results = rouge.compute(
+            predictions=predictions, references=references, use_stemmer=False
+        )
 
         return {f"{prefix}{k}": v for k, v in results.items()}
 

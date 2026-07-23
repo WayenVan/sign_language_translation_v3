@@ -11,6 +11,6 @@ training_args:
   logging_steps: 50
   # dataloader_persistent_workers: True
   # generation_config: null
-  output_dir: outputs/debug_output
+  output_dir: outputs/eval_qwen-1.7b-shuffle-1
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128
