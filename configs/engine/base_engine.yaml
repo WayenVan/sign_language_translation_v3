@@ -9,12 +9,12 @@ training_args:
   ddp_find_unused_parameters: True
   save_strategy: steps
   save_steps: 4000
-  save_total_limit: 1
+  save_total_limit: 2
   logging_steps: 50
   eval_strategy: "steps"
   eval_steps: 4000
   load_best_model_at_end: True # ⭐ 关键
-  metric_for_best_model: "eval_overall_bleu4" # ⭐ 用哪个 metric 判断最佳
+  metric_for_best_model: "eval_overall_weighted_bleu" # ⭐ 用哪个 metric 判断最佳
   greater_is_better: True # ⭐ 这个非常重要
   learning_rate: 1e-4
   dataloader_num_workers: 6

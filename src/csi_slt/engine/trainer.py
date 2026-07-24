@@ -74,8 +74,8 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(SaveGitInfoCallback())
         self.add_callback(ETACallback())
 
-        if _is_peft_model(unwrap_model(self.model)):
-            self.add_callback(SaveBaseModelInPEFT())
+        # if _is_peft_model(unwrap_model(self.model)):
+        #     self.add_callback(SaveBaseModelInPEFT())
 
         self.callback_handler = SltTrainerCallbackHandler(
             self,

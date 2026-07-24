@@ -1,186 +1,715 @@
+from __future__ import annotations
+
+import re
+import unicodedata
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Protocol
+
 import evaluate
 import numpy as np
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-from transformers.trainer_utils import EvalLoopOutput
-from ..constants import LANGUAGE_MAP
-from collections import defaultdict
-import math
-import jieba
 from sacrebleu.metrics import BLEU
-import sacrebleu
+
+from ..constants import LANGUAGE_MAP
+
+
+class PredictionOutput(Protocol):
+    """SLTMetric 所需的最小输入接口。"""
+
+    predictions: Any
+    label_ids: Any
+
+
+@dataclass(slots=True)
+class DecodedBatch:
+    """解码后的完整评估数据。"""
+
+    predictions: list[str]
+    references: list[str]
+    languages: list[str]
+    total_token_counts: list[int]
+    generated_token_counts: list[int]
+
+    def __len__(self) -> int:
+        return len(self.predictions)
 
 
 class SLTMetric:
-    def __init__(self, processor):
-        self.processor = processor
+    """
+    多语言手语翻译指标。
 
-    def _parse_prediction(self, pred: EvalLoopOutput):
-        tokenizer = self.processor.tokenizer
+    输入格式
+    --------
+    output.predictions:
 
-        preds_ids, pred_length, prompt_length = pred.predictions
-        labels_ids, language_ids = pred.label_ids
-
-        n_tokens = []
-        n_tokens_generated = []
-        full_prediction_texts = []
-        predction_texts = []
-        label_texts = []
-        languages = []
-        B = labels_ids.shape[0]
-        for b in range(B):
-            full_prediction = preds_ids[b][: pred_length[b]]
-            prediction = full_prediction[prompt_length[b] :]
-            label = labels_ids[b]
-            # replace -100 in the labels as we can't decode them
-            label = [l if l != -100 else tokenizer.pad_token_id for l in label]
-            # decode
-            full_pred_text = tokenizer.decode(
-                full_prediction,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-            )
-            pred_text = tokenizer.decode(
-                prediction, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )
-            label_text = tokenizer.decode(
-                label, skip_special_tokens=True, clean_up_tokenization_spaces=True
-            )
-            full_prediction_texts.append(full_pred_text)
-            predction_texts.append(pred_text)
-            label_texts.append(label_text)
-            languages.append(LANGUAGE_MAP.inverse[language_ids[b].item()])  #
-            n_tokens.append((full_prediction != tokenizer.pad_token_id).sum().item())
-            n_tokens_generated.append(prediction.shape[0])
-
-        return (
-            full_prediction_texts,
-            predction_texts,
-            label_texts,
-            languages,
-            n_tokens,
-            n_tokens_generated,
+        (
+            prediction_ids,
+            sequence_lengths,
+            prompt_lengths,
         )
 
-    def calculate_bleus(self, predictions, references, langs=None, prefix=""):
-        # tokenizer = self.processor.tokenizer
-        bleu = evaluate.load("bleu")
+    output.label_ids:
 
-        # if langs is not None:  # 对中文进行分词处理
-        #     predictions = [
-        #         " ".join(jieba.cut(pred)) if lang == "zh" else pred
-        #         for pred, lang in zip(predictions, langs)
-        #     ]
-        #     references = [
-        #         " ".join(jieba.cut(ref)) if lang == "zh" else ref
-        #
-        #         for ref, lang in zip(references, langs)
-        #     ]
-
-        results_bleu_1 = bleu.compute(
-            predictions=predictions,
-            references=[[l] for l in references],
-            max_order=1,
-        )
-        results_bleu_4 = bleu.compute(
-            predictions=predictions,
-            references=[[l] for l in references],
-            max_order=4,
+        (
+            label_ids,
+            language_ids,
         )
 
-        # calculate sentence-level BLEU for analysis purpose
-        precesions = sacrebleu.corpus_bleu(
-            predictions,
-            [[l] for l in references],
-            tokenize="zh",
-        ).precisions
+    BLEU 输出
+    --------
+    每种语言：
 
-        sentence_bleu_1 = precesions[0]
-        sentence_bleu_4 = precesions[3]
+        en_bleu1
+        en_bleu4
+        zh_bleu1
+        zh_bleu4
 
-        return {
-            f"{prefix}bleu1": results_bleu_1["bleu"],
-            f"{prefix}bleu4": results_bleu_4["bleu"],
-            f"{prefix}sentence_bleu_1": sentence_bleu_1 / 100.0,
-            f"{prefix}sentence_bleu_4": sentence_bleu_4 / 100.0,
+    总体 BLEU：
+
+        overall_macro_bleu4
+        overall_weighted_bleu4
+
+    注意：两个 overall BLEU 都由各语言的 BLEU-4 聚合得到，
+    不会把不同目标语言混合后直接计算 corpus BLEU。
+
+    所有 BLEU 和 ROUGE 指标均返回 0～1。
+    """
+
+    _CJK_CHARACTER_PATTERN = (
+        r"[\u3400-\u4DBF"
+        r"\u4E00-\u9FFF"
+        r"\uF900-\uFAFF]"
+    )
+
+    # 中文字符单独成 token；
+    # 其他 Unicode 字母和数字按连续字符串分词。
+    _MULTILINGUAL_TOKEN_PATTERN = re.compile(
+        rf"{_CJK_CHARACTER_PATTERN}|[^\W_]+",
+        flags=re.UNICODE,
+    )
+
+    _DEFAULT_CHINESE_LANGUAGE_CODES = (
+        "zh",
+        "zh-cn",
+        "zh-tw",
+        "zh-hans",
+        "zh-hant",
+        "zho",
+        "cmn",
+        "chinese",
+    )
+
+    def __init__(
+        self,
+        processor: Any,
+        *,
+        ignore_index: int = -100,
+        lowercase_bleu: bool = False,
+        default_bleu_tokenizer: str = "13a",
+        bleu_tokenizer_by_language: Mapping[str, str] | None = None,
+    ) -> None:
+        self.tokenizer = processor.tokenizer
+        self.ignore_index = ignore_index
+        self.lowercase_bleu = lowercase_bleu
+        self.default_bleu_tokenizer = default_bleu_tokenizer
+
+        if self.tokenizer.pad_token_id is None:
+            raise ValueError("SLTMetric requires tokenizer.pad_token_id to be defined.")
+
+        # 中文默认使用 SacreBLEU 的 zh tokenizer。
+        self.bleu_tokenizer_by_language = {
+            self._normalize_language_code(language): "zh"
+            for language in self._DEFAULT_CHINESE_LANGUAGE_CODES
         }
 
-    def calcuate_rouge(self, predictions, references, langs=None, prefix=""):
+        # 允许覆盖或添加特定语言 tokenizer。
+        #
+        # 例如：
+        #
+        # bleu_tokenizer_by_language={
+        #     "ja": "ja-mecab",
+        #     "ko": "ko-mecab",
+        # }
+        if bleu_tokenizer_by_language:
+            self.bleu_tokenizer_by_language.update(
+                {
+                    self._normalize_language_code(language): tokenizer_name
+                    for language, tokenizer_name in bleu_tokenizer_by_language.items()
+                }
+            )
 
-        rouge = evaluate.load("rouge")
+        # key: (tokenizer_name, max_ngram_order)
+        self._bleu_metric_cache: dict[tuple[str, int], BLEU] = {}
 
-        if langs is not None:
-            predictions = [
-                " ".join(list(pred)) if lang == "zh" else pred
-                for pred, lang in zip(predictions, langs)
-            ]
-            references = [
-                " ".join(list(ref)) if lang == "zh" else ref
-                for ref, lang in zip(references, langs)
-            ]
+        # ROUGE 只加载一次。
+        self._rouge_metric = evaluate.load("rouge")
 
-        results = rouge.compute(
-            predictions=predictions, references=references, use_stemmer=False
-        )
+    # ------------------------------------------------------------------
+    # Basic utilities
+    # ------------------------------------------------------------------
 
-        return {f"{prefix}{k}": v for k, v in results.items()}
+    @staticmethod
+    def _normalize_language_code(language: str) -> str:
+        return language.strip().lower().replace("_", "-")
 
-    def calculate_metrics(
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """
+        进行不改变语义的基础规范化。
+
+        - Unicode NFC 规范化；
+        - 删除首尾空格；
+        - 合并连续空白字符。
+        """
+
+        text = unicodedata.normalize("NFC", text)
+        return " ".join(text.strip().split())
+
+    @staticmethod
+    def _to_numpy(value: Any) -> np.ndarray:
+        """兼容 NumPy array 和 PyTorch tensor。"""
+
+        if isinstance(value, np.ndarray):
+            return value
+
+        if hasattr(value, "detach"):
+            value = value.detach()
+
+        if hasattr(value, "cpu"):
+            value = value.cpu()
+
+        if hasattr(value, "numpy"):
+            return value.numpy()
+
+        return np.asarray(value)
+
+    @staticmethod
+    def _validate_batch_sizes(
+        expected_size: int,
+        **arrays: np.ndarray,
+    ) -> None:
+        for name, array in arrays.items():
+            if len(array) != expected_size:
+                raise ValueError(
+                    f"Batch-size mismatch: {name} contains "
+                    f"{len(array)} samples, expected {expected_size}."
+                )
+
+    # ------------------------------------------------------------------
+    # Input parsing
+    # ------------------------------------------------------------------
+
+    def _unpack_output(
         self,
-        predictions,
-        references,
-        langs=None,
-        prefix="",
-    ):
-        metrics = {}
-        metrics.update(
-            self.calculate_bleus(predictions, references, prefix=prefix, langs=langs)
+        output: PredictionOutput,
+    ) -> tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
+        try:
+            (
+                prediction_ids,
+                sequence_lengths,
+                prompt_lengths,
+            ) = output.predictions
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "output.predictions must be "
+                "(prediction_ids, sequence_lengths, prompt_lengths)."
+            ) from exc
+
+        try:
+            label_ids, language_ids = output.label_ids
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "output.label_ids must be (label_ids, language_ids)."
+            ) from exc
+
+        prediction_ids = self._to_numpy(prediction_ids)
+        sequence_lengths = self._to_numpy(sequence_lengths).reshape(-1)
+        prompt_lengths = self._to_numpy(prompt_lengths).reshape(-1)
+        label_ids = self._to_numpy(label_ids)
+        language_ids = self._to_numpy(language_ids).reshape(-1)
+
+        if prediction_ids.ndim != 2:
+            raise ValueError(
+                "prediction_ids must have shape (batch_size, max_sequence_length)."
+            )
+
+        if label_ids.ndim != 2:
+            raise ValueError(
+                "label_ids must have shape (batch_size, max_label_length)."
+            )
+
+        batch_size = prediction_ids.shape[0]
+
+        self._validate_batch_sizes(
+            batch_size,
+            sequence_lengths=sequence_lengths,
+            prompt_lengths=prompt_lengths,
+            label_ids=label_ids,
+            language_ids=language_ids,
         )
-        metrics.update(
-            self.calcuate_rouge(predictions, references, prefix=prefix, langs=langs)
+
+        return (
+            prediction_ids,
+            sequence_lengths,
+            prompt_lengths,
+            label_ids,
+            language_ids,
         )
+
+    # ------------------------------------------------------------------
+    # Decoding
+    # ------------------------------------------------------------------
+
+    def _decode_batch(
+        self,
+        output: PredictionOutput,
+    ) -> DecodedBatch:
+        (
+            prediction_ids,
+            sequence_lengths,
+            prompt_lengths,
+            label_ids,
+            language_ids,
+        ) = self._unpack_output(output)
+
+        pad_token_id = self.tokenizer.pad_token_id
+        batch_size, max_sequence_length = prediction_ids.shape
+
+        generated_sequences: list[list[int]] = []
+        total_token_counts: list[int] = []
+        generated_token_counts: list[int] = []
+
+        for index in range(batch_size):
+            sequence_length = int(sequence_lengths[index])
+            prompt_length = int(prompt_lengths[index])
+
+            if not 0 <= prompt_length <= sequence_length <= max_sequence_length:
+                raise ValueError(
+                    f"Invalid lengths at sample {index}: "
+                    f"prompt_length={prompt_length}, "
+                    f"sequence_length={sequence_length}, "
+                    f"max_sequence_length={max_sequence_length}."
+                )
+
+            full_sequence = prediction_ids[
+                index,
+                :sequence_length,
+            ]
+
+            generated_sequence = full_sequence[prompt_length:]
+
+            generated_sequences.append(generated_sequence.tolist())
+
+            total_token_counts.append(
+                int(np.count_nonzero(full_sequence != pad_token_id))
+            )
+
+            generated_token_counts.append(
+                int(np.count_nonzero(generated_sequence != pad_token_id))
+            )
+
+        clean_label_ids = label_ids.copy()
+        clean_label_ids[clean_label_ids == self.ignore_index] = pad_token_id
+
+        predictions = self.tokenizer.batch_decode(
+            generated_sequences,
+            skip_special_tokens=True,
+        )
+
+        references = self.tokenizer.batch_decode(
+            clean_label_ids.tolist(),
+            skip_special_tokens=True,
+        )
+
+        languages = [
+            str(LANGUAGE_MAP.inverse[int(language_id)]) for language_id in language_ids
+        ]
+
+        return DecodedBatch(
+            predictions=[
+                self._normalize_text(prediction) for prediction in predictions
+            ],
+            references=[self._normalize_text(reference) for reference in references],
+            languages=languages,
+            total_token_counts=total_token_counts,
+            generated_token_counts=generated_token_counts,
+        )
+
+    # ------------------------------------------------------------------
+    # BLEU
+    # ------------------------------------------------------------------
+
+    def _get_bleu_tokenizer_name(
+        self,
+        language: str,
+    ) -> str:
+        normalized_language = self._normalize_language_code(language)
+
+        explicit_tokenizer = self.bleu_tokenizer_by_language.get(normalized_language)
+
+        if explicit_tokenizer is not None:
+            return explicit_tokenizer
+
+        # 兼容其他 zh-* 形式。
+        if normalized_language.startswith("zh-"):
+            return "zh"
+
+        return self.default_bleu_tokenizer
+
+    def _get_bleu_metric(
+        self,
+        language: str,
+        *,
+        max_ngram_order: int,
+    ) -> BLEU:
+        tokenizer_name = self._get_bleu_tokenizer_name(language)
+
+        cache_key = (
+            tokenizer_name,
+            max_ngram_order,
+        )
+
+        if cache_key not in self._bleu_metric_cache:
+            self._bleu_metric_cache[cache_key] = BLEU(
+                tokenize=tokenizer_name,
+                lowercase=self.lowercase_bleu,
+                smooth_method="exp",
+                effective_order=False,
+                max_ngram_order=max_ngram_order,
+            )
+
+        return self._bleu_metric_cache[cache_key]
+
+    def _calculate_bleu_score(
+        self,
+        predictions: Sequence[str],
+        references: Sequence[str],
+        *,
+        language: str,
+        max_ngram_order: int,
+    ) -> float:
+        """
+        计算单一语言的 corpus BLEU-N。
+
+        BLEU-1:
+            max_ngram_order=1
+
+        BLEU-4:
+            max_ngram_order=4
+        """
+
+        if not predictions:
+            return 0.0
+
+        if len(predictions) != len(references):
+            raise ValueError("predictions and references must have the same length.")
+
+        metric = self._get_bleu_metric(
+            language,
+            max_ngram_order=max_ngram_order,
+        )
+
+        result = metric.corpus_score(
+            hypotheses=list(predictions),
+            references=[list(references)],
+        )
+
+        # SacreBLEU 原始范围是 0～100。
+        return float(result.score / 100.0)
+
+    def _calculate_bleu(
+        self,
+        predictions: Sequence[str],
+        references: Sequence[str],
+        *,
+        language: str,
+    ) -> dict[str, float]:
+        """同时计算 BLEU-1 和 BLEU-4。"""
+
+        return {
+            "bleu1": self._calculate_bleu_score(
+                predictions,
+                references,
+                language=language,
+                max_ngram_order=1,
+            ),
+            "bleu4": self._calculate_bleu_score(
+                predictions,
+                references,
+                language=language,
+                max_ngram_order=4,
+            ),
+            "bleu2": self._calculate_bleu_score(
+                predictions,
+                references,
+                language=language,
+                max_ngram_order=2,
+            ),
+            "bleu3": self._calculate_bleu_score(
+                predictions,
+                references,
+                language=language,
+                max_ngram_order=3,
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # ROUGE
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _multilingual_rouge_tokenize(
+        cls,
+        text: str,
+    ) -> list[str]:
+        """
+        多语言 ROUGE tokenizer。
+
+        中文：
+            你好世界
+            -> ["你", "好", "世", "界"]
+
+        英文：
+            Hello, world!
+            -> ["hello", "world"]
+
+        中英混合：
+            GPT-4 模型
+            -> ["gpt", "4", "模", "型"]
+        """
+
+        return cls._MULTILINGUAL_TOKEN_PATTERN.findall(text.lower())
+
+    def _calculate_rouge(
+        self,
+        predictions: Sequence[str],
+        references: Sequence[str],
+    ) -> dict[str, float]:
+        if not predictions:
+            return {}
+
+        if len(predictions) != len(references):
+            raise ValueError("predictions and references must have the same length.")
+
+        result = self._rouge_metric.compute(
+            predictions=list(predictions),
+            references=list(references),
+            use_stemmer=False,
+            tokenizer=self._multilingual_rouge_tokenize,
+        )
+
+        return {metric_name: float(value) for metric_name, value in result.items()}
+
+    # ------------------------------------------------------------------
+    # Metric composition
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _add_prefix(
+        metrics: Mapping[str, float],
+        prefix: str,
+    ) -> dict[str, float]:
+        return {
+            f"{prefix}{metric_name}": value for metric_name, value in metrics.items()
+        }
+
+    def _calculate_language_metrics(
+        self,
+        predictions: Sequence[str],
+        references: Sequence[str],
+        *,
+        language: str,
+        prefix: str,
+    ) -> dict[str, float]:
+        metrics = self._calculate_bleu(
+            predictions,
+            references,
+            language=language,
+        )
+
+        metrics.update(
+            self._calculate_rouge(
+                predictions,
+                references,
+            )
+        )
+
+        return self._add_prefix(
+            metrics,
+            prefix,
+        )
+
+    # ------------------------------------------------------------------
+    # Grouping
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _group_indices_by_language(
+        languages: Sequence[str],
+    ) -> dict[str, list[int]]:
+        groups: defaultdict[str, list[int]] = defaultdict(list)
+
+        for index, language in enumerate(languages):
+            groups[language].append(index)
+
+        return dict(groups)
+
+    @staticmethod
+    def _select_items(
+        items: Sequence[str],
+        indices: Sequence[int],
+    ) -> list[str]:
+        return [items[index] for index in indices]
+
+    # ------------------------------------------------------------------
+    # BLEU-4 aggregation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _aggregate_bleu4(
+        language_bleu4_scores: Mapping[str, float],
+        language_sample_counts: Mapping[str, int],
+    ) -> dict[str, float]:
+        """
+        聚合各语言的 corpus BLEU-4。
+
+        overall_macro_bleu4:
+            每种语言权重相同。
+
+        overall_weighted_bleu4:
+            根据每种语言的样本数进行加权。
+        """
+
+        if not language_bleu4_scores:
+            return {
+                "overall_macro_bleu4": 0.0,
+                "overall_weighted_bleu4": 0.0,
+            }
+
+        languages = list(language_bleu4_scores)
+
+        bleu4_scores = np.asarray(
+            [language_bleu4_scores[language] for language in languages],
+            dtype=np.float64,
+        )
+
+        sample_counts = np.asarray(
+            [language_sample_counts[language] for language in languages],
+            dtype=np.float64,
+        )
+
+        if np.any(sample_counts <= 0):
+            raise ValueError("Every language bucket must contain at least one sample.")
+
+        return {
+            "overall_macro_bleu4": float(bleu4_scores.mean()),
+            "overall_weighted_bleu4": float(
+                np.average(
+                    bleu4_scores,
+                    weights=sample_counts,
+                )
+            ),
+        }
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def __call__(
+        self,
+        output: PredictionOutput,
+    ) -> dict[str, float | int]:
+        batch = self._decode_batch(output)
+
+        if len(batch) == 0:
+            return {
+                "num_samples": 0,
+                "num_languages": 0,
+                "overall_macro_bleu4": 0.0,
+                "overall_weighted_bleu4": 0.0,
+                "avg_n_tokens": 0.0,
+                "avg_n_tokens_generated": 0.0,
+                "all_n_tokens_generated": 0,
+            }
+
+        metrics: dict[str, float | int] = {}
+
+        # ROUGE 使用统一 tokenizer，因此可以直接计算
+        # 整个多语言测试集的 overall ROUGE。
+        overall_rouge = self._calculate_rouge(
+            batch.predictions,
+            batch.references,
+        )
+
+        metrics.update(
+            self._add_prefix(
+                overall_rouge,
+                prefix="overall_",
+            )
+        )
+
+        language_groups = self._group_indices_by_language(batch.languages)
+
+        language_bleu4_scores: dict[str, float] = {}
+        language_sample_counts: dict[str, int] = {}
+
+        for language in sorted(language_groups):
+            indices = language_groups[language]
+
+            language_predictions = self._select_items(
+                batch.predictions,
+                indices,
+            )
+
+            language_references = self._select_items(
+                batch.references,
+                indices,
+            )
+
+            # 指标键中的连字符替换为下划线。
+            metric_language = self._normalize_language_code(language).replace("-", "_")
+
+            language_metrics = self._calculate_language_metrics(
+                language_predictions,
+                language_references,
+                language=language,
+                prefix=f"{metric_language}_",
+            )
+
+            metrics.update(language_metrics)
+
+            # Overall 指标只聚合 BLEU-4。
+            language_bleu4_scores[language] = language_metrics[
+                f"{metric_language}_bleu4"
+            ]
+
+            language_sample_counts[language] = len(indices)
+
+            metrics[f"{metric_language}_num_samples"] = len(indices)
+
+        metrics.update(
+            self._aggregate_bleu4(
+                language_bleu4_scores,
+                language_sample_counts,
+            )
+        )
+
+        metrics.update(
+            {
+                "num_samples": len(batch),
+                "num_languages": len(language_groups),
+                "avg_n_tokens": float(np.mean(batch.total_token_counts)),
+                "avg_n_tokens_generated": float(np.mean(batch.generated_token_counts)),
+                "all_n_tokens_generated": int(np.sum(batch.generated_token_counts)),
+            }
+        )
+
         return metrics
 
-    def get_language_buckets(self, pred: EvalLoopOutput):
-        """获取按语言分组的桶，使用defaultdict简化代码"""
-        _, prediction_texts, label_texts, languages, _, _ = self._parse_prediction(pred)
-
-        buckets = defaultdict(lambda: {"predictions": [], "references": []})
-        for pred_text, label_text, lang in zip(
-            prediction_texts, label_texts, languages
-        ):
-            buckets[lang]["predictions"].append(pred_text)
-            buckets[lang]["references"].append(label_text)
-
-        return dict(buckets)  # 转换为普通dict以便于使用
-
-    def __call__(self, pred: EvalLoopOutput) -> dict:
-        (
-            full_prediction_texts,
-            prediction_texts,
-            label_texts,
-            langauges,
-            n_tokens,
-            n_tokens_generated,
-        ) = self._parse_prediction(pred)
-
-        # 计算总体指标
-        all_metrics = self.calculate_metrics(
-            prediction_texts, label_texts, prefix="overall_", langs=langauges
-        )
-
-        # 使用语言桶计算每个语言的指标
-        language_buckets = self.get_language_buckets(pred)
-
-        for lang, bucket in language_buckets.items():
-            if bucket["predictions"]:
-                lang_metrics = self.calculate_metrics(
-                    bucket["predictions"],
-                    bucket["references"],
-                    prefix=f"{lang}_",
-                    langs=[lang] * len(bucket["predictions"]),
-                )
-                all_metrics.update(lang_metrics)
-
-        all_metrics["avg_n_tokens"] = np.mean(n_tokens)
-        all_metrics["all_n_tokens_generated"] = np.sum(n_tokens_generated)
-        return all_metrics
