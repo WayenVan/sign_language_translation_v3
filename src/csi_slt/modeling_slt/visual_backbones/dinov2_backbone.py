@@ -1,73 +1,43 @@
-from transformers.models.dinov2_with_registers.modeling_dinov2_with_registers import (
-    Dinov2WithRegistersModel,
-)
+import logging
+
+from peft import LoraConfig, get_peft_model
+from torch import nn
 from transformers.models.dinov2_with_registers.configuration_dinov2_with_registers import (
     Dinov2WithRegistersConfig,
 )
-from torch import nn
-import torch
-from peft import LoraConfig, TaskType, get_peft_model, PeftConfig
-import re
+from transformers.models.dinov2_with_registers.modeling_dinov2_with_registers import (
+    Dinov2WithRegistersModel,
+)
 
-from einops import rearrange
-
-from typing import NamedTuple, List
-
-import logging
-from ..output_utils import VisualBackboneOutput
+from csi_slt.modeling_slt.output_utils import VisualBackboneOutput
 
 logger = logging.getLogger(__name__)
 
 
 class DinoV2Backbone(nn.Module):
     def __init__(
-        self, id, output_layer=-1, enable_lora=False, is_meta=False, **lora_kwargs
+        self,
+        config: dict,
+        dinov2: Dinov2WithRegistersModel | None = None,
     ):
         super().__init__()
-        self.id = id
-        self.is_meta = is_meta
-        if not enable_lora:
-            if is_meta:
-                config = Dinov2WithRegistersConfig.from_pretrained(id)
-                self.visual_encoder = Dinov2WithRegistersModel._from_config(config)
-            else:
-                self.visual_encoder = Dinov2WithRegistersModel.from_pretrained(id)
-            self.is_lora = False
-        else:
-            self._init_lora_model(lora_kwargs)
-            self.is_lora = True
+        self.id = config.get("id")
 
-        self.output_layer = output_layer
+        if self.id is None:
+            raise ValueError("id must be provided in config for DinoV2Backbone")
+
+        self.output_layer = config.get("output_layer", -1)
+        self.config = config
+
+        if dinov2 is None:
+            self.dinov2_config = Dinov2WithRegistersConfig.from_pretrained(self.id)
+            self.visual_encoder = Dinov2WithRegistersModel(self.dinov2_config)
+        else:
+            self.visual_encoder = dinov2
+            self.dinov2_config = dinov2.config
 
         for param in self.visual_encoder.parameters():
             param.requires_grad = False
-
-    def _init_lora_model(self, lora_kwargs):
-        visual_encoder = Dinov2WithRegistersModel.from_pretrained(self.id)
-        # for name, p in visual_encoder.named_parameters():
-        #     print(name)
-        lora_config = LoraConfig(
-            # task_type=TaskType.IMAGE_CLASSIFICATION,
-            target_modules=[
-                "query",
-                "key",
-                "value",
-            ],
-            # lora_alpha=self.lora_alpha,
-            # lora_dropout=self.lora_dropout,
-            # r=self.lora_rank,
-            **lora_kwargs,
-        )
-
-        self.visual_encoder = get_peft_model(
-            visual_encoder,
-            lora_config,
-        )
-        trainable, all = self.visual_encoder.get_nb_trainable_parameters()
-
-        logger.info(
-            f"Created Lora DinoV2 for {self.id} Trainable parameters: {trainable}, All parameters: {all}, Ratio: {trainable / all:.2%}"
-        )
 
     def forward(self, x, t_lengths=None) -> VisualBackboneOutput:
         """
@@ -83,3 +53,31 @@ class DinoV2Backbone(nn.Module):
             pooled_visual_features=feats[:, 0, :],  # [B, C]
             visual_length=t_lengths,
         )
+
+    @classmethod
+    def from_pretrained_backbone(cls, config: dict):
+        id = config.get("id")
+
+        if id is None:
+            raise ValueError("id must be provided in config for DinoV2Backbone")
+
+        dinov2 = Dinov2WithRegistersModel.from_pretrained(id)
+        logger.info(f"Loaded pretrained DinoV2 model from {id}")
+
+        return cls(config=config, dinov2=dinov2)
+
+
+if __name__ == "__main__":
+    import torch
+    from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+
+    # model = DinoV2Backbone.from_pretrained_backbone(
+    #     "facebook/dinov2-with-registers-base"
+    # )
+    model = DinoV2Backbone(
+        config={"id": "facebook/dinov2-with-registers-base", "output_layer": -1}
+    )
+
+    x = torch.randn(2, 3, 224, 224)
+    out = model(x)
+    print(out.visual_features.shape)

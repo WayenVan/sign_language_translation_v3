@@ -20,7 +20,7 @@ class SltConfig(PretrainedConfig):
         llm_model_name_or_path: str = "google/gemma-3-1b-it",
         llm_init_kwargs: Optional[Dict[str, Any]] = None,
         visual_backbone_type: str = "resnet50",
-        visual_backbone_kwargs: Optional[Dict[str, Any]] = None,
+        visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
@@ -35,7 +35,7 @@ class SltConfig(PretrainedConfig):
             llm_model_name_or_path: Path to the pre-trained LLM model or model identifier from huggingface.co/models.
             llm_init_kwargs: Additional keyword arguments for when using .from_pretrained() to load the LLM model.
             visual_backbone_type: Type of visual backbone to use. Options: 'resnet50', 'vit-base-patch16-224', etc.
-            visual_backbone_kwargs: Additional keyword arguments for the visual backbone model.
+            visual_backbone_config: Additional keyword arguments for the visual backbone model.
             visual_adapter_type: Type of adapter to use for visual features. Options: 'linear', 'mlp', etc.
             visual_adapter_kwargs: Additional keyword arguments for the visual adapter.
             **kwargs: Additional arguments passed to the parent PretrainedConfig class.
@@ -47,8 +47,8 @@ class SltConfig(PretrainedConfig):
         self.llm_model_name_or_path = llm_model_name_or_path
         self.llm_init_kwargs = llm_init_kwargs if llm_init_kwargs is not None else {}
         self.visual_backbone_type = visual_backbone_type
-        self.visual_backbone_kwargs = (
-            visual_backbone_kwargs if visual_backbone_kwargs is not None else {}
+        self.visual_backbone_config = (
+            visual_backbone_config if visual_backbone_config is not None else {}
         )
         self.visual_adapter_type = visual_adapter_type
         self.visual_adapter_kwargs = (

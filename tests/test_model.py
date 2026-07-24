@@ -32,12 +32,12 @@ def test_slt_model():
             config_name="base_train",
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
-                "model=qwen3vl-2.5b-dino-base-tsamplerv2",
+                # "model=qwen3vl-2.5b-dino-base-tsamplerv2",
             ],
         )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-        # slt_model = SltModel(slt_config).cuda()
-        slt_model = SltQwenVLModel(slt_config).cuda()
+        slt_model = SltModel.from_pretrained_components(slt_config).cuda()
+        # slt_model = SltQwenVLModel(slt_config).cuda()
 
         # prepare datamodule
         llm_name = cfg.model.config.llm_model_name_or_path
@@ -91,13 +91,31 @@ def test_model_save():
     with hydra.initialize(config_path="../configs"):
         cfg = hydra.compose(config_name="base_train")
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-        slt_model = SltModel(slt_config).cuda()
+        slt_model = SltModel.from_pretrained_components(slt_config).cuda()
+
+    model = slt_model
+    embed = model.get_input_embeddings().weight
+    head = model.get_output_embeddings().weight
+    # embed = model.llm.lm_head.weight
+    # head = model.embed_tokens.weight
+
+    print(torch.equal(embed, head))
+    print(torch.max(torch.abs(embed - head)).item())
+    print(embed.data_ptr() == head.data_ptr())
     slt_model.save_pretrained("outputs/test_save")
 
 
 def test_model_load():
     slt_model = SltModel.from_pretrained("outputs/test_save").cuda()
-    print(slt_model)
+    model = slt_model
+    embed = model.get_input_embeddings().weight
+    head = model.get_output_embeddings().weight
+    # embed = model.llm.lm_head.weight
+    # head = model.embed_tokens.weight
+
+    print(torch.equal(embed, head))
+    print(torch.max(torch.abs(embed - head)).item())
+    print(embed.data_ptr() == head.data_ptr())
 
 
 def test_verify_gemma3():
@@ -226,8 +244,9 @@ if __name__ == "__main__":
     # test_model_params()
     test_slt_model()
     # test_model_save()
-    # test_model_load()
     # test_verify_gemma3()
     # test_dummy_inputs()
     # test_peft_model()
     # test_dummy_inputs_vl()
+    # test_model_save()
+    # test_model_load()

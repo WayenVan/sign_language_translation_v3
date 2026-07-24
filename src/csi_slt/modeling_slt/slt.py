@@ -7,20 +7,17 @@ from torch import nn
 from typing import Optional
 from transformers.cache_utils import DynamicCache, Cache
 from transformers.generation.configuration_utils import GenerationConfig
-from transformers import PretrainedConfig
 
 from transformers import logging
 from transformers.masking_utils import (
     create_causal_mask,
     create_sliding_window_causal_mask,
-    create_masks_for_generate,
 )
 from typing import Callable
 
 
 from ..configuration_slt.configuration import SltConfig
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
-from .llm_loader import load_llm
 
 from .output_utils import (
     VisualBackboneOutput,
@@ -31,11 +28,29 @@ from .output_utils import (
 logger = logging.get_logger(__name__)
 
 
-def is_meta_model(model):
-    for name, param in model.named_parameters():
-        # 如果发现一个参数在 meta device，就认为这是 meta 模型
-        return param.device == torch.device("meta")
-    return False
+def get_llm_cls_by_model_name(model_name):
+    if "qwen" in model_name.lower():
+        from transformers.models.qwen3 import Qwen3ForCausalLM
+
+        model_cls = Qwen3ForCausalLM
+    elif "gemma" in model_name.lower():
+        from transformers.models.gemma3 import (
+            Gemma3ForCausalLM,
+            Gemma3ForConditionalGeneration,
+        )
+
+        if "1b" in model_name.lower():
+            model_cls = Gemma3ForCausalLM
+        else:
+            model_cls = Gemma3ForConditionalGeneration
+    else:
+        raise ValueError(f"Unsupported LLM model: {model_name}")
+    return model_cls
+
+
+def get_text_config(config):
+    """Return the text sub‑config for multimodal models, or the config itself."""
+    return config.text_config if hasattr(config, "text_config") else config
 
 
 def token_type_ids_mask_function(
@@ -61,14 +76,47 @@ def token_type_ids_mask_function(
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
     MAX_TOKEN_LENGTH = 512
-    _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
+    # _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
 
-    def __init__(self, config: SltConfig):
+    def __init__(
+        self,
+        config: SltConfig,
+        llm: Optional[nn.Module] = None,
+        visual_backbone: Optional[nn.Module] = None,
+    ):
         super().__init__(config)
-        self._init_visual_adapter()
-        self._init_llm()
-        self._init_visual_backbone()
+        # NOTE: always construct the structure of the model rather than loading the weights, because we need to support meta model
+        self.llm = llm
+        self.visual_backbone = visual_backbone
 
+        # init visual backbone if needed
+        if self.visual_backbone is None:
+            backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
+            if backbone_cls is None:
+                raise ValueError(
+                    f"Unsupported visual backbone type: {config.visual_backbone_type}. Supported types are: {list(VISUAL_BACKBONES.keys())}"
+                )
+            self.visual_backbone = backbone_cls(config.visual_backbone_config)
+
+        # init visual adapter
+        adapter_cls = VISUAL_ADAPTERS.get(config.visual_adapter_type, None)
+        if adapter_cls is None:
+            raise ValueError(
+                f"Unsupported visual adapter type: {config.visual_adapter_type}. Supported types are: {list(VISUAL_ADAPTERS.keys())}"
+            )
+        self.visual_adapter = adapter_cls(**config.visual_adapter_kwargs)
+
+        # init llm if needed
+        if self.llm is None:
+            llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
+            _llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
+            self.llm = llm_cls(_llm_config)
+
+        # generate configuration
+        self.llm_config = get_text_config(self.llm.config)
+        self._configure_generation()
+
+        # spatial token initialization
         self.start_video_embds = nn.Parameter(
             torch.randn(
                 1, self.config.hidden_size, dtype=torch.float32, device=self.device
@@ -84,6 +132,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
+
         self.config.num_extra_tokens = 2  # start and end of vlideo
 
         self.config.is_encoder_decoder = False
@@ -91,6 +140,30 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         self._init_embedding_weights()
         self.post_init()
+
+    @classmethod
+    def from_pretrained_components(
+        cls,
+        config: SltConfig,
+    ):
+        visual_backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
+        if visual_backbone_cls is None:
+            raise ValueError(
+                f"Unsupported visual backbone type: {config.visual_backbone_type}. Supported types are: {list(VISUAL_BACKBONES.keys())}"
+            )
+        visual_backbone = visual_backbone_cls.from_pretrained_backbone(
+            config.visual_backbone_config
+        )
+
+        llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
+        llm = llm_cls.from_pretrained(
+            config.llm_model_name_or_path, attn_implementation="eager"
+        )
+        llm.tie_weights(
+            recompute_mapping=True
+        )  # NOTE: important! for any case that the lm_head is not tied to the input embeddings, we need to tie them here
+
+        return cls(config=config, llm=llm, visual_backbone=visual_backbone)
 
     @property
     def dummy_inputs(self):
@@ -123,13 +196,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         }
         # fmt: on
 
-    def _init_llm(self):
-        self.llm, self.llm_config = load_llm(
-            self.config.llm_model_name_or_path,
-            self.config.llm_init_kwargs,
-            is_meta_model=is_meta_model(self),
-        )
-
+    def _configure_generation(self):
         self.config.bos_token_id = self.llm_config.bos_token_id
 
         # NOTE: fix the eos_token_id issue for gemma3, it could be a list, but not supported in huggingface
@@ -153,24 +220,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
         self.has_sliding_layers = "sliding_attention" in self.llm_config.layer_types
-
-    def _init_visual_backbone(self):
-        backbone_cls = VISUAL_BACKBONES.get(self.config.visual_backbone_type)
-        if backbone_cls is None:
-            raise ValueError(
-                f"Unsupported visual backbone type: {self.config.visual_backbone_type}"
-            )
-        self.visual_backbone = backbone_cls(
-            **self.config.visual_backbone_kwargs, is_meta=is_meta_model(self)
-        )
-
-    def _init_visual_adapter(self):
-        adapter_cls = VISUAL_ADAPTERS.get(self.config.visual_adapter_type)
-        if adapter_cls is None:
-            raise ValueError(
-                f"Unsupported visual adapter type: {self.config.visual_adapter_type}"
-            )
-        self.visual_adapter = adapter_cls(**self.config.visual_adapter_kwargs)
 
     def get_input_embeddings(self):
         return self.llm.get_input_embeddings()
@@ -483,15 +532,3 @@ class SltModel(PreTrainedModel, GenerationMixin):
             model_inputs["pixel_values_length"] = pixel_values_length
 
         return model_inputs
-
-    @classmethod
-    def from_pretrained(
-        cls,
-        *args,
-        **kwargs,
-    ):
-        model = super().from_pretrained(*args, **kwargs)
-        logger.warn(
-            "NOTE: the `lm_head.weight` will be tied properly, ignore the warning above"
-        )
-        return model

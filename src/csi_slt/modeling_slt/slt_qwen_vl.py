@@ -25,7 +25,6 @@ from einops import rearrange
 
 from ..configuration_slt.configuration import SltConfig
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
-from .llm_loader import load_llm
 
 from .output_utils import (
     VisualBackboneOutput,
