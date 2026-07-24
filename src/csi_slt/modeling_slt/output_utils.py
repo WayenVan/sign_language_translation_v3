@@ -16,6 +16,7 @@ class VisualBackboneOutput(ModelOutput):
     visual_length: Optional[torch.Tensor] = (
         None  # [batch_size] length of visual feautres for each sample in the batch
     )
+    extras: Optional[dict] = None  # any extra information
 
 
 @dataclass
@@ -25,6 +26,7 @@ class VisualAdapterOutput(ModelOutput):
     visual_length: Optional[torch.Tensor] = (
         None  # [batch_size] length of visual feautres for each sample in the batch
     )
+    extras: Optional[dict] = None  # any extra information
 
 
 class PrepareForCausalLMOutput(NamedTuple):

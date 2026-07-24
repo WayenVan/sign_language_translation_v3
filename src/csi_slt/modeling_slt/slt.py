@@ -77,6 +77,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
     MAX_TOKEN_LENGTH = 512
     # _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
+    _keep_in_fp32_modules = ["visual_adapter"]
 
     def __init__(
         self,
@@ -110,7 +111,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if self.llm is None:
             llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
             _llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
-            self.llm = llm_cls(_llm_config)
+            self.llm = llm_cls._from_config(_llm_config, attn_implementation="eager")
 
         # generate configuration
         self.llm_config = get_text_config(self.llm.config)
@@ -138,13 +139,17 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
 
+        for param in self.visual_backbone.parameters():
+            param.requires_grad = False
+        for param in self.llm.parameters():
+            param.requires_grad = False
+
         self._init_embedding_weights()
         self.post_init()
 
     @classmethod
     def from_pretrained_components(
-        cls,
-        config: SltConfig,
+        cls, config: SltConfig, llm_dtype="auto", visual_backbone_dtype="auto"
     ):
         visual_backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
         if visual_backbone_cls is None:
@@ -152,16 +157,18 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 f"Unsupported visual backbone type: {config.visual_backbone_type}. Supported types are: {list(VISUAL_BACKBONES.keys())}"
             )
         visual_backbone = visual_backbone_cls.from_pretrained_backbone(
-            config.visual_backbone_config
+            config.visual_backbone_config, dtype=visual_backbone_dtype
         )
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
         llm = llm_cls.from_pretrained(
-            config.llm_model_name_or_path, attn_implementation="eager"
+            config.llm_model_name_or_path, attn_implementation="eager", dtype=llm_dtype
         )
         llm.tie_weights(
             recompute_mapping=True
         )  # NOTE: important! for any case that the lm_head is not tied to the input embeddings, we need to tie them here
+
+        logger.info("force retie the lm_head to the input embeddings!!!!!!!!")
 
         return cls(config=config, llm=llm, visual_backbone=visual_backbone)
 

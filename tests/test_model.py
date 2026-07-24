@@ -18,12 +18,21 @@ import re
 
 
 def test_model_params():
-    model = SltModel.from_pretrained(
-        "outputs/first_demo/2025-09-24_01-05-28/best_checkpoint/best_eval_bleu4=0.0431"
-    )
+    with hydra.initialize(config_path="../configs"):
+        cfg = hydra.compose(
+            config_name="base_train",
+            overrides=[
+                "data=ph14t_*x224x224_qwen_multiling",
+                # "model=qwen3vl-2.5b-dino-base-tsamplerv2",
+            ],
+        )
+        slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
+        slt_model = SltModel.from_pretrained_components(
+            slt_config, llm_dtype="bfloat16", visual_backbone_dtype="bfloat16"
+        ).cuda()
 
-    for name, param in model.named_parameters():
-        print(name, param.requires_grad)
+    for name, param in slt_model.named_parameters():
+        print(name, param.requires_grad, param.dtype)
 
 
 def test_slt_model():
@@ -36,7 +45,9 @@ def test_slt_model():
             ],
         )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
-        slt_model = SltModel.from_pretrained_components(slt_config).cuda()
+        slt_model = SltModel.from_pretrained_components(
+            slt_config, llm_dtype="bfloat16", visual_backbone_dtype="bfloat16"
+        ).cuda()
         # slt_model = SltQwenVLModel(slt_config).cuda()
 
         # prepare datamodule

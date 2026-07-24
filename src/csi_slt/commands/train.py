@@ -34,11 +34,13 @@ def main(cfg: DictConfig):
 
         slt_model = SltQwenVLModel(slt_config)
     else:
-        slt_model = SltModel(slt_config)
+        slt_model = SltModel.from_pretrained_components(
+            slt_config, cfg.engine.llm_dtype, cfg.engine.visual_backbone_dtype
+        )
 
     # fix parameters
-    for param in slt_model.llm.parameters():
-        param.requires_grad = False
+    # for param in slt_model.llm.parameters():
+    #     param.requires_grad = False
 
     # for param in slt_model.visual_backbone.backbone.parameters():
     #     param.requires_grad = False
