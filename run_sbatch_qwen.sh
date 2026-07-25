@@ -4,20 +4,20 @@
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-h100
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256g
 
 export PYTHONPATH=./src:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0,1,2
 
 export WANDB_PROJECT=sign_language_translation_v3.1
 
 source .venv/bin/activate
 
-accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=base_model \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-dinoframe-test \
+accelerate launch --num_processes=3 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
+  model=qwen3-8b-dino-b-dinoframe \
+  engine.training_args.output_dir=outputs/qwen3-8b-dino-b-dinoframe \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=2 \
   engine.training_args.dataloader_num_workers=12 \
