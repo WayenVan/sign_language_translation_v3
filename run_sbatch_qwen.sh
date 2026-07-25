@@ -10,55 +10,82 @@
 
 set -euo pipefail
 
-export CUDA_VISIBLE_DEVICES=0,1
-export PYTHONPATH=./src
+source .venv/bin/activate
 
-set -euo pipefail
+# 共享存储中的 tar 文件
+SOURCE_ARCHIVE="dataset/phoenix-2014-T.v3.tar.gz"
 
-SOURCE_ARCHIVE="/shared/scratch/$USER/datasets/ph14t.tar.gz"
-
+# Local scratch
 LOCAL_SCRATCH="$HOME/localscratch"
-DATASET_NAME="ph14t"
 
-TARGET_DATASET="$LOCAL_SCRATCH/$DATASET_NAME"
-COMPLETE_MARKER="$TARGET_DATASET/.copy_complete"
+# 本地 tar 文件
 LOCAL_ARCHIVE="$LOCAL_SCRATCH/$(basename "$SOURCE_ARCHIVE")"
 
-if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
-  echo "错误：压缩包不存在：$SOURCE_ARCHIVE" >&2
-  exit 1
-fi
+# 最终数据集目录：解压和预处理都在这里进行
+DATASET_PATH="$LOCAL_SCRATCH/ph14t"
+
+# 解压完成标志
+EXTRACT_MARKER="$DATASET_PATH/.extract_complete"
+
+# 预处理完成标志
+COMPLETE_MARKER="$DATASET_PATH/.data_complete"
 
 mkdir -p "$LOCAL_SCRATCH"
 
 if [[ -f "$COMPLETE_MARKER" ]]; then
-  echo "数据集已经准备完成，跳过：$TARGET_DATASET"
+  echo "数据集已经完成预处理，跳过：$DATASET_PATH"
+
 else
-  echo "复制压缩包到 local scratch..."
+  if [[ -f "$EXTRACT_MARKER" ]]; then
+    echo "数据集已经完成解压，直接进行预处理：$DATASET_PATH"
+  else
+    # 本地已有 tar 就直接使用，否则从 shared scratch 复制
+    if [[ -f "$LOCAL_ARCHIVE" ]]; then
+      echo "发现本地 tar，跳过复制：$LOCAL_ARCHIVE"
+    else
+      if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
+        echo "错误：源 tar 不存在：$SOURCE_ARCHIVE" >&2
+        exit 1
+      fi
 
-  rsync -a --info=progress2 \
-    "$SOURCE_ARCHIVE" \
-    "$LOCAL_ARCHIVE"
+      echo "复制 tar 到 local scratch..."
 
-  echo "解压数据集..."
+      rsync -ah --info=progress2 \
+        "$SOURCE_ARCHIVE" \
+        "$LOCAL_ARCHIVE"
+    fi
 
-  rm -rf "$TARGET_DATASET"
-  mkdir -p "$TARGET_DATASET"
+    echo "解压数据集到：$DATASET_PATH"
 
-  tar -xzf "$LOCAL_ARCHIVE" \
-    -C "$TARGET_DATASET" \
-    --strip-components=1
+    rm -rf "$DATASET_PATH"
+    mkdir -p "$DATASET_PATH"
 
+    tar -xf "$LOCAL_ARCHIVE" \
+      -C "$DATASET_PATH" \
+      --strip-components=1
+
+    # 只有解压成功后才创建标志
+    touch "$EXTRACT_MARKER"
+  fi
+
+  # 在解压后的目录上进行预处理
+  echo "开始预处理..."
+
+  # 之前的预处理结果可能不完整，先删除
+  rm -rf "$DATASET_PATH/ph14t-preprocessed"
+
+  python preprocess/dataset_preprocess-T.py \
+    --save_dir "$DATASET_PATH/ph14t-preprocessed" \
+    --dataset-root "$DATASET_PATH/PHOENIX-2014-T" \
+    -p \
+    -m \
+    -w "$(nproc)"
+
+  # 只有预处理成功后才创建标志
   touch "$COMPLETE_MARKER"
-  rm -f "$LOCAL_ARCHIVE"
 
-  echo "数据集准备完成：$TARGET_DATASET"
+  echo "数据集准备完成：$DATASET_PATH"
 fi
-
-# 后续训练可使用这个变量
-export DATASET_PATH="$TARGET_DATASET"
-
-source .venv/bin/activate
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=qwen3-8b-dino-b-dinoframe \

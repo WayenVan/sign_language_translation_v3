@@ -100,12 +100,7 @@ if __name__ == "__main__":
         default="dataset/phoenix2014-T-preprocessed",
         help="save path",
     )
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="phoenix2014-T-preprocessed",
-        help="save prefix",
-    )
+    
     parser.add_argument(
         "--dataset-root",
         type=str,
@@ -144,6 +139,7 @@ if __name__ == "__main__":
     sign_dict = dict()
     if not os.path.exists(f"{args.save_dir}"):
         os.makedirs(f"{args.save_dir}")
+    save_prefix = os.path.basename(args.save_dir)
     for md in mode:
         # generate information dict
         information = csv2dict(
@@ -154,7 +150,7 @@ if __name__ == "__main__":
         sign_dict_update(sign_dict, information)
         # generate groudtruth stm for evaluation
         generate_gt_stm(
-            information, f"{args.save_dir}/{args.dataset}-groundtruth-{md}.stm"
+            information, f"{args.save_dir}/{save_prefix}-groundtruth-{md}.stm"
         )
         # resize images
         video_index = np.arange(len(information) - 1)
