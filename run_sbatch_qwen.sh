@@ -13,42 +13,46 @@ set -euo pipefail
 export CUDA_VISIBLE_DEVICES=0,1
 export PYTHONPATH=./src
 
-# 修改为共享存储中的数据集路径
-SOURCE_DATASET="/users/$USER/sharedscratch/dataset/PHOENIX-2014-T-release-v3"
+set -euo pipefail
 
-export WANDB_PROJECT=sign_language_translation_v3.1
+SOURCE_ARCHIVE="/shared/scratch/$USER/datasets/ph14t.tar.gz"
 
-# Local scratch 位置
 LOCAL_SCRATCH="$HOME/localscratch"
+DATASET_NAME="ph14t"
 
-# 默认使用源目录名作为目标目录名
-DATASET_NAME="$(basename "$SOURCE_DATASET")"
 TARGET_DATASET="$LOCAL_SCRATCH/$DATASET_NAME"
 COMPLETE_MARKER="$TARGET_DATASET/.copy_complete"
+LOCAL_ARCHIVE="$LOCAL_SCRATCH/$(basename "$SOURCE_ARCHIVE")"
 
-if [[ ! -d "$SOURCE_DATASET" ]]; then
-  echo "错误：源数据集不存在：$SOURCE_DATASET" >&2
+if [[ ! -f "$SOURCE_ARCHIVE" ]]; then
+  echo "错误：压缩包不存在：$SOURCE_ARCHIVE" >&2
   exit 1
 fi
 
 mkdir -p "$LOCAL_SCRATCH"
 
 if [[ -f "$COMPLETE_MARKER" ]]; then
-  echo "数据集已经拷贝完成，跳过：$TARGET_DATASET"
+  echo "数据集已经准备完成，跳过：$TARGET_DATASET"
 else
-  echo "开始拷贝数据集："
-  echo "  来源：$SOURCE_DATASET"
-  echo "  目标：$TARGET_DATASET"
+  echo "复制压缩包到 local scratch..."
 
+  rsync -a --info=progress2 \
+    "$SOURCE_ARCHIVE" \
+    "$LOCAL_ARCHIVE"
+
+  echo "解压数据集..."
+
+  rm -rf "$TARGET_DATASET"
   mkdir -p "$TARGET_DATASET"
 
-  # 推荐 rsync：中断后可以继续同步
-  rsync -a --info=progress2 \
-    "$SOURCE_DATASET/" \
-    "$TARGET_DATASET/"
+  tar -xzf "$LOCAL_ARCHIVE" \
+    -C "$TARGET_DATASET" \
+    --strip-components=1
 
   touch "$COMPLETE_MARKER"
-  echo "数据集拷贝完成：$TARGET_DATASET"
+  rm -f "$LOCAL_ARCHIVE"
+
+  echo "数据集准备完成：$TARGET_DATASET"
 fi
 
 # 后续训练可使用这个变量
