@@ -20,7 +20,7 @@ accelerate launch --num_processes=3 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.output_dir=outputs/qwen3-8b-dino-b-dinoframe \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=2 \
-  engine.training_args.dataloader_num_workers=12 \
+  engine.training_args.dataloader_num_workers=8 \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
