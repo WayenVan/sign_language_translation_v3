@@ -21,7 +21,7 @@ training_args:
   disable_tqdm: True
   auto_output_dir: False
   # auto_output_root: outputs/demos
-  output_dir: outputs/qwen3-1.7b-dino2-b-shuffle-2
+  output_dir: outputs/test
   lr_scheduler_type: cosine
   # dataloader_prefetch_factor: 2
   dataloader_persistent_workers: True

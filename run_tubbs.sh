@@ -1,8 +1,9 @@
+export CUDA_VISIBLE_DEVICES=0
 export WANDB_PROJECT=sign_language_translation_v3
 
 export PYTHONPATH=./src:$PYTHONPATH
 
-accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
+accelerate launch --num_processes=1 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=base_model \
   engine.training_args.output_dir=outputs/qwen3-1.7b-dino2-b-shuffle-2-v2 \
   engine.training_args.per_device_train_batch_size=2 \

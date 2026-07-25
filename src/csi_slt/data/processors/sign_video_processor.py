@@ -11,7 +11,6 @@ from albumentations import (
     HorizontalFlip,
     Normalize,
     RandomCrop,
-    Resize,
     ColorJitter,
 )
 
