@@ -1,0 +1,15 @@
+type: auto
+
+config:
+  hidden_size: 2048
+  video_soft_token_id: 151656
+  video_token_scale: 1.0
+  llm_model_name_or_path: Qwen/Qwen3-1.7B
+  visual_backbone_type: dinov2
+  visual_backbone_config:
+    id: facebook/dinov2-with-registers-base
+    output_layer: -2
+  visual_adapter_type: dinoframe_cross
+  visual_adapter_kwargs:
+    input_dim: 768
+    output_dim: 2048

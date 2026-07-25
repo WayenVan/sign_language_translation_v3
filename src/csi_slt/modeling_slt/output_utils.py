@@ -33,3 +33,5 @@ class PrepareForCausalLMOutput(NamedTuple):
     input_ids: torch.Tensor  # [B, L]
     inputs_embeds: torch.Tensor  # [B, L, D]
     visual_mask: torch.Tensor  # [B, L]
+    visual_features: torch.Tensor  # [Bn, L, D]
+    visual_length: torch.Tensor  # [B]

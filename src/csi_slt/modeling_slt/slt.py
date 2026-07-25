@@ -14,6 +14,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.auto import AutoConfig, AutoModel, AutoModelForCausalLM
 
+from csi_slt.modeling_slt.cross_modal_contrastive_loss import CrossModalContrastiveLoss
+
 from ..configuration_slt.configuration import SltConfig
 from .output_utils import (
     PrepareForCausalLMOutput,
@@ -21,6 +23,7 @@ from .output_utils import (
     VisualBackboneOutput,
 )
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
+from torch import Tensor
 
 logger = logging.get_logger(__name__)
 
@@ -173,13 +176,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     @property
     def dummy_inputs(self):
-        num_frames = 32 * int(
-            1.0 / self.config.video_token_scale
-        )
+        num_frames = 32 * int(1.0 / self.config.video_token_scale)
         video_token = self.config.video_soft_token_id
-        num_video_tokens = (
-            int(self.config.video_token_scale * num_frames) + 2
-        )
+        num_video_tokens = int(self.config.video_token_scale * num_frames) + 2
 
         # fmt: off
         input_ids= torch.tensor(
@@ -296,6 +295,26 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         return visual_adapter_output
 
+    def embed_labels(self, labels) -> tuple[Tensor, Tensor]:
+        """
+        Args:
+            labels: [B, T]，无效位置为 -100
+
+        Returns:
+            embeddings: [B, T, D]
+            mask:       [B, T]，有效位置为 1，无效位置为 0
+        """
+        mask = labels.ne(-100)
+
+        pad_token_id = self.config.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = 0
+
+        input_ids = labels.masked_fill(~mask, pad_token_id)
+        embeddings = self.llm.get_input_embeddings()(input_ids)
+
+        return embeddings, mask.long()
+
     def prepare_for_casual_lm(
         self,
         text_input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <start_of_image>, ...]
@@ -334,9 +353,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             end_video_pos = video_positions[-1]
             extended_visual_feat = torch.cat(
                 [
-                    torch.zeros(
-                        start_video_pos, hidden_size, device=self.device
-                    ),
+                    torch.zeros(start_video_pos, hidden_size, device=self.device),
                     self.start_video_embds,
                     visual_feats_by_video[batch_index],
                     self.end_video_embeds,
@@ -349,9 +366,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
             extended_visual_feats.append(extended_visual_feat)
 
+        extended_visual_feats = torch.stack(
+            extended_visual_feats, dim=0
+        ).contiguous()  # [B, L, D]
         inputs_embeds = torch.where(
             visual_token_mask.bool().unsqueeze(-1),  # [B, L, 1]
-            torch.stack(extended_visual_feats, dim=0).contiguous(),  # [B, L, D]
+            extended_visual_feats,  # [B, L, D]
             self.llm.get_input_embeddings()(text_input_ids).contiguous(),  # [B, L, D]
         )
 
@@ -359,6 +379,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             input_ids=text_input_ids,  # [B, L]
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
+            visual_features=visual_feats,  # [BT, D]
+            visual_length=visual_lengths,  # [B]
         )
 
     def forward(
@@ -490,10 +512,18 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # Shift so that tokens before position n predict token n.
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(
+            main_loss_fct = nn.CrossEntropyLoss()
+            main_loss = main_loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
+            contrastive_loss_fct = CrossModalContrastiveLoss()
+
+            contrastive_loss = contrastive_loss_fct(
+                visual_feats=prepare_output.visual_features,
+                visual_length=prepare_output.visual_length,
+                text_feats=self.embed_labels(labels),
+            )
+            loss = main_loss + self.config.contrastive_loss_weight * contrastive_loss
 
         return CausalLMOutputWithPast(
             loss=loss,

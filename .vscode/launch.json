@@ -109,7 +109,7 @@
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.evaluate",
-        "model.checkpoint_dir=outputs/qwen3-1.7b-dino-base-tsamplerv2-shuffle-2/checkpoint-164000",
+        "model.checkpoint_dir=outputs/qwen3-8b-dino-b-dinoframe/checkpoint-164000",
         "engine.training_args.dataloader_num_workers=4"
       ]
     }

@@ -11,6 +11,9 @@ from .visual_adapters.token_sampler_adapter_v2 import (
     TokenSampleAdapterV2,
 )
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter import DINOFrameAdapter
+from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross import (
+    DINOFrameAdapterCross,
+)
 
 VISUAL_BACKBONES: Dict[str, nn.Module] = {
     "dinov2": DinoV2Backbone,
@@ -22,4 +25,5 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "temporal_merge": TemporalMergeAdapter,
     "token_sampler_v2": TokenSampleAdapterV2,
     "dinoframe": DINOFrameAdapter,
+    "dinoframe_cross": DINOFrameAdapterCross,
 }
