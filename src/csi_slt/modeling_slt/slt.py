@@ -1,34 +1,32 @@
-from transformers.modeling_utils import PreTrainedModel
-from transformers.models.auto import AutoModel, AutoConfig, AutoModelForCausalLM
-from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.generation.utils import GenerationMixin
+from typing import Callable, Optional
+
 import torch
 from torch import nn
-from typing import Optional
-from transformers.cache_utils import DynamicCache, Cache
-from transformers.generation.configuration_utils import GenerationConfig
-
 from transformers import logging
+from transformers.cache_utils import Cache, DynamicCache
+from transformers.generation.configuration_utils import GenerationConfig
+from transformers.generation.utils import GenerationMixin
 from transformers.masking_utils import (
     create_causal_mask,
     create_sliding_window_causal_mask,
 )
-from typing import Callable
-
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.modeling_utils import PreTrainedModel
+from transformers.models.auto import AutoConfig, AutoModel, AutoModelForCausalLM
 
 from ..configuration_slt.configuration import SltConfig
-from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
-
 from .output_utils import (
-    VisualBackboneOutput,
-    VisualAdapterOutput,
     PrepareForCausalLMOutput,
+    VisualAdapterOutput,
+    VisualBackboneOutput,
 )
+from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
 
 logger = logging.get_logger(__name__)
 
 
 def get_llm_cls_by_model_name(model_name):
+    """Return the supported causal language-model class for ``model_name``."""
     if "qwen" in model_name.lower():
         from transformers.models.qwen3 import Qwen3ForCausalLM
 
@@ -39,10 +37,11 @@ def get_llm_cls_by_model_name(model_name):
             Gemma3ForConditionalGeneration,
         )
 
-        if "1b" in model_name.lower():
-            model_cls = Gemma3ForCausalLM
-        else:
-            model_cls = Gemma3ForConditionalGeneration
+        model_cls = (
+            Gemma3ForCausalLM
+            if "1b" in model_name.lower()
+            else Gemma3ForConditionalGeneration
+        )
     else:
         raise ValueError(f"Unsupported LLM model: {model_name}")
     return model_cls
@@ -56,11 +55,7 @@ def get_text_config(config):
 def token_type_ids_mask_function(
     token_type_ids: Optional[torch.Tensor],
 ) -> Optional[Callable]:
-    """
-    This function adds the correct offsets to the `q_idx` and `kv_idx` as the torch API can only accept lengths,
-    not start and end indices.
-    """
-    # Do not return an additional mask in this case
+    """Create a mask that allows video tokens to attend to other video tokens."""
     if token_type_ids is None:
         return None
 
@@ -76,6 +71,7 @@ def token_type_ids_mask_function(
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
     MAX_TOKEN_LENGTH = 512
+
     # _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
     _keep_in_fp32_modules = ["visual_adapter"]
 
@@ -86,38 +82,42 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_backbone: Optional[nn.Module] = None,
     ):
         super().__init__(config)
-        # NOTE: always construct the structure of the model rather than loading the weights, because we need to support meta model
+        # Always construct the model structure here to support meta-device models.
         self.llm = llm
         self.visual_backbone = visual_backbone
 
-        # init visual backbone if needed
+        # Initialize the visual backbone when it was not supplied by the caller.
         if self.visual_backbone is None:
             backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
             if backbone_cls is None:
                 raise ValueError(
-                    f"Unsupported visual backbone type: {config.visual_backbone_type}. Supported types are: {list(VISUAL_BACKBONES.keys())}"
+                    f"Unsupported visual backbone type: "
+                    f"{config.visual_backbone_type}. Supported types are: "
+                    f"{list(VISUAL_BACKBONES.keys())}"
                 )
             self.visual_backbone = backbone_cls(config.visual_backbone_config)
 
-        # init visual adapter
+        # The visual adapter is always constructed from the SLT configuration.
         adapter_cls = VISUAL_ADAPTERS.get(config.visual_adapter_type, None)
         if adapter_cls is None:
             raise ValueError(
-                f"Unsupported visual adapter type: {config.visual_adapter_type}. Supported types are: {list(VISUAL_ADAPTERS.keys())}"
+                f"Unsupported visual adapter type: "
+                f"{config.visual_adapter_type}. Supported types are: "
+                f"{list(VISUAL_ADAPTERS.keys())}"
             )
         self.visual_adapter = adapter_cls(**config.visual_adapter_kwargs)
 
-        # init llm if needed
+        # Initialize the language model when it was not supplied by the caller.
         if self.llm is None:
             llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
-            _llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
-            self.llm = llm_cls._from_config(_llm_config)
+            llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
+            self.llm = llm_cls._from_config(llm_config)
 
-        # generate configuration
+        # Configure generation from the language model's text configuration.
         self.llm_config = get_text_config(self.llm.config)
         self._configure_generation()
 
-        # spatial token initialization
+        # Keep the existing attribute names for checkpoint compatibility.
         self.start_video_embds = nn.Parameter(
             torch.randn(
                 1, self.config.hidden_size, dtype=torch.float32, device=self.device
@@ -134,8 +134,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
 
-        self.config.num_extra_tokens = 2  # start and end of vlideo
-
+        self.config.num_extra_tokens = 2  # Start and end video tokens.
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
 
@@ -154,7 +153,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
         if visual_backbone_cls is None:
             raise ValueError(
-                f"Unsupported visual backbone type: {config.visual_backbone_type}. Supported types are: {list(VISUAL_BACKBONES.keys())}"
+                f"Unsupported visual backbone type: "
+                f"{config.visual_backbone_type}. Supported types are: "
+                f"{list(VISUAL_BACKBONES.keys())}"
             )
         visual_backbone = visual_backbone_cls.from_pretrained_backbone(
             config.visual_backbone_config, dtype=visual_backbone_dtype
@@ -162,9 +163,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
         llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
-        llm.tie_weights(
-            recompute_mapping=True
-        )  # NOTE: important! for any case that the lm_head is not tied to the input embeddings, we need to tie them here
+        # Ensure lm_head and input embeddings are tied even when the source model
+        # did not tie them.
+        llm.tie_weights(recompute_mapping=True)
 
         logger.info("force retie the lm_head to the input embeddings!!!!!!!!")
 
@@ -172,17 +173,17 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     @property
     def dummy_inputs(self):
-        N_FRAMES = 32 * int(
+        num_frames = 32 * int(
             1.0 / self.config.video_token_scale
-        )  # NOTE: make sure the number of video tokens is a integer
-        V_TOKEN = self.config.video_soft_token_id
-        V_TOKEN_NUM = (
-            int(self.config.video_token_scale * N_FRAMES) + 2
-        )  # NOTE: 2 extra tokens for start and end of video
+        )
+        video_token = self.config.video_soft_token_id
+        num_video_tokens = (
+            int(self.config.video_token_scale * num_frames) + 2
+        )
 
         # fmt: off
         input_ids= torch.tensor(
-            [[ 0, 0, 0, 1, 2, 3,] + [V_TOKEN] * V_TOKEN_NUM + [ 4, 5, 9, 7, ]],
+            [[ 0, 0, 0, 1, 2, 3,] + [video_token] * num_video_tokens + [ 4, 5, 9, 7, ]],
             dtype=torch.long,
             device=self.device,
         )
@@ -190,10 +191,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return {
             "input_ids": input_ids,
             "pixel_values": torch.ones(
-                (N_FRAMES, 3, 224, 224), dtype=torch.float32, device=self.device
+                (num_frames, 3, 224, 224), dtype=torch.float32, device=self.device
             ),
             "pixel_values_length": torch.tensor(
-                [N_FRAMES], dtype=torch.long, device=self.device
+                [num_frames], dtype=torch.long, device=self.device
             ),
             "attention_mask": torch.ones(1, seq_len , dtype=torch.long, device=self.device),
             "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device),
@@ -204,7 +205,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
     def _configure_generation(self):
         self.config.bos_token_id = self.llm_config.bos_token_id
 
-        # NOTE: fix the eos_token_id issue for gemma3, it could be a list, but not supported in huggingface
+        # Gemma 3 may expose a list here, which this wrapper does not support.
         if isinstance(self.llm_config.eos_token_id, list):
             self.config.eos_token_id = self.llm_config.eos_token_id[0]
         else:
@@ -223,7 +224,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         generation_config.top_p = None
         generation_config.temperature = None
 
-        self.generation_config = generation_config  # NOTE: we copy genertion config from llm's original config
+        # Preserve the language model's original generation configuration object.
+        self.generation_config = generation_config
         self.has_sliding_layers = "sliding_attention" in self.llm_config.layer_types
 
     def get_input_embeddings(self):
@@ -257,15 +259,18 @@ class SltModel(PreTrainedModel, GenerationMixin):
     def visual_position_embedding_forward(
         self, video_feats: torch.Tensor, video_length: torch.Tensor
     ):
+        """Add per-video positional embeddings to flattened visual features.
+
+        Args:
+            video_feats: Concatenated video features with shape ``[BT, D]``.
+            video_length: Per-video lengths with shape ``[B]``.
         """
-        Forward pass through the visual position embedding.
-        args:
-            video_feats: Tensor, shape [BT, D], video features
-            video_length: Tensor, shape [B], length of each video in the batch
-        """
-        B = video_length.shape[0]
+        batch_size = video_length.shape[0]
         position_ids = torch.cat(
-            [torch.arange(video_length[b], device=video_feats.device) for b in range(B)]
+            [
+                torch.arange(video_length[index], device=video_feats.device)
+                for index in range(batch_size)
+            ]
         )
         position_embeddings = self.visual_position_embedding(position_ids)
         return video_feats + position_embeddings  # [BT, D]
@@ -273,15 +278,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
     def get_visual_feats(
         self, video: torch.Tensor, video_length: torch.Tensor
     ) -> VisualAdapterOutput:
-        """
-        Forward pass through the visual encoder.
-        args:
-            video: Tensor, shape [BT, C, H, W], concated video frames across batch
-            video_length: Tensor, shape [B], length of each video in the batch
-        """
+        """Encode video frames and adapt them to the language-model space.
 
-        _, C, H, W = video.shape
-        B = video_length.shape[0]
+        Args:
+            video: Concatenated video frames with shape ``[BT, C, H, W]``.
+            video_length: Per-video frame counts with shape ``[B]``.
+        """
+        _, _, _, _ = video.shape
+        _ = video_length.shape[0]
 
         visual_backbone_output: VisualBackboneOutput = self.visual_backbone(
             video, video_length
@@ -298,7 +302,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         video: torch.Tensor,  # [BT, C, H, W]
         video_length: torch.Tensor,  # [B], length of each video in the batch
     ):
-        B = video_length.shape[0]
+        batch_size = video_length.shape[0]
 
         visual_output = self.get_visual_feats(video, video_length)
 
@@ -306,59 +310,55 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_output.visual_features, visual_output.visual_length
         )  # [BT, D]
 
-        _, D = visual_feats.shape
+        _, hidden_size = visual_feats.shape
+        visual_lengths = visual_output.visual_length
 
-        t_length = (
-            visual_output.visual_length
-        )  # [B], number of video tokens in visual feats
-
-        if t_length is None:
+        if visual_lengths is None:
             raise ValueError("video_length is required for prepare_for_casual_lm")
 
-        visual_feats = torch.split(
-            visual_feats, t_length.tolist(), dim=0
-        )  # list of [T, D]
+        visual_feats_by_video = torch.split(
+            visual_feats, visual_lengths.tolist(), dim=0
+        )
 
-        visual_mask_text = text_input_ids.eq(
-            self.config.video_soft_token_id
-        ).long()  # [B, L]
-        t_length_text = visual_mask_text.sum(
-            dim=1
-        )  # [B], number of video tokens in text
+        visual_token_mask = text_input_ids.eq(self.config.video_soft_token_id).long()
+        text_visual_lengths = visual_token_mask.sum(dim=1)
 
-        assert (t_length_text == t_length + 2).all(), (
+        assert (text_visual_lengths == visual_lengths + 2).all(), (
             "The length of text and video must be the same."
-        )  # NOTE: 2 extra tokens for video was added
+        )
 
-        extened_visual_feats = []
-        for b in range(B):
-            start_video_pos = visual_mask_text[b].nonzero(as_tuple=True)[0][0]
-            end_video_pos = visual_mask_text[b].nonzero(as_tuple=True)[0][-1]
-            _ex_visual_feat = torch.cat(
+        extended_visual_feats = []
+        for batch_index in range(batch_size):
+            video_positions = visual_token_mask[batch_index].nonzero(as_tuple=True)[0]
+            start_video_pos = video_positions[0]
+            end_video_pos = video_positions[-1]
+            extended_visual_feat = torch.cat(
                 [
-                    torch.zeros(start_video_pos, D, device=self.device),  # before
+                    torch.zeros(
+                        start_video_pos, hidden_size, device=self.device
+                    ),
                     self.start_video_embds,
-                    visual_feats[b],
+                    visual_feats_by_video[batch_index],
                     self.end_video_embeds,
                     torch.zeros(
                         text_input_ids.shape[1] - end_video_pos - 1,
-                        D,
+                        hidden_size,
                         device=self.device,
-                    ),  # after
+                    ),
                 ]
             )
-            extened_visual_feats.append(_ex_visual_feat)
+            extended_visual_feats.append(extended_visual_feat)
 
         inputs_embeds = torch.where(
-            visual_mask_text.bool().unsqueeze(-1),  # [B, L, 1]
-            torch.stack(extened_visual_feats, dim=0).contiguous(),  # [B, L, D]
+            visual_token_mask.bool().unsqueeze(-1),  # [B, L, 1]
+            torch.stack(extended_visual_feats, dim=0).contiguous(),  # [B, L, D]
             self.llm.get_input_embeddings()(text_input_ids).contiguous(),  # [B, L, D]
         )
 
         return PrepareForCausalLMOutput(
             input_ids=text_input_ids,  # [B, L]
             inputs_embeds=inputs_embeds,  # [B, L, D]
-            visual_mask=visual_mask_text,  # [B, L]
+            visual_mask=visual_token_mask,  # [B, L]
         )
 
     def forward(
@@ -376,7 +376,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.Tensor] = None,
         **llm_forward_kwargs: dict,
     ):
-        # if pixel_values is provided, pixel_values_length is not provcided, we assume there is only one video in the batch
+        # Without explicit lengths, pixel_values must represent one video.
         if pixel_values_length is None and pixel_values is not None:
             assert input_ids.shape[0] == 1, (
                 "When pixel_values_length is not provided, input_ids batch size must be 1."
@@ -384,7 +384,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             pixel_values_length = torch.tensor(
                 [pixel_values.shape[0]], dtype=torch.long, device=pixel_values.device
             )
-        # length must be a multiple of (1/video_token_scale)
+
+        # Each length must align with the configured temporal downsampling ratio.
         if pixel_values_length is not None:
             assert (
                 pixel_values_length % int(1.0 / self.config.video_token_scale) == 0
@@ -422,9 +423,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 device=inputs_embeds.device,
             )
 
-        # It may already have been prepared by e.g. `generate`
+        # Generation may have already converted the attention mask into a mapping.
         if not isinstance(causal_mask_mapping := attention_mask, dict):
-            # Prepare mask arguments
             mask_kwargs = {
                 "config": self.llm.config.get_text_config(),
                 "inputs_embeds": inputs_embeds,
@@ -442,9 +442,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 logger.warn(
                     "The LLM is configured to use bidirectional, which is not fully supported by our current implementation. The causal mask will be disabled, but the model may still not work as expected."
                 )
-            # NOTE: this `is_prefill` logic is not flawless, it fails when we're using a cache eagerly initialized
-            # (e.g. compiled prefill) AND `pixel_values` are not provided. Determining prefill in that case requires
-            # checking data values, which is not compile-compatible.
+
+            # This heuristic cannot identify an eagerly initialized cache
+            # (for example, compiled prefill) without inspecting data values,
+            # which would not be compile-compatible.
             is_prefill = (
                 not use_cache
                 or past_key_values is None
@@ -452,7 +453,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 or pixel_values is not None
             )
 
-            # apply bidirectional atteninon for video tokens if needed
+            # Allow bidirectional attention between video tokens during prefill.
             if token_type_ids is not None and is_prefill:
                 mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
                     token_type_ids.to(cache_position.device),
@@ -463,7 +464,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                             token_type_ids.to(cache_position.device),
                         )
                     )
-            # Create the masks
+
             causal_mask_mapping = {
                 "full_attention": create_causal_mask(**mask_kwargs),
             }
@@ -473,11 +474,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
                         **sliding_mask_kwargs,
                     )
                 )
-
-            # import matplotlib.pyplot as plt
-            #
-            # plt.imshow(causal_mask_mapping["full_attention"][0, 0].cpu().numpy())
-            # plt.savefig("outputs/causal_mask.png")
 
         outputs = self.llm(
             inputs_embeds=inputs_embeds,
@@ -491,10 +487,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            # shift so that tokens < n predict n
+            # Shift so that tokens before position n predict token n.
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
@@ -520,7 +515,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         labels=None,
         **kwargs,
     ):
-        # Overwritten -- custom `position_ids` and `pixel_values` handling
+        # Extend the standard generation inputs with video tensors during prefill.
         model_inputs = super().prepare_inputs_for_generation(
             input_ids,
             attention_mask=attention_mask,
@@ -530,8 +525,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             **kwargs,
         )
 
-        # If we're in cached decoding stage, pixel values should be None because input ids do not contain special image token anymore
-        # Otherwise we need pixel values to be passed to model. NOTE: use_cache=False needs pixel_values always
+        # Cached decoding no longer contains video placeholder tokens, so video
+        # tensors are only passed on the first generation step.
         if cache_position[0] == 0:
             model_inputs["pixel_values"] = pixel_values
             model_inputs["pixel_values_length"] = pixel_values_length
