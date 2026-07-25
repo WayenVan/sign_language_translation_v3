@@ -29,5 +29,5 @@ training_args:
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128
 
-llm_dtype: bfloat16
-visual_backbone_dtype: bfloat16
+llm_dtype: auto
+visual_backbone_dtype: auto

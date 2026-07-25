@@ -111,7 +111,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if self.llm is None:
             llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
             _llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
-            self.llm = llm_cls._from_config(_llm_config, attn_implementation="eager")
+            self.llm = llm_cls._from_config(_llm_config)
 
         # generate configuration
         self.llm_config = get_text_config(self.llm.config)
@@ -161,9 +161,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
-        llm = llm_cls.from_pretrained(
-            config.llm_model_name_or_path, attn_implementation="eager", dtype=llm_dtype
-        )
+        llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
         llm.tie_weights(
             recompute_mapping=True
         )  # NOTE: important! for any case that the lm_head is not tied to the input embeddings, we need to tie them here
