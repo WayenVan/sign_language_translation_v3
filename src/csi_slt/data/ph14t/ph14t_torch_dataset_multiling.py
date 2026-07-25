@@ -58,6 +58,14 @@ class Ph14TMultiLinglDataset(Dataset):
             self.origin_df.drop("translation"), on="name", how="left"
         )
         self.assemble_df = assemble_df
+
+        # 只读取 frames 列的列表长度，不打开任何图片。
+        self.lengths = (
+            self.assemble_df.select(pl.col("frames").list.len().alias("length"))
+            .get_column("length")
+            .to_list()
+        )
+
         self.assemble_dataset = HFDataset(self.assemble_df.to_arrow())
 
     def __len__(self):

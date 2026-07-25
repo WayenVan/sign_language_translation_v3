@@ -26,6 +26,8 @@ training_args:
   # dataloader_prefetch_factor: 2
   dataloader_persistent_workers: True
   # generation_config: null
+  dataloader_drop_last: true # NOTE: 最后一个batch负载有可能不均衡
+  # group_by_length: false # 已经自定义了sampler， 这个参数没有用了
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128
 

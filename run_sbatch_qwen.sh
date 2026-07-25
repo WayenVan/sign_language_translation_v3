@@ -26,8 +26,8 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm=False \
   data=ph14t_*x224x224_qwen_multiling \
-  model.config.video_token_scale=1.0 \
-  data.train.processor.video_token_scale=1.0 \
+  model.config.video_token_scale=1.0 \in
+data.train.processor.video_token_scale=1.0 \
   data.val.processor.video_token_scale=1.0 \
   data.test.processor.video_token_scale=1.0 \
   data.train.processor.video_padding_to_multiple_of=4 \

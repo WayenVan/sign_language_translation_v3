@@ -36,6 +36,10 @@ from functools import partial
 
 from .metrics import SLTMetric
 from ..constants import LANGUAGE_MAP
+from csi_slt.data.sampler import (
+    GlobalLengthBucketSampler,
+    get_dataset_lengths,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -348,6 +352,34 @@ class SltTrainer(Seq2SeqTrainer):
                 self._eval_dataloaders = {dataloader_key: dataloader}
 
         return dataloader
+
+    def _get_train_sampler(self, train_dataset=None):
+        dataset = self.train_dataset if train_dataset is None else train_dataset
+
+        lengths = get_dataset_lengths(dataset)
+
+        seed = (
+            self.args.data_seed if self.args.data_seed is not None else self.args.seed
+        )
+
+        sampler = GlobalLengthBucketSampler(
+            lengths=lengths,
+            per_device_batch_size=self._train_batch_size,
+            num_processes=self.accelerator.num_processes,
+            seed=seed,
+            drop_last=self.args.dataloader_drop_last,
+            balance_batches=True,
+        )
+
+        logger.warning(
+            "⚠️ using global length bucketing: "
+            f"dataset_size={len(dataset)}, "
+            f"per_device_batch_size={self._train_batch_size}, "
+            f"num_processes={self.accelerator.num_processes}, "
+            f"global_batch_size={sampler.global_batch_size}"
+        )
+
+        return sampler
 
     def get_train_dataloader(self) -> DataLoader:
         """
