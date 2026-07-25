@@ -72,7 +72,7 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(
             SaveBestMetricCallback(metric_name="test_overall_sentence_bleu_4")
         )
-        self.add_callback(ModelInfoCallback())
+        # self.add_callback(ModelInfoCallback())
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())

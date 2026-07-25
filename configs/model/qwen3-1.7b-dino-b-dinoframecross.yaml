@@ -13,4 +13,4 @@ config:
   visual_adapter_kwargs:
     input_dim: 768
     output_dim: 2048
-    contrastive_loss_weight: 1.0
+  contrastive_loss_weight: 1.0

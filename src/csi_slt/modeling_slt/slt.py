@@ -516,11 +516,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
             main_loss = main_loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
-            contrastive_loss_fct = CrossModalContrastiveLoss()
 
             contrastive_loss = 0.0
-            text_features, text_mask = self.embed_labels(labels)
             if self.config.contrastive_loss_weight > 0.0:
+                text_features, text_mask = self.embed_labels(labels)
+                contrastive_loss_fct = CrossModalContrastiveLoss()
                 contrastive_loss = contrastive_loss_fct(
                     visual_features=prepare_output.visual_features,
                     visual_lengths=prepare_output.visual_length,
