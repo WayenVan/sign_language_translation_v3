@@ -41,7 +41,10 @@ def test_slt_model():
             config_name="base_train",
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
-                # "model=qwen3vl-2.5b-dino-base-tsamplerv2",
+                "model=qwen3-1.7b-dino-b-dinoframecross",
+                "data.train.processor.video_token_scale=1.0",
+                "data.val.processor.video_token_scale=1.0",
+                "data.test.processor.video_token_scale=1.0",
             ],
         )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
