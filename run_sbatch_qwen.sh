@@ -33,8 +33,8 @@ DATASET_PATH=$(prepare_dataset \
 echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-8b-dino-b-dinoframe \
-  engine.training_args.output_dir=outputs/qwen3-8b-dino-b-dinoframe \
+  model=qwen3-8b-dino-b-dinoframecross \
+  engine.training_args.output_dir=outputs/qwen3-8b-dino-b-dinoframe-cross-test \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=4 \
