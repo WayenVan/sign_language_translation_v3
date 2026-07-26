@@ -401,7 +401,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             input_ids=text_input_ids,  # [B, L]
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
-            visual_features=contrastive_visual_feats,  # [BT, D], no position embedding
+            visual_features=contrastive_visual_feats,  # [BT, D], with position embedding and RMSNorm, before visual_scale
             visual_length=visual_lengths,  # [B]
         )
 
@@ -546,6 +546,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             contrastive_loss = torch.zeros_like(main_loss)
             if self.config.contrastive_loss_weight > 0.0:
                 text_features, text_mask = self.embed_labels(labels)
+                # Keep the LLM token-embedding space as a fixed contrastive target.
+                text_features = text_features.detach()
                 contrastive_loss = self.contrastive_loss_fct(
                     visual_features=prepare_output.visual_features,
                     visual_lengths=prepare_output.visual_length,
