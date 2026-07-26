@@ -142,7 +142,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # different scale from the frozen LLM's token embeddings. Normalize the
         # completed visual token (projection + position) immediately before it
         # is merged into the LLM input sequence.
-        self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
+        # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
         # Keep one registered instance so its learnable temperature is included
         # in model parameters, checkpoints, and the optimizer.
         self.contrastive_loss_fct = CrossModalContrastiveLoss()
@@ -184,31 +184,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         return cls(config=config, llm=llm, visual_backbone=visual_backbone)
 
-    @property
-    def dummy_inputs(self):
-        num_frames = 32 * int(1.0 / self.config.video_token_scale)
-        video_token = self.config.video_soft_token_id
-        num_video_tokens = int(self.config.video_token_scale * num_frames) + 2
-
-        # fmt: off
-        input_ids= torch.tensor(
-            [[ 0, 0, 0, 1, 2, 3,] + [video_token] * num_video_tokens + [ 4, 5, 9, 7, ]],
-            dtype=torch.long,
-            device=self.device,
-        )
-        seq_len = input_ids.shape[1]
-        return {
-            "input_ids": input_ids,
-            "pixel_values": torch.ones(
-                (num_frames, 3, 224, 224), dtype=torch.float32, device=self.device
-            ),
-            "pixel_values_length": torch.tensor(
-                [num_frames], dtype=torch.long, device=self.device
-            ),
-            "attention_mask": torch.ones(1, seq_len , dtype=torch.long, device=self.device),
-            "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device),
-            "position_ids": torch.arange(seq_len, dtype=torch.long, device=self.device).unsqueeze(0),
-        }
         # fmt: on
 
     def _configure_generation(self):
@@ -236,24 +211,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # Preserve the language model's original generation configuration object.
         self.generation_config = generation_config
         self.has_sliding_layers = "sliding_attention" in self.llm_config.layer_types
-
-    def get_input_embeddings(self):
-        return self.llm.get_input_embeddings()
-
-    def set_input_embeddings(self, value):
-        self.llm.set_input_embeddings(value)
-
-    def get_output_embeddings(self):
-        return self.llm.get_output_embeddings()
-
-    def set_output_embeddings(self, new_embeddings):
-        self.llm.set_output_embeddings(new_embeddings)
-
-    def set_decoder(self, decoder):
-        self.llm = decoder
-
-    def get_decoder(self):
-        return self.llm
 
     @torch.no_grad()
     def _init_embedding_weights(self):
@@ -339,7 +296,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_feats = self.visual_position_embedding_forward(
             visual_feats, visual_output.visual_length
         )  # [BT, D]
-        visual_feats = self.visual_output_norm(visual_feats)
+        # visual_feats = self.visual_output_norm(visual_feats)
 
         # NOTE: before injuecting into the llm
         contrastive_visual_feats = visual_feats
@@ -596,3 +553,47 @@ class SltModel(PreTrainedModel, GenerationMixin):
             model_inputs["pixel_values_length"] = pixel_values_length
 
         return model_inputs
+
+    @property
+    def dummy_inputs(self):
+        num_frames = 32 * int(1.0 / self.config.video_token_scale)
+        video_token = self.config.video_soft_token_id
+        num_video_tokens = int(self.config.video_token_scale * num_frames) + 2
+
+        # fmt: off
+        input_ids= torch.tensor(
+            [[ 0, 0, 0, 1, 2, 3,] + [video_token] * num_video_tokens + [ 4, 5, 9, 7, ]],
+            dtype=torch.long,
+            device=self.device,
+        )
+        seq_len = input_ids.shape[1]
+        return {
+            "input_ids": input_ids,
+            "pixel_values": torch.ones(
+                (num_frames, 3, 224, 224), dtype=torch.float32, device=self.device
+            ),
+            "pixel_values_length": torch.tensor(
+                [num_frames], dtype=torch.long, device=self.device
+            ),
+            "attention_mask": torch.ones(1, seq_len , dtype=torch.long, device=self.device),
+            "labels": torch.ones( 1, seq_len, dtype=torch.long, device=self.device),
+            "position_ids": torch.arange(seq_len, dtype=torch.long, device=self.device).unsqueeze(0),
+        }
+
+    def get_input_embeddings(self):
+        return self.llm.get_input_embeddings()
+
+    def set_input_embeddings(self, value):
+        self.llm.set_input_embeddings(value)
+
+    def get_output_embeddings(self):
+        return self.llm.get_output_embeddings()
+
+    def set_output_embeddings(self, new_embeddings):
+        self.llm.set_output_embeddings(new_embeddings)
+
+    def set_decoder(self, decoder):
+        self.llm = decoder
+
+    def get_decoder(self):
+        return self.llm
