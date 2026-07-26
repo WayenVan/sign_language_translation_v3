@@ -136,6 +136,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
+        # 全局可学习标量，初始不改变特征
+        self.visual_scale = nn.Parameter(torch.tensor(1.0))
         # The adapter projection and learned visual positions can have a
         # different scale from the frozen LLM's token embeddings. Normalize the
         # completed visual token (projection + position) immediately before it
@@ -333,15 +335,17 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         visual_output = self.get_visual_feats(video, video_length)
 
-        # Keep content-only adapter features for the video/text contrastive
-        # objective. Temporal position is useful to the causal LLM, but its
-        # average would otherwise become a length/position-dependent component
-        # of the video-level contrastive representation.
-        contrastive_visual_feats = visual_output.visual_features
+        visual_feats = visual_output.visual_features
         visual_feats = self.visual_position_embedding_forward(
-            contrastive_visual_feats, visual_output.visual_length
+            visual_feats, visual_output.visual_length
         )  # [BT, D]
         visual_feats = self.visual_output_norm(visual_feats)
+
+        # NOTE: before injuecting into the llm
+        contrastive_visual_feats = visual_feats
+
+        # NOTE: scale hte feature
+        visual_feats = visual_feats * self.visual_scale
 
         _, hidden_size = visual_feats.shape
         visual_lengths = visual_output.visual_length
