@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import NamedTuple
 import torch
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
 from typing import Optional
 
@@ -35,3 +36,11 @@ class PrepareForCausalLMOutput(NamedTuple):
     visual_mask: torch.Tensor  # [B, L]
     visual_features: torch.Tensor  # [Bn, L, D]
     visual_length: torch.Tensor  # [B]
+
+
+@dataclass
+class SltCausalLMOutputWithPast(CausalLMOutputWithPast):
+    """Causal-LM outputs augmented with the individual training loss terms."""
+
+    main_loss: Optional[torch.Tensor] = None
+    contrastive_loss: Optional[torch.Tensor] = None

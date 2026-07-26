@@ -10,6 +10,10 @@
 
 export PYTHONPATH=./src:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0,1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export OPENCV_FOR_THREADS_NUM=1
 
 export WANDB_PROJECT=sign_language_translation_v3.1
 

@@ -72,7 +72,7 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(
             SaveBestMetricCallback(metric_name="test_overall_sentence_bleu_4")
         )
-        # self.add_callback(ModelInfoCallback())
+        self.add_callback(ModelInfoCallback())
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
@@ -91,6 +91,10 @@ class SltTrainer(Seq2SeqTrainer):
         )
 
         self.compute_metrics = SLTMetric(self.processing_class)
+        # Accumulate detached per-micro-batch values.  They are reduced in
+        # ``log`` so their cadence exactly matches Trainer's ``logging_steps``.
+        self._loss_component_totals: dict[str, torch.Tensor] = {}
+        self._loss_component_count = 0
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
@@ -99,6 +103,50 @@ class SltTrainer(Seq2SeqTrainer):
             )
         self.args.predict_with_generate = True
         self.hydra_config = hydra_config
+
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[Union[torch.Tensor, int]] = None,
+    ):
+        """Compute the optimization loss and retain individual loss terms for logging."""
+        loss, outputs = super().compute_loss(
+            model,
+            inputs,
+            return_outputs=True,
+            num_items_in_batch=num_items_in_batch,
+        )
+
+        for name in ("main_loss", "contrastive_loss"):
+            value = getattr(outputs, name, None)
+            if value is None and isinstance(outputs, dict):
+                value = outputs.get(name)
+            if isinstance(value, torch.Tensor):
+                value = value.detach()
+                self._loss_component_totals[name] = (
+                    self._loss_component_totals.get(name, torch.zeros_like(value))
+                    + value
+                )
+        self._loss_component_count += 1
+
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+        """Add distributed averages of loss components to normal Trainer logs."""
+        if "loss" in logs and self._loss_component_count:
+            count = torch.tensor(
+                self._loss_component_count, device=self.args.device, dtype=torch.float
+            )
+            global_count = self.accelerator.gather_for_metrics(count).sum().item()
+            for name, total in self._loss_component_totals.items():
+                global_total = self.accelerator.gather_for_metrics(total).sum().item()
+                logs[name] = global_total / global_count
+            self._loss_component_totals.clear()
+            self._loss_component_count = 0
+
+        super().log(logs, start_time=start_time)
 
     def prediction_step(
         self,

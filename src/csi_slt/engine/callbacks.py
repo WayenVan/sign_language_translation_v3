@@ -115,27 +115,10 @@ class ModelInfoCallback(TrainerCallback):
         trainer = kwargs.get("trainer", None)
         if trainer and trainer.accelerator.is_local_main_process:
             print("Eval model ")
-            model = kwargs.get("model", None)
-            if model is not None and hasattr(model, "dummy_inputs"):
-                with torch.no_grad():
-                    try:
-                        summary = torchinfo.summary(
-                            model,
-                            input_data=model.dummy_inputs,
-                            col_names=[
-                                "input_size",
-                                "output_size",
-                                "num_params",
-                                "trainable",
-                            ],
-                            verbose=0,
-                            depth=4,
-                        )
-                        print(summary)
-                    except Exception as e:
-                        print(f"无法生成模型摘要: {e}")
-            else:
-                print("模型不包含 dummy_inputs，无法生成摘要。")
+            for name, param in trainer.model.named_parameters():
+                print(
+                    f"{name}: {param.requires_grad}, dtype: {param.dtype}, shape: {param.shape}"
+                )
 
 
 class LogHydraConfigCallback(TrainerCallback):
