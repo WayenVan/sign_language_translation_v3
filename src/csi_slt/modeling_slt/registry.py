@@ -14,6 +14,9 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter import DINOFrameAdap
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross import (
     DINOFrameAdapterCross,
 )
+from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
+    DINOFrameAdapterCrossV2,
+)
 
 VISUAL_BACKBONES: Dict[str, nn.Module] = {
     "dinov2": DinoV2Backbone,
@@ -26,4 +29,5 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "token_sampler_v2": TokenSampleAdapterV2,
     "dinoframe": DINOFrameAdapter,
     "dinoframe_cross": DINOFrameAdapterCross,
+    "dinoframe_cross_v2": DINOFrameAdapterCrossV2,  # WARN: Two-token V2 adapter.
 }

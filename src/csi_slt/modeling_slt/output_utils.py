@@ -27,6 +27,9 @@ class VisualAdapterOutput(ModelOutput):
     visual_length: Optional[torch.Tensor] = (
         None  # [batch_size] length of visual feautres for each sample in the batch
     )
+    position_ids: Optional[torch.Tensor] = (  # Adapter-defined visual positions.
+        None  # Optional packed visual-token positions; defaults to 0..length-1 per sample.
+    )
     extras: Optional[dict] = None  # any extra information
 
 

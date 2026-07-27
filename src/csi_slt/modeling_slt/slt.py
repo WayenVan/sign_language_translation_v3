@@ -223,7 +223,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         torch.nn.init.trunc_normal_(self.visual_position_embedding.weight, std=0.02)
 
     def visual_position_embedding_forward(
-        self, video_feats: torch.Tensor, video_length: torch.Tensor
+        self,
+        video_feats: torch.Tensor,
+        video_length: torch.Tensor,
+        position_ids: Optional[torch.Tensor] = None,
     ):
         """Add per-video positional embeddings to flattened visual features.
 
@@ -231,13 +234,31 @@ class SltModel(PreTrainedModel, GenerationMixin):
             video_feats: Concatenated video features with shape ``[BT, D]``.
             video_length: Per-video lengths with shape ``[B]``.
         """
-        batch_size = video_length.shape[0]
-        position_ids = torch.cat(
-            [
-                torch.arange(video_length[index], device=video_feats.device)
-                for index in range(batch_size)
-            ]
-        )
+        # New adapters may provide repeated/custom temporal positions;
+        # legacy adapters keep the original 0..length-1 behavior.
+        if position_ids is None:
+            batch_size = video_length.shape[0]
+            position_ids = torch.cat(
+                [
+                    torch.arange(video_length[index], device=video_feats.device)
+                    for index in range(batch_size)
+                ]
+            )
+        else:
+            position_ids = position_ids.to(device=video_feats.device, dtype=torch.long)
+            if position_ids.ndim != 1 or position_ids.numel() != video_feats.shape[0]:
+                raise ValueError(
+                    "visual position_ids must be 1D and match the number of "
+                    f"visual tokens, got {tuple(position_ids.shape)} for "
+                    f"{video_feats.shape[0]} tokens"
+                )
+        if (
+            position_ids.numel()
+            and int(position_ids.max().item()) >= self.MAX_TOKEN_LENGTH
+        ):
+            raise ValueError(
+                f"visual position id must be smaller than {self.MAX_TOKEN_LENGTH}"
+            )
         position_embeddings = self.visual_position_embedding(position_ids)
         return video_feats + position_embeddings  # [BT, D]
 
@@ -294,7 +315,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         visual_feats = visual_output.visual_features
         visual_feats = self.visual_position_embedding_forward(
-            visual_feats, visual_output.visual_length
+            visual_feats,
+            visual_output.visual_length,
+            visual_output.position_ids,
         )  # [BT, D]
         # visual_feats = self.visual_output_norm(visual_feats)
 
@@ -387,7 +410,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
 
         # Each length must align with the configured temporal downsampling ratio.
-        if pixel_values_length is not None:
+        # WARN: Divisibility is only meaningful for temporal downsampling.
+        # V2 can emit multiple tokens per input frame (video_token_scale > 1).
+        if pixel_values_length is not None and self.config.video_token_scale <= 1.0:
             assert (
                 pixel_values_length % int(1.0 / self.config.video_token_scale) == 0
             ).all(), (
