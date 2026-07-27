@@ -4,6 +4,7 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset, ConcatDataset
 from typing import Literal
+import os
 
 
 class DataModule:
@@ -14,12 +15,33 @@ class DataModule:
     ):
         super().__init__()
         self.cfg = cfg
-
-        with open(cfg.chat_template_jinjia, "r", encoding="utf-8") as f:
-            chat_template = f.read()
-
         self.tokenizer = tokenizer
-        self.chat_template = chat_template
+
+    @property
+    def chat_template(self) -> str | None:
+        """Read chat template from the data-level config."""
+        if hasattr(self.cfg, "chat_template_jinjia"):
+            path = self.cfg.chat_template_jinjia
+            # convert relative path to absolute if needed
+            if not os.path.isabs(path):
+                path = os.path.join(os.getcwd(), path)
+            if os.path.exists(path):
+                with open(path, "r") as f:
+                    return f.read()
+            else:
+                raise FileNotFoundError(f"Chat template file not found: {path}")
+        return None
+
+    @property
+    def _prompt_paths(self) -> dict[str, str]:
+        """Resolve prompt_templates config paths into prompt_paths_per_language dict."""
+        paths: dict[str, str] = {}
+        if not hasattr(self.cfg, "prompt_templates"):
+            return paths
+        for lang, rel_path in self.cfg.prompt_templates.items():
+            abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(os.getcwd(), rel_path)
+            paths[lang] = abs_path
+        return paths
 
     @staticmethod
     def get_fraction_subset_dataset(
@@ -107,6 +129,7 @@ class DataModule:
             self.cfg.train.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
+            prompt_paths_per_language=self._prompt_paths,
         )
 
     @property
@@ -115,6 +138,7 @@ class DataModule:
             self.cfg.val.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
+            prompt_paths_per_language=self._prompt_paths,
         )
 
     @property
@@ -123,6 +147,7 @@ class DataModule:
             self.cfg.test.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
+            prompt_paths_per_language=self._prompt_paths,
         )
 
     @property
@@ -140,12 +165,13 @@ class DataModule:
     def test_collator(self):
         return instantiate(self.cfg.test.collator, processor=self.test_processor)
 
-    def print_batch(self, batch_size, num_workers=1):
+    def print_batch(self, batch_size, num_workers=1, random=False):
         dataloader = torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=batch_size,
             collate_fn=self.train_collator,
             num_workers=num_workers,
+            shuffle=random,
         )
         for batch in dataloader:
             input_text = self.tokenizer.batch_decode(

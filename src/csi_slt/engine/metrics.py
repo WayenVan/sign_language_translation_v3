@@ -164,6 +164,15 @@ class SLTMetric:
         """
 
         text = unicodedata.normalize("NFC", text)
+
+        # WARN: 删除所有 Unicode 标点字符会使 BLEU 和 ROUGE 忽略中文、英文、
+        # 德文等语言中的标点差异；这也会移除英文缩写或所有格中的撇号。
+        text = "".join(
+            character
+            for character in text
+            if not unicodedata.category(character).startswith("P")
+        )
+
         return " ".join(text.strip().split())
 
     @staticmethod
@@ -712,4 +721,3 @@ class SLTMetric:
         )
 
         return metrics
-

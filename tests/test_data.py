@@ -15,8 +15,8 @@ def test_datamodule():
         cfg = hydra.compose(
             config_name="base_train",
             overrides=[
-                "data=ph14t_*x224x224_gemma_multiling",
-                "model=gemma3-1b-dino-base",
+                "data=ph14t_*x224x224_qwen_multiling",
+                # "model=gemma3-1b-dino-base",
             ],
         )
 
@@ -33,7 +33,7 @@ def test_datamodule():
     collator = datamodule.train_collator
     collator.debug = True
 
-    datamodule.print_batch(batch_size=2, num_workers=4)
+    datamodule.print_batch(batch_size=16, num_workers=4, random=True)
 
     # loader = DataLoader(
     #     train_dataset,

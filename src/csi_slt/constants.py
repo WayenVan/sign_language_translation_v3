@@ -9,3 +9,11 @@ LANGUAGE_MAP = bidict(
         "zh": 3,
     }
 )
+
+LANGUAGE_NAME_MAP = bidict(
+    {
+        "en": "english",
+        "de": "Deutsch",
+        "zh": "中文",
+    }
+)

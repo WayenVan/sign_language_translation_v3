@@ -1,5 +1,9 @@
-chat_template_jinjia: jinjas/qwen_chat_template_slt.jinja
 data_root: dataset/PHOENIX-2014-T-release-v3
+
+prompt_templates:
+  zh: jinjas/zh_prompt.md.j2
+  de: jinjas/de_prompt.md.j2
+  en: jinjas/en_prompt.md.j2
 
 en_data_root: large_files/ph14t_english
 zh_data_root: large_files/ph14t_chinese

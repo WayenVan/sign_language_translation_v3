@@ -15,7 +15,10 @@ from typing import Union, Optional
 from transformers import AutoVideoProcessor
 from enum import Enum
 import torch
-from csi_slt.constants import LANGUAGE_MAP
+import json
+import os
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
+from csi_slt.constants import LANGUAGE_MAP, LANGUAGE_NAME_MAP
 
 
 class SignTranslationProcessor(ProcessorMixin):
@@ -29,6 +32,7 @@ class SignTranslationProcessor(ProcessorMixin):
         video_processor,
         tokenizer,
         chat_template=None,
+        prompt_paths_per_language: dict[str, str] = {},
         video_soft_token="<|video_pad|>",
         video_start_token="<|vision_start|>",
         video_padding_to_multiple_of=4,
@@ -52,22 +56,95 @@ class SignTranslationProcessor(ProcessorMixin):
 
         self.pad_token_id = tokenizer.pad_token_id
 
+        if chat_template is None:
+            chat_template = tokenizer.chat_template
+        else:
+            tokenizer.chat_template = chat_template
+
         super().__init__(
             video_processor=video_processor,
             tokenizer=tokenizer,
             chat_template=chat_template,
         )
-        if chat_template is not None:
-            self.tokenizer.chat_template = chat_template  # WARN: really needed?
 
         self.video_soft_token_id = self.tokenizer.convert_tokens_to_ids(
             self.video_soft_token
         )
 
+        # Load prompt templates from JSON files using Jinja2 Environment
+        self.prompt_templates: dict[str, Template] = {
+            lang: self._parse_prompt_file(path)
+            for lang, path in prompt_paths_per_language.items()
+        }
+
+        # Cache for rendered prompts (per language), avoiding redundant
+        # template.render() and apply_chat_template() calls within a batch.
+        self._prompt_cache: dict[str, str] = {}
+
+    @staticmethod
+    def _parse_prompt_file(path: str) -> Template:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Prompt file not found: {path}")
+        with open(path, "r") as f:
+            content = f.read()
+
+        env = Environment(undefined=StrictUndefined)
+
+        # Support both plain text and JSON-encapsulated prompt templates.
+        # If the file is valid JSON containing a string, use that string as the template.
+        # Otherwise, treat the raw file content as the Jinja2 template.
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, str):
+                return env.from_string(parsed)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        return env.from_string(content)
+
     def inject_images(self, prompt: str, n: int) -> str:
         sentinel = self.video_start_token
         replacement = self.video_soft_token * n
         return prompt.replace(sentinel, replacement)
+
+    def _get_rendered_prompt_for_lang(self, lang: str) -> str:
+        """Return the fully-formed (but not yet tokenized) prompt string for a given language,
+        with chat template applied and image placeholders injected.  The result is cached per
+        language because it does not depend on the actual video length."""
+        cache = self._prompt_cache  # type: ignore[has-type]
+        if lang in cache:
+            return cache[lang]
+
+        template = self.prompt_templates.get(lang)
+        if template is None:
+            raise ValueError(f"No prompt template found for language: {lang}")
+        language_name = LANGUAGE_NAME_MAP.get(lang)
+        if language_name is None:
+            raise ValueError(f"Language '{lang}' not found in LANGUAGE_MAP.")
+
+        rendered = template.render(
+            video_start_token=self.video_start_token,
+            language=language_name,
+        )
+        message = [
+            {
+                "role": "user",
+                "content": rendered,
+            }
+        ]
+
+        prompt = self.apply_chat_template(
+            message,
+            add_generation_prompt=True,
+            enable_thinking=False,
+            tokenize=False,
+        )
+
+        if self.add_bos_token:
+            prompt = self.tokenizer.bos_token + prompt
+
+        cache[lang] = prompt
+        return prompt
 
     def __call__(
         self,
@@ -98,28 +175,16 @@ class SignTranslationProcessor(ProcessorMixin):
 
         # NOTE: convert text to prompts and labels ids
 
-        prompts = []
-        labels = []
-        input_texts = []
-        language_ids = []
+        prompts: list[str] = []
+        labels: list[str] = []
+        input_texts: list[str] = []
+        language_ids: list[int] = []
         for i, t in enumerate(text):
-            if src_lang[i] == "en":
-                message = [{"role": "user", "language": "English"}]
-            elif src_lang[i] == "de":
-                message = [{"role": "user", "language": "German"}]
-            elif src_lang[i] == "zh":
-                message = [{"role": "user", "language": "Chinese"}]
-            else:
-                raise ValueError(f"Unsupported language: {src_lang[i]}")
+            lang = src_lang[i]  # each sample has exactly one language
 
-            prompt = self.apply_chat_template(
-                message,
-                add_generation_prompt=True,
-                enable_thinking=False,
-                tokenize=False,
-            )
+            prompt = self._get_rendered_prompt_for_lang(lang)
 
-            # inject images if needed
+            # inject image soft tokens according to video length
             if self.video_start_token in prompt:
                 prompt = self.inject_images(
                     prompt,
@@ -128,15 +193,12 @@ class SignTranslationProcessor(ProcessorMixin):
                 )
 
             label = t
-
-            if self.add_bos_token:
-                prompt = self.tokenizer.bos_token + prompt
             if self.add_eos_token:
                 label = label + self.tokenizer.eos_token
 
             prompts.append(prompt)
             labels.append(label)
-            language_ids.append(LANGUAGE_MAP[src_lang[i]])
+            language_ids.append(LANGUAGE_MAP[lang])
 
             input_text = prompt + label if self.mode == "train" else prompt
             input_texts.append(input_text)
