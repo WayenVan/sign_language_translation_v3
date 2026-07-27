@@ -4,6 +4,7 @@ wandb/
 dataset
 *.mp4
 download-ripgrepBnnefY/
+*.svg
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
