@@ -1,3 +1,4 @@
+import safetensors
 import hydra
 import sys
 import torch
@@ -12,6 +13,7 @@ from csi_slt.data.datamodule import DataModule
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 
+from safetensors.torch import load_file
 
 import torchinfo
 import re
@@ -120,7 +122,19 @@ def test_model_save():
 
 
 def test_model_load():
-    slt_model = SltModel.from_pretrained("outputs/test_save").cuda()
+    path = "outputs/qwen3-1.7b-dinoframe-cross-test2/checkpoint-28000"
+    slt_model, loading_info = SltModel.from_pretrained(path, output_loading_info=True)
+
+    slt_model = slt_model.cuda()
+
+    print("Missing:", loading_info["missing_keys"])
+    print("Unexpected:", loading_info["unexpected_keys"])
+    print("Mismatched:", loading_info.get("mismatched_keys", []))
+    print("Errors:", loading_info.get("error_msgs", []))
+
+    for name, param in slt_model.named_parameters():
+        print(name, param.requires_grad, param.dtype)
+
     model = slt_model
     embed = model.get_input_embeddings().weight
     head = model.get_output_embeddings().weight
@@ -256,11 +270,11 @@ def test_peft_model():
 
 if __name__ == "__main__":
     # test_model_params()
-    test_slt_model()
+    # test_slt_model()
     # test_model_save()
     # test_verify_gemma3()
     # test_dummy_inputs()
     # test_peft_model()
     # test_dummy_inputs_vl()
     # test_model_save()
-    # test_model_load()
+    test_model_load()

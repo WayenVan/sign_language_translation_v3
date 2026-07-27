@@ -20,10 +20,16 @@ def test_processor_save_load():
 
 def test_slt_processor_save_load():
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
+    prompt_paths_per_language = {
+        "en": "jinjas/en_prompt.md.j2",
+        "de": "jinjas/de_prompt.md.j2",
+        "zh": "jinjas/zh_prompt.md.j2",
+    }
     video_processor = SignVideoProcessor()
     processor = SignTranslationProcessor(
         video_processor=video_processor,
         tokenizer=tokenizer,
+        prompt_paths_per_language=prompt_paths_per_language,
     )
     processor.save_pretrained("outputs/slt_processor_test")
     processor = AutoProcessor.from_pretrained(
@@ -33,14 +39,17 @@ def test_slt_processor_save_load():
 
 
 def test_slt_processor():
-    with open("jinjas/gemma_slt.jinja", "r", encoding="utf-8") as f:
-        chat_template = f.read()
+    prompt_paths_per_language = {
+        "en": "jinjas/en_prompt.md.j2",
+        "de": "jinjas/de_prompt.md.j2",
+        "zh": "jinjas/zh_prompt.md.j2",
+    }
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
     video_processor = SignVideoProcessor(224, 224, downsample_rate=1)
     processor = SignTranslationProcessor(
         video_processor=video_processor,
         tokenizer=tokenizer,
-        chat_template=chat_template,
+        prompt_paths_per_language=prompt_paths_per_language,
         mode="train",
     )
     dataset = Ph14TGeneralDataset(

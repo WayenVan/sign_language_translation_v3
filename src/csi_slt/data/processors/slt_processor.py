@@ -10,14 +10,14 @@ from transformers.utils import TensorType, filter_out_non_signature_kwargs
 import numpy as np
 from transformers.tokenization_utils_base import TextInput
 
-from typing import Union, Optional
+from typing import Mapping, Union
 
 from transformers import AutoVideoProcessor
 from enum import Enum
 import torch
 import json
 import os
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, Template
+from jinja2 import Environment, StrictUndefined
 from csi_slt.constants import LANGUAGE_MAP, LANGUAGE_NAME_MAP
 
 
@@ -32,7 +32,8 @@ class SignTranslationProcessor(ProcessorMixin):
         video_processor,
         tokenizer,
         chat_template=None,
-        prompt_paths_per_language: dict[str, str] = {},
+        prompt_paths_per_language: Mapping[str, str] | None = None,
+        prompt_templates_per_language: Mapping[str, str] | None = None,
         video_soft_token="<|video_pad|>",
         video_start_token="<|vision_start|>",
         video_padding_to_multiple_of=4,
@@ -42,8 +43,16 @@ class SignTranslationProcessor(ProcessorMixin):
         add_eos_token=True,
         mode="train",
         position_shift_range=(0, 20),
-        **kwargs,
     ):
+        if (
+            prompt_paths_per_language is not None
+            and prompt_templates_per_language is not None
+        ):
+            raise ValueError(
+                "Specify either prompt_paths_per_language or "
+                "prompt_templates_per_language, not both."
+            )
+
         self.video_soft_token = video_soft_token
         self.video_start_token = video_start_token
         self.video_padding_to_multiple_of = video_padding_to_multiple_of
@@ -71,24 +80,27 @@ class SignTranslationProcessor(ProcessorMixin):
             self.video_soft_token
         )
 
-        # Load prompt templates from JSON files using Jinja2 Environment
-        self.prompt_templates: dict[str, Template] = {
-            lang: self._parse_prompt_file(path)
-            for lang, path in prompt_paths_per_language.items()
-        }
+        # Keep template sources instead of Jinja Template instances. ProcessorMixin
+        # deep-copies __dict__ during save_pretrained(), while Template objects cannot
+        # be deep-copied. The sources are JSON serializable and restore cleanly.
+        if prompt_templates_per_language is not None:
+            self.prompt_templates_per_language = dict(prompt_templates_per_language)
+        else:
+            self.prompt_templates_per_language = {
+                lang: self._read_prompt_file(path)
+                for lang, path in (prompt_paths_per_language or {}).items()
+            }
 
         # Cache for rendered prompts (per language), avoiding redundant
         # template.render() and apply_chat_template() calls within a batch.
         self._prompt_cache: dict[str, str] = {}
 
     @staticmethod
-    def _parse_prompt_file(path: str) -> Template:
+    def _read_prompt_file(path: str) -> str:
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Prompt file not found: {path}")
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-
-        env = Environment(undefined=StrictUndefined)
 
         # Support both plain text and JSON-encapsulated prompt templates.
         # If the file is valid JSON containing a string, use that string as the template.
@@ -96,11 +108,11 @@ class SignTranslationProcessor(ProcessorMixin):
         try:
             parsed = json.loads(content)
             if isinstance(parsed, str):
-                return env.from_string(parsed)
+                return parsed
         except (json.JSONDecodeError, ValueError):
             pass
 
-        return env.from_string(content)
+        return content
 
     def inject_images(self, prompt: str, n: int) -> str:
         sentinel = self.video_start_token
@@ -115,14 +127,16 @@ class SignTranslationProcessor(ProcessorMixin):
         if lang in cache:
             return cache[lang]
 
-        template = self.prompt_templates.get(lang)
-        if template is None:
+        template_source = self.prompt_templates_per_language.get(lang)
+        if template_source is None:
             raise ValueError(f"No prompt template found for language: {lang}")
         language_name = LANGUAGE_NAME_MAP.get(lang)
         if language_name is None:
             raise ValueError(f"Language '{lang}' not found in LANGUAGE_MAP.")
 
-        rendered = template.render(
+        rendered = Environment(undefined=StrictUndefined).from_string(
+            template_source
+        ).render(
             video_start_token=self.video_start_token,
             language=language_name,
         )
