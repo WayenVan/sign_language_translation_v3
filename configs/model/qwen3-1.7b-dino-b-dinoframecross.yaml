@@ -8,7 +8,7 @@ config:
   visual_backbone_type: dinov2
   visual_backbone_config:
     id: facebook/dinov2-with-registers-base
-    output_layer: -2
+    output_layer: -1
   visual_adapter_type: dinoframe_cross
   visual_adapter_kwargs:
     input_dim: 768
