@@ -10,7 +10,9 @@
 
 set -euo pipefail
 
-SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
+
+cd "$SCRIPT_DIR"
 
 source "$SCRIPT_DIR/.venv/bin/activate"
 source "$SCRIPT_DIR/prepare_dataset.sh"
