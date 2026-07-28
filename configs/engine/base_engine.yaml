@@ -7,9 +7,9 @@ training_args:
   report_to: wandb
   remove_unused_columns: False
   ddp_find_unused_parameters: False
-  save_strategy: steps
+  save_strategy: best
   save_steps: 4000
-  save_total_limit: 2
+  save_total_limit: 1
   logging_steps: 50
   eval_strategy: "steps"
   eval_steps: 4000

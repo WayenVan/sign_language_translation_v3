@@ -341,7 +341,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         text_visual_lengths = visual_token_mask.sum(dim=1)
 
         assert (text_visual_lengths == visual_lengths + 2).all(), (
-            "The length of text and video must be the same."
+            f"The length of text and video must be the same, but got text_visual_lengths: {text_visual_lengths} and visual_lengths: {visual_lengths}"
         )
 
         extended_visual_feats = []
