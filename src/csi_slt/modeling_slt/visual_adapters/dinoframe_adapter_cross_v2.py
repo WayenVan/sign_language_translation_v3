@@ -29,7 +29,7 @@ class DINOFrameAdapterCrossV2(nn.Module):
         hidden_dim: int | None = None,
         temporal_hidden_dim: int | None = None,
         temperature: float = 0.1,
-        temporal_gate_init: float = -2.0,
+        temporal_gate_init: float = -2.0,  # will be passed through sigmoid to get initial gate value , sigmoid(-2) ~= 0.12
     ) -> None:
         super().__init__()
 
@@ -224,3 +224,28 @@ class DINOFrameAdapterCrossV2(nn.Module):
             raise ValueError(
                 "visual_length.sum() must equal the number of packed frames"
             )
+
+
+if __name__ == "__main__":
+    import torch
+    from torch import Tensor
+
+    # Original adapter test
+    B, N, D = 3, 16, 768
+    cls_token = torch.randn(B, D).cuda()
+    patch_features = torch.randn(B, N, D).cuda()
+    visual_length = torch.tensor([1, 2]).cuda()
+
+    visual_backbone_output = VisualBackboneOutput(
+        visual_features=patch_features,
+        pooled_visual_features=cls_token,
+        visual_length=visual_length,
+    )
+
+    adapter = DINOFrameAdapterCrossV2(input_dim=D, output_dim=512).cuda()
+    adapter.eval()
+    with torch.no_grad():
+        output = adapter(visual_backbone_output)
+        print("Output shape:", output.visual_features.shape)
+        print("Patch weights shape:", output.extras["patch_weights"].shape)
+        print("Visual length:", output.visual_length)
