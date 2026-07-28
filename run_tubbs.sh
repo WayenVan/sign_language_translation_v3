@@ -19,6 +19,15 @@ export WANDB_PROJECT=sign_language_translation_v3.1
 
 source .venv/bin/activate
 
+# 如果第一个参数是 "debug"，则设置 REPORT_TO=none
+if [[ "${1:-}" == "debug" ]]; then
+  echo "Debug mode: Disabling reporting to WandB."
+  REPORT_TO=none
+else
+  export WANDB_PROJECT=sign_language_translation_v3.1
+  REPORT_TO=wandb
+fi
+
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=qwen3-1.7b-dino-b-dinoframecrossv2 \
   engine.training_args.output_dir=outputs/qwen3-1.7b-dinoframev2-cross-test \
@@ -29,8 +38,8 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm=False \
+  engine.training_args.report_to="$REPORT_TO" \
   data=ph14t_*x224x224_qwen_multiling \
-  model.config.video_token_scale=1.0 \
   data.train.processor.video_token_scale=1.0 \
   data.val.processor.video_token_scale=1.0 \
   data.test.processor.video_token_scale=1.0 \
