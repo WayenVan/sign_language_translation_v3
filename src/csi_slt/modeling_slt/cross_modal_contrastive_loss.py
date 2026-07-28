@@ -22,9 +22,9 @@ class CrossModalContrastiveLoss(nn.Module):
     ``visual_lengths=[Lv_1, ..., Lv_B]``。该路径不会构造 padding，也不会
     生成 ``[B, max(Lv), D]`` 的中间张量。
 
-    分布式训练初始化后（DDP），默认会跨所有 rank 收集池化后的特征作为
-    负样本。收集操作保留 autograd 图，因此本 rank 的损失也可以向其他 rank
-    的特征编码器回传梯度。
+    分布式训练初始化后（DDP），默认仍只使用本 rank 的 batch 计算损失，
+    避免在模型 forward 中隐式执行 collective。若需要跨 rank 负样本，可通过
+    ``gather_distributed=True`` 显式开启。
 
     Example:
         >>> criterion = CrossModalContrastiveLoss()
@@ -37,10 +37,37 @@ class CrossModalContrastiveLoss(nn.Module):
         learnable_temperature: 是否将温度对应的缩放系数设为可训练参数。
         max_logit_scale: 缩放系数 ``exp(logit_scale)`` 的上界，防止训练时
             温度过小造成数值不稳定。默认 ``100``。
-        local_loss: DDP 下是否只计算本 rank 的 query 对全局候选的损失。
-            ``False`` 会在每张卡计算完整全局 logits；``True`` 显存更低。
-        gather_with_grad: 是否使用支持 autograd 的跨卡 all-gather。默认
-            ``True``，可让远端负样本对应的编码器接收本 rank 的梯度。
+        local_loss: DDP 下是否只计算本 rank 的 query 对全局候选的损失，
+            默认为 ``True``，可避免在每个 rank 重复构造完整的全局 logits，
+            并将 logits 显存占用从 ``O(B_global^2)`` 降至
+            ``O(B_local * B_global)``。
+
+            WARN: 设为 ``False`` 时，每个 rank 都会重复计算相同的全局损失。
+            除了显著增加显存和通信开销，配合 ``gather_with_grad=True`` 使用
+            时，特征编码器经过 autograd all-gather 得到的梯度与普通 DDP
+            参数（例如 ``logit_scale``）还可能具有不同的 world-size 缩放。
+            除非明确需要完整全局 logits 并已验证梯度缩放，否则不建议关闭。
+        gather_with_grad: 当 ``gather_distributed=True`` 时，是否使用支持
+            autograd 的跨卡 all-gather，默认为 ``False``。关闭时仍会收集
+            其他 rank 的特征作为负样本，但会 detach 远端特征，同时保留
+            本 rank 特征的梯度路径。
+
+            WARN: 设为 ``True`` 会在 backward 中引入额外的分布式
+            collective。所有 rank 必须以完全相同的顺序和次数执行该损失的
+            forward 与 backward；如果某个 rank 跳过 batch、提前异常、
+            DataLoader 步数不同或条件分支不一致，其余 rank 可能永久等待，
+            表现为训练卡死。启用前请确认各 rank 的训练控制流严格一致；排查
+            问题时建议开启 ``TORCH_DISTRIBUTED_DEBUG=DETAIL`` 与
+            ``NCCL_ASYNC_ERROR_HANDLING=1``。
+        gather_distributed: DDP 下是否跨 rank 收集特征作为全局负样本，
+            默认为 ``False``。关闭时每个 rank 独立计算本地 batch 的对比
+            损失，梯度仍会由 DDP 正常同步，不会在此损失中执行额外的
+            collective。
+
+            WARN: 设为 ``True`` 后，所有 rank 必须在每一步以相同顺序调用
+            此损失，否则即使 ``gather_with_grad=False``，前向
+            ``dist.all_gather`` 仍可能永久等待。只有在确认各 rank 的
+            DataLoader 步数、条件分支和 batch 执行次数完全一致时才应开启。
         process_group: 可选的 PyTorch 分布式进程组；默认使用全局进程组。
     """
 
@@ -49,8 +76,9 @@ class CrossModalContrastiveLoss(nn.Module):
         temperature: float = 0.07,
         learnable_temperature: bool = True,
         max_logit_scale: float = 100.0,
-        local_loss: bool = False,
-        gather_with_grad: bool = True,
+        local_loss: bool = True,
+        gather_with_grad: bool = False,
+        gather_distributed: bool = True,
         process_group: Optional[dist.ProcessGroup] = None,
     ) -> None:
         super().__init__()
@@ -68,6 +96,7 @@ class CrossModalContrastiveLoss(nn.Module):
         self.max_logit_scale = max_logit_scale
         self.local_loss = local_loss
         self.gather_with_grad = gather_with_grad
+        self.gather_distributed = gather_distributed
         self.process_group = process_group
 
     def _gather_batch_sizes(
@@ -243,7 +272,11 @@ class CrossModalContrastiveLoss(nn.Module):
             raise ValueError("pooled visual and text features must have the same shape")
 
         scale = self.logit_scale.exp().clamp(max=self.max_logit_scale)
-        if not dist.is_available() or not dist.is_initialized():
+        if (
+            not self.gather_distributed
+            or not dist.is_available()
+            or not dist.is_initialized()
+        ):
             # [B, D] @ [D, B] -> [B, B]，第 i 行、第 i 列即第 i 个正样本对。
             similarity = text_embeddings @ visual_embeddings.t() * scale
             targets = torch.arange(similarity.shape[0], device=similarity.device)
@@ -367,6 +400,7 @@ def _run_distributed_debug_test() -> None:
             learnable_temperature=False,
             local_loss=True,
             gather_with_grad=True,
+            gather_distributed=True,
         ).to(device)
         loss = criterion(visual_features, text_features)
         loss.backward()

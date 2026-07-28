@@ -19,6 +19,15 @@ source "$SCRIPT_DIR/prepare_dataset.sh"
 
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
+# 如果第一个参数是 "debug"，则设置 REPORT_TO=none
+if [[ "${1:-}" == "debug" ]]; then
+  echo "Debug mode: Disabling reporting to WandB."
+  REPORT_TO=none
+else
+  export WANDB_PROJECT=sign_language_translation_v3.1
+  REPORT_TO=wandb
+fi
+
 # 设置 TQDM_DISABLE 和 HG_TQDM_DISABLE 用于 accelerate launch
 if [[ -t 2 ]]; then
   unset TQDM_DISABLE
@@ -35,21 +44,22 @@ DATASET_PATH=$(prepare_dataset \
 echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-8b-dino-b-dinoframecross \
-  engine.training_args.output_dir=outputs/qwen3-8b-dino-b-dinoframe-cross-test \
+  model=qwen3-1.7b-dino-b-dinoframecrossv2 \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-dino-b-dinoframev2-cross-test \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=4 \
+  engine.training_args.dataloader_num_workers=3 \
+  engine.training_args.dataloader_persistent_workers=False \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE" \
+  engine.training_args.report_to="$REPORT_TO" \
   data=ph14t_*x224x224_qwen_multiling \
   data.data_root="$DATASET_PATH" \
-  model.config.video_token_scale=1.0 \
-  data.train.processor.video_token_scale=1.0 \
-  data.val.processor.video_token_scale=1.0 \
-  data.test.processor.video_token_scale=1.0 \
+  data.train.processor.video_token_scale=2.0 \
+  data.val.processor.video_token_scale=2.0 \
+  data.test.processor.video_token_scale=2.0 \
   data.train.processor.video_padding_to_multiple_of=4 \
   data.val.processor.video_padding_to_multiple_of=4 \
   data.test.processor.video_padding_to_multiple_of=4

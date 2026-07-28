@@ -382,7 +382,13 @@ class SltTrainer(Seq2SeqTrainer):
             if sampler_fn is not None:
                 dataloader_params["sampler"] = sampler_fn(dataset)
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
+            # PyTorch only accepts prefetch_factor when multiprocessing workers
+            # are enabled. Keeping the single-process path valid is useful for
+            # diagnosing worker deadlocks in distributed jobs.
+            if self.args.dataloader_num_workers > 0:
+                dataloader_params["prefetch_factor"] = (
+                    self.args.dataloader_prefetch_factor
+                )
             if is_training:
                 dataloader_params["worker_init_fn"] = partial(
                     seed_worker,

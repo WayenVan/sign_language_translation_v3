@@ -145,7 +145,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
         # Keep one registered instance so its learnable temperature is included
         # in model parameters, checkpoints, and the optimizer.
-        self.contrastive_loss_fct = CrossModalContrastiveLoss()
+        self.contrastive_loss_fct = CrossModalContrastiveLoss(gather_with_grad=True)
 
         self.config.num_extra_tokens = 2  # Start and end video tokens.
         self.config.is_encoder_decoder = False
