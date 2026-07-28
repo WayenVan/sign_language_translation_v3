@@ -122,7 +122,7 @@ def test_model_save():
 
 
 def test_model_load():
-    path = "outputs/qwen3-1.7b-dinoframe-cross-test2/checkpoint-28000"
+    path = "outputs/qwen3-1.7b-dinoframev2-shuffle-cross-test/checkpoint-12000"
     slt_model, loading_info = SltModel.from_pretrained(path, output_loading_info=True)
 
     slt_model = slt_model.cuda()
