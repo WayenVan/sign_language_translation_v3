@@ -31,5 +31,8 @@ training_args:
 generation_config: # NOTE: override the generation config in model config
   max_new_tokens: 128
 
+metrics:
+  xcomet_every_n_evaluations: -1
+
 llm_dtype: auto
 visual_backbone_dtype: auto

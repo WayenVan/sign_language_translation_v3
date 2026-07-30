@@ -21,6 +21,15 @@ class PredictionOutput(Protocol):
     label_ids: Any
 
 
+class PriodicMetric(Protocol):
+    """A slow metric which is evaluated only at its configured cadence."""
+
+    every_n_evaluations: int
+
+    def compute(self, context: MetricContext) -> Mapping[str, float | int]:
+        ...
+
+
 @dataclass(slots=True)
 class DecodedBatch:
     """解码后的完整评估数据。"""
@@ -33,6 +42,14 @@ class DecodedBatch:
 
     def __len__(self) -> int:
         return len(self.predictions)
+
+
+@dataclass
+class MetricContext:
+    """评估指标计算的上下文。"""
+
+    batch: DecodedBatch
+    language_groups: dict[str, list[int]]
 
 
 class SLTMetric:
@@ -70,10 +87,16 @@ class SLTMetric:
         overall_macro_bleu4
         overall_weighted_bleu4
 
+    BERTScore-F1：
+
+        en_bert_score_f1
+        zh_bert_score_f1
+        overall_macro_bert_score_f1
+
     注意：两个 overall BLEU 都由各语言的 BLEU-4 聚合得到，
     不会把不同目标语言混合后直接计算 corpus BLEU。
 
-    所有 BLEU 和 ROUGE 指标均返回 0～1。
+    所有 BLEU、ROUGE 和 BERTScore 指标均返回 0～1。
     """
 
     _CJK_CHARACTER_PATTERN = (
@@ -108,11 +131,33 @@ class SLTMetric:
         lowercase_bleu: bool = False,
         default_bleu_tokenizer: str = "13a",
         bleu_tokenizer_by_language: Mapping[str, str] | None = None,
+        bert_score_model_type: str = "bert-base-multilingual-cased",
+        priodic_metrics: Sequence[PriodicMetric] | None = None,
     ) -> None:
         self.tokenizer = processor.tokenizer
         self.ignore_index = ignore_index
         self.lowercase_bleu = lowercase_bleu
         self.default_bleu_tokenizer = default_bleu_tokenizer
+        self.bert_score_model_type = bert_score_model_type
+        self.priodic_metrics = tuple(priodic_metrics or ())
+        self._evaluation_count = 0
+
+        for metric in self.priodic_metrics:
+            interval = getattr(metric, "every_n_evaluations", None)
+            if (
+                not isinstance(interval, int)
+                or isinstance(interval, bool)
+                or interval == 0
+                or interval < -1
+            ):
+                raise ValueError(
+                    "Each priodic metric must define 'every_n_evaluations' "
+                    "as a positive integer, or -1 to disable it."
+                )
+            if not callable(getattr(metric, "compute", None)):
+                raise TypeError(
+                    "Each priodic metric must provide a callable compute(context)."
+                )
 
         if self.tokenizer.pad_token_id is None:
             raise ValueError("SLTMetric requires tokenizer.pad_token_id to be defined.")
@@ -144,6 +189,10 @@ class SLTMetric:
 
         # ROUGE 只加载一次。
         self._rouge_metric = evaluate.load("rouge")
+
+        # 所有语言使用同一个多语言模型，使不同语言的分数可按语言聚合，
+        # 同时避免 BERTScore 根据语言代码选择模型时不支持部分语言代码。
+        self._bert_score_metric = evaluate.load("bertscore")
 
     # ------------------------------------------------------------------
     # Basic utilities
@@ -517,6 +566,39 @@ class SLTMetric:
         return {metric_name: float(value) for metric_name, value in result.items()}
 
     # ------------------------------------------------------------------
+    # BERTScore
+    # ------------------------------------------------------------------
+
+    def _calculate_bert_score_f1(
+        self,
+        predictions: Sequence[str],
+        references: Sequence[str],
+    ) -> float:
+        """计算一个语言分组内所有样本的平均 BERTScore-F1。"""
+
+        if not predictions:
+            return 0.0
+
+        if len(predictions) != len(references):
+            raise ValueError("predictions and references must have the same length.")
+
+        result = self._bert_score_metric.compute(
+            predictions=list(predictions),
+            references=list(references),
+            model_type=self.bert_score_model_type,
+        )
+
+        f1_scores = np.asarray(result["f1"], dtype=np.float64)
+
+        if f1_scores.size != len(predictions):
+            raise ValueError(
+                "BERTScore returned an unexpected number of F1 scores: "
+                f"{f1_scores.size}, expected {len(predictions)}."
+            )
+
+        return float(f1_scores.mean())
+
+    # ------------------------------------------------------------------
     # Metric composition
     # ------------------------------------------------------------------
 
@@ -548,6 +630,11 @@ class SLTMetric:
                 predictions,
                 references,
             )
+        )
+
+        metrics["bert_score_f1"] = self._calculate_bert_score_f1(
+            predictions,
+            references,
         )
 
         return self._add_prefix(
@@ -627,26 +714,72 @@ class SLTMetric:
             ),
         }
 
+    @staticmethod
+    def _aggregate_bert_score_f1(
+        language_bert_score_f1_scores: Mapping[str, float],
+    ) -> dict[str, float]:
+        """对各语言的 BERTScore-F1 做等权宏平均。"""
+
+        if not language_bert_score_f1_scores:
+            return {"overall_macro_bert_score_f1": 0.0}
+
+        return {
+            "overall_macro_bert_score_f1": float(
+                np.mean(list(language_bert_score_f1_scores.values()))
+            )
+        }
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def _calculate_priodic_metrics(
+        self,
+        context: MetricContext,
+    ) -> dict[str, float | int]:
+        """Run slow metrics whose cadence matches the current evaluation."""
+
+        metrics: dict[str, float | int] = {}
+
+        for priodic_metric in self.priodic_metrics:
+            interval = priodic_metric.every_n_evaluations
+            if interval == -1 or self._evaluation_count % interval != 0:
+                continue
+
+            result = priodic_metric.compute(context)
+            if not isinstance(result, Mapping):
+                raise TypeError(
+                    f"{type(priodic_metric).__name__}.compute() must return a mapping."
+                )
+            metrics.update(result)
+
+        return metrics
 
     def __call__(
         self,
         output: PredictionOutput,
     ) -> dict[str, float | int]:
+        self._evaluation_count += 1
         batch = self._decode_batch(output)
+        language_groups = self._group_indices_by_language(batch.languages)
+        context = MetricContext(
+            batch=batch,
+            language_groups=language_groups,
+        )
 
         if len(batch) == 0:
-            return {
+            metrics: dict[str, float | int] = {
                 "num_samples": 0,
                 "num_languages": 0,
                 "overall_macro_bleu4": 0.0,
                 "overall_weighted_bleu4": 0.0,
+                "overall_macro_bert_score_f1": 0.0,
                 "avg_n_tokens": 0.0,
                 "avg_n_tokens_generated": 0.0,
                 "all_n_tokens_generated": 0,
             }
+            metrics.update(self._calculate_priodic_metrics(context))
+            return metrics
 
         metrics: dict[str, float | int] = {}
 
@@ -664,9 +797,8 @@ class SLTMetric:
             )
         )
 
-        language_groups = self._group_indices_by_language(batch.languages)
-
         language_bleu4_scores: dict[str, float] = {}
+        language_bert_score_f1_scores: dict[str, float] = {}
         language_sample_counts: dict[str, int] = {}
 
         for language in sorted(language_groups):
@@ -698,6 +830,9 @@ class SLTMetric:
             language_bleu4_scores[language] = language_metrics[
                 f"{metric_language}_bleu4"
             ]
+            language_bert_score_f1_scores[language] = language_metrics[
+                f"{metric_language}_bert_score_f1"
+            ]
 
             language_sample_counts[language] = len(indices)
 
@@ -711,6 +846,10 @@ class SLTMetric:
         )
 
         metrics.update(
+            self._aggregate_bert_score_f1(language_bert_score_f1_scores)
+        )
+
+        metrics.update(
             {
                 "num_samples": len(batch),
                 "num_languages": len(language_groups),
@@ -719,5 +858,6 @@ class SLTMetric:
                 "all_n_tokens_generated": int(np.sum(batch.generated_token_counts)),
             }
         )
+        metrics.update(self._calculate_priodic_metrics(context))
 
         return metrics

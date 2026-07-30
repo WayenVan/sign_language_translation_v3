@@ -34,7 +34,6 @@ from transformers.utils import logging
 from typing import Callable, Literal, Tuple
 from functools import partial
 
-from .metrics import SLTMetric
 from ..constants import LANGUAGE_MAP
 from csi_slt.data.sampler import (
     GlobalLengthBucketSampler,
@@ -90,7 +89,6 @@ class SltTrainer(Seq2SeqTrainer):
             self.lr_scheduler,
         )
 
-        self.compute_metrics = SLTMetric(self.processing_class)
         # Accumulate detached per-micro-batch values.  They are reduced in
         # ``log`` so their cadence exactly matches Trainer's ``logging_steps``.
         self._loss_component_totals: dict[str, torch.Tensor] = {}

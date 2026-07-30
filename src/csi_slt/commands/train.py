@@ -1,3 +1,5 @@
+from accelerate.test_utils.testing import AccelerateTestCase
+from accelerate import Accelerator
 import hydra
 
 from omegaconf import DictConfig, OmegaConf
@@ -10,6 +12,8 @@ from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltConfig, SltModel
 from ..misc.utils import deep_merge
 from transformers.generation.configuration_utils import GenerationConfig
+from csi_slt.engine.metrics import SLTMetric
+from csi_slt.engine.priodic_metrics import XCometLiteMetric
 from huggingface_hub import login
 
 login(token=os.getenv("HF_TOKEN"))
@@ -25,6 +29,7 @@ set_seed(42)
 )
 def main(cfg: DictConfig):
     # accelerate initialize
+    acc = Accelerator()
 
     # create model
     slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
@@ -66,6 +71,15 @@ def main(cfg: DictConfig):
         ),
         **cfg.engine.training_args,
     )
+    metrics = SLTMetric(
+        processor=datamodule.val_processor,
+        priodic_metrics=[
+            XCometLiteMetric(
+                accelerator=acc,
+                every_n_evaluations=cfg.engine.metrics.xcomet_every_n_evaluations,
+            )
+        ],
+    )
 
     trainer = SltTrainer(
         model=slt_model,
@@ -76,6 +90,7 @@ def main(cfg: DictConfig):
         eval_dataset=datamodule.test_dataset,
         train_data_collator=datamodule.train_collator,
         eval_data_collator=datamodule.test_collator,
+        compute_metrics=metrics,
     )
 
     if training_args.do_train:
