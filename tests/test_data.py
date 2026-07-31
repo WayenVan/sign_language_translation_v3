@@ -17,6 +17,7 @@ def test_datamodule():
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
                 # "model=gemma3-1b-dino-base",
+                # "data.processor.video_processor.image_mean=[0.6, 0.6, 0.6]",
             ],
         )
 
@@ -33,7 +34,7 @@ def test_datamodule():
     collator = datamodule.train_collator
     collator.debug = True
 
-    datamodule.print_batch(batch_size=16, num_workers=4, random=True)
+    datamodule.print_batch(batch_size=16, num_workers=1, random=True)
 
     # loader = DataLoader(
     #     train_dataset,

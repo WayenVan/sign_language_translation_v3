@@ -39,7 +39,11 @@ class DataModule:
         if not hasattr(self.cfg, "prompt_templates"):
             return paths
         for lang, rel_path in self.cfg.prompt_templates.items():
-            abs_path = rel_path if os.path.isabs(rel_path) else os.path.join(os.getcwd(), rel_path)
+            abs_path = (
+                rel_path
+                if os.path.isabs(rel_path)
+                else os.path.join(os.getcwd(), rel_path)
+            )
             paths[lang] = abs_path
         return paths
 
@@ -124,27 +128,9 @@ class DataModule:
                         )
 
     @property
-    def train_processor(self):
+    def processor(self):
         return instantiate(
-            self.cfg.train.processor,
-            tokenizer=self.tokenizer,
-            chat_template=self.chat_template,
-            prompt_paths_per_language=self._prompt_paths,
-        )
-
-    @property
-    def val_processor(self):
-        return instantiate(
-            self.cfg.val.processor,
-            tokenizer=self.tokenizer,
-            chat_template=self.chat_template,
-            prompt_paths_per_language=self._prompt_paths,
-        )
-
-    @property
-    def test_processor(self):
-        return instantiate(
-            self.cfg.test.processor,
+            self.cfg.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
             prompt_paths_per_language=self._prompt_paths,
@@ -154,16 +140,16 @@ class DataModule:
     def train_collator(self):
         return instantiate(
             self.cfg.train.collator,
-            processor=self.train_processor,
+            processor=self.processor,
         )
 
     @property
     def val_collator(self):
-        return instantiate(self.cfg.val.collator, processor=self.val_processor)
+        return instantiate(self.cfg.val.collator, processor=self.processor)
 
     @property
     def test_collator(self):
-        return instantiate(self.cfg.test.collator, processor=self.test_processor)
+        return instantiate(self.cfg.test.collator, processor=self.processor)
 
     def print_batch(self, batch_size, num_workers=1, random=False):
         dataloader = torch.utils.data.DataLoader(

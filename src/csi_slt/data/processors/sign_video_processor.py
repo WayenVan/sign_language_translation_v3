@@ -3,9 +3,11 @@ from transformers.video_processing_utils import (
     BatchFeature,
     VideosKwargs,
 )
-from transformers.utils import TensorType, filter_out_non_signature_kwargs
+from transformers.processing_utils import Unpack
+from transformers.utils import TensorType
 import numpy as np
 
+from collections.abc import Sequence
 from typing import Union
 import torch
 
@@ -19,26 +21,39 @@ from albumentations import (
 )
 
 
+class SignVideoKwargs(VideosKwargs, total=False):
+    """Custom kwargs accepted by SignVideoProcessor."""
+
+    padding_to_multiple_of: int
+
+
 class SignVideoProcessor(BaseVideoProcessor):
     _auto_class = "AutoVideoProcessor"
+
     model_input_names = ["pixel_values", "pixel_values_lengths"]
     image_mean = [0.485, 0.456, 0.406]
     image_std = [0.229, 0.224, 0.225]
     size = {"height": 224, "width": 224}
+    padding_to_multiple_of = 4
 
-    def __init__(self, **kwargs: VideosKwargs):
+    # ------- class attributes for input validation -------
+    expected_input_size = {"height": 256, "width": 256}
+
+    valid_kwargs = SignVideoKwargs
+
+    def __init__(self, **kwargs: Unpack[SignVideoKwargs]):
         super().__init__(**kwargs)
 
-    @property
-    def train_transform(self):
+    @staticmethod
+    def build_train_transform(size, image_mean, image_std):
         return Compose(
             [
                 # Resize(height=256, width=256),
-                RandomCrop(height=self.height, width=self.width, p=1.0),
+                RandomCrop(height=size["height"], width=size["width"], p=1.0),
                 ColorJitter(p=0.75),
                 Normalize(
-                    mean=self.image_mean,
-                    std=self.image_std,
+                    mean=image_mean,
+                    std=image_std,
                     max_pixel_value=1.0,
                 ),
                 HorizontalFlip(p=0.5),
@@ -46,15 +61,15 @@ class SignVideoProcessor(BaseVideoProcessor):
             p=1.0,
         )
 
-    @property
-    def predict_transform(self):
+    @staticmethod
+    def build_predict_transform(size, image_mean, image_std):
         return Compose(
             [
                 # Resize(height=256, width=256),
-                CenterCrop(height=self.height, width=self.width, p=1.0),
+                CenterCrop(height=size["height"], width=size["width"], p=1.0),
                 Normalize(
-                    mean=self.image_mean,
-                    std=self.image_std,
+                    mean=image_mean,
+                    std=image_std,
                     max_pixel_value=1.0,
                 ),
             ],
@@ -80,17 +95,28 @@ class SignVideoProcessor(BaseVideoProcessor):
         padding = np.repeat(last_element, pad_size, axis=dim)
         return np.concatenate([array, padding], axis=dim)
 
-    @filter_out_non_signature_kwargs()
     def preprocess(
         self,
-        videos: Union[list[np.ndarray], np.ndarray],
+        videos: Union[Sequence[np.ndarray], np.ndarray],
         training: bool = True,
-        padding_to_multiple_of: int = 4,
+        **kwargs: Unpack[SignVideoKwargs],
     ):
-        if isinstance(videos, np.ndarray):
-            videos = [videos]
+        videos = self._prepare_videos(videos)
 
-        processs_fn = self.train_transform if training else self.predict_transform
+        # Instance attributes provide defaults. Values supplied for this call
+        # temporarily override them without mutating the processor.
+        size = kwargs.pop("size", self.size)
+        image_mean = kwargs.pop("image_mean", self.image_mean)
+        image_std = kwargs.pop("image_std", self.image_std)
+        padding_to_multiple_of = kwargs.pop(
+            "padding_to_multiple_of", self.padding_to_multiple_of
+        )
+
+        process_fn = (
+            self.build_train_transform(size, image_mean, image_std)
+            if training
+            else self.build_predict_transform(size, image_mean, image_std)
+        )
 
         processed_videos = []
         video_lengths = []
@@ -100,7 +126,7 @@ class SignVideoProcessor(BaseVideoProcessor):
             )
 
             video_lengths.append(video.shape[0])
-            processed = processs_fn(images=video)["images"]
+            processed = process_fn(images=video)["images"]
             processed = (
                 torch.from_numpy(
                     processed,
@@ -124,8 +150,68 @@ class SignVideoProcessor(BaseVideoProcessor):
         }
         return BatchFeature(data=data, tensor_type=TensorType.PYTORCH)
 
+    def _prepare_videos(
+        self, videos: Union[Sequence[np.ndarray], np.ndarray]
+    ) -> list[np.ndarray]:
+        """Normalize supported inputs to a validated list of THWC videos."""
+        if isinstance(videos, np.ndarray):
+            if videos.ndim == 4:
+                video_list = [videos]
+            elif videos.ndim == 5:
+                video_list = list(videos)
+            else:
+                raise ValueError(
+                    "A NumPy input must have shape (T, H, W, C) or "
+                    f"(B, T, H, W, C), but received {videos.shape}."
+                )
+        elif isinstance(videos, Sequence) and not isinstance(videos, (str, bytes)):
+            video_list = list(videos)
+        else:
+            raise TypeError(
+                "videos must be a NumPy array or a sequence of NumPy arrays, "
+                f"but received {type(videos).__name__}."
+            )
+
+        if not video_list:
+            raise ValueError("videos must contain at least one video.")
+
+        expected_height = self.expected_input_size["height"]
+        expected_width = self.expected_input_size["width"]
+        for index, video in enumerate(video_list):
+            if not isinstance(video, np.ndarray):
+                raise TypeError(
+                    f"videos[{index}] must be a NumPy array, but received "
+                    f"{type(video).__name__}."
+                )
+            if video.ndim != 4:
+                raise ValueError(
+                    f"videos[{index}] must have shape (T, H, W, C), but "
+                    f"received {video.shape}."
+                )
+            if video.shape[0] == 0:
+                raise ValueError(f"videos[{index}] must contain at least one frame.")
+            if video.shape[1:3] != (expected_height, expected_width):
+                raise ValueError(
+                    f"videos[{index}] must have spatial size "
+                    f"({expected_height}, {expected_width}), but received "
+                    f"{video.shape[1:3]}."
+                )
+            if video.shape[3] != 3:
+                raise ValueError(
+                    f"videos[{index}] must have 3 channels in THWC format, but "
+                    f"received {video.shape[3]}."
+                )
+
+        return video_list
+
     def to_dict(self):
         output = super().to_dict()
-        output.pop("train_transform", None)
-        output.pop("prediction_transform", None)
         return output
+
+
+if __name__ == "__main__":
+    video_processor = SignVideoProcessor(
+        padding_to_multiple_of=4,
+        size={"height": 256, "width": 256},
+    )
+    print(video_processor)

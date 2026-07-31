@@ -10,6 +10,18 @@ zh_data_root: large_files/ph14t_chinese
 
 assemble: True
 
+processor:
+  _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+  video_token_scale: 0.5
+  num_extra_video_tokens: 2
+  video_processor:
+    _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+    height: 224
+    width: 224
+    padding_to_multiple_of: 4
+    image_mean: [0.485, 0.456, 0.406]
+    image_std: [0.229, 0.224, 0.225]
+
 train:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
@@ -17,19 +29,10 @@ train:
     zh_data_root: ${data.zh_data_root}
     en_data_root: ${data.en_data_root}
     mode: train
-  processor:
-    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
-    video_token_scale: 0.5
-    num_extra_video_tokens: 2
-    video_padding_to_multiple_of: 4
-    mode: train
-    video_processor:
-      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
-      height: 224
-      width: 224
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
+    mode: train
 
 val:
   dataset:
@@ -38,19 +41,10 @@ val:
     zh_data_root: ${data.zh_data_root}
     en_data_root: ${data.en_data_root}
     mode: dev
-  processor:
-    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
-    video_token_scale: 0.5
-    num_extra_video_tokens: 2
-    video_padding_to_multiple_of: 4
-    mode: eval
-    video_processor:
-      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
-      height: 224
-      width: 224
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
+    mode: eval
 
 test:
   dataset:
@@ -59,19 +53,10 @@ test:
     zh_data_root: ${data.zh_data_root}
     en_data_root: ${data.en_data_root}
     mode: test
-  processor:
-    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
-    video_token_scale: 0.5
-    num_extra_video_tokens: 2
-    video_padding_to_multiple_of: 4
-    mode: test
-    video_processor:
-      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
-      height: 224
-      width: 224
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
+    mode: test
 
 fraction_dataset: False
 train_fraction: 1.0
