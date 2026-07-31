@@ -65,6 +65,7 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
         self,
         visual_backbone_output: VisualBackboneOutput,
         return_weights: bool = True,
+        permute_video_tokens: bool = False,
     ) -> VisualAdapterOutput:
         frame_length = visual_backbone_output.visual_length
         if frame_length is None:
@@ -73,7 +74,9 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             )
 
         frame_output = self.frame_adapter(
-            visual_backbone_output, return_weights=return_weights
+            visual_backbone_output,
+            return_weights=return_weights,
+            permute_video_tokens=permute_video_tokens,
         )
         expected_frame_tokens = frame_length * 2
         if not torch.equal(frame_output.visual_length, expected_frame_tokens):

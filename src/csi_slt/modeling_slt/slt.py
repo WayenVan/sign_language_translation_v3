@@ -263,7 +263,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return video_feats + position_embeddings  # [BT, D]
 
     def get_visual_feats(
-        self, video: torch.Tensor, video_length: torch.Tensor
+        self,
+        video: torch.Tensor,
+        video_length: torch.Tensor,
+        permute_video_tokens: bool = False,
     ) -> VisualAdapterOutput:
         """Encode video frames and adapt them to the language-model space.
 
@@ -278,7 +281,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             video, video_length
         )  # [BT, CLS+HW+REGISTIRY, C]
         visual_adapter_output: VisualAdapterOutput = self.visual_adapter(
-            visual_backbone_output
+            visual_backbone_output, permute_video_tokens=permute_video_tokens
         )  # [BT,  D]
 
         return visual_adapter_output
@@ -308,10 +311,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
         text_input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <start_of_image>, ...]
         video: torch.Tensor,  # [BT, C, H, W]
         video_length: torch.Tensor,  # [B], length of each video in the batch
+        permute_video_tokens: Optional[bool] = False,
     ):
         batch_size = video_length.shape[0]
 
-        visual_output = self.get_visual_feats(video, video_length)
+        visual_output = self.get_visual_feats(
+            video, video_length, permute_video_tokens=permute_video_tokens
+        )
 
         visual_feats = visual_output.visual_features
         visual_feats = self.visual_position_embedding_forward(

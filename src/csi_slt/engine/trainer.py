@@ -254,6 +254,9 @@ class SltTrainer(Seq2SeqTrainer):
                 if key in generation_inputs:
                     generation_inputs.pop(key)
 
+            if self.args.eval_permute_video_tokens:
+                generation_inputs["permute_video_tokens"] = True
+
             if "position_ids" in generation_inputs:
                 raise ValueError(
                     "position_ids should not be passed to generate function"

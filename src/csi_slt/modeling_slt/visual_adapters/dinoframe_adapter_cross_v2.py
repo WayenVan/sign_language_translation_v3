@@ -247,10 +247,10 @@ if __name__ == "__main__":
     from torch import Tensor
 
     # Original adapter test
-    B, N, D = 3, 16, 768
+    B, N, D = 10, 16, 768
     cls_token = torch.randn(B, D).cuda()
     patch_features = torch.randn(B, N, D).cuda()
-    visual_length = torch.tensor([1, 2]).cuda()
+    visual_length = torch.tensor([4, 6]).cuda()
 
     visual_backbone_output = VisualBackboneOutput(
         visual_features=patch_features,
@@ -261,7 +261,9 @@ if __name__ == "__main__":
     adapter = DINOFrameAdapterCrossV2(input_dim=D, output_dim=512).cuda()
     adapter.eval()
     with torch.no_grad():
-        output = adapter(visual_backbone_output)
+        output = adapter(
+            visual_backbone_output, permute_video_tokens=True, return_weights=True
+        )
         print("Output shape:", output.visual_features.shape)
         print("Patch weights shape:", output.extras["patch_weights"].shape)
         print("Visual length:", output.visual_length)

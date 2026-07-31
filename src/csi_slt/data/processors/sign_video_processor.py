@@ -1,4 +1,8 @@
-from transformers.video_processing_utils import BaseVideoProcessor, BatchFeature
+from transformers.video_processing_utils import (
+    BaseVideoProcessor,
+    BatchFeature,
+    VideosKwargs,
+)
 from transformers.utils import TensorType, filter_out_non_signature_kwargs
 import numpy as np
 
@@ -20,11 +24,10 @@ class SignVideoProcessor(BaseVideoProcessor):
     model_input_names = ["pixel_values", "pixel_values_lengths"]
     image_mean = [0.485, 0.456, 0.406]
     image_std = [0.229, 0.224, 0.225]
+    size = {"height": 224, "width": 224}
 
-    def __init__(self, height=224, width=224, **kwargs):
+    def __init__(self, **kwargs: VideosKwargs):
         super().__init__(**kwargs)
-        self.height = height
-        self.width = width
 
     @property
     def train_transform(self):

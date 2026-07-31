@@ -11,6 +11,7 @@ from ..modeling_slt.slt import SltConfig, SltModel
 from ..misc.utils import deep_merge
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.trainer_utils import PredictionOutput
+from csi_slt.data.processors.slt_processor import SignTranslationProcessor
 
 from accelerate import Accelerator
 
@@ -29,6 +30,7 @@ def main(cfg: DictConfig):
     slt_model = SltModel.from_pretrained(
         cfg.model.checkpoint_dir,
     )
+    processor = SignTranslationProcessor.from_pretrained(cfg.model.checkpoint_dir)
 
     # create datamodule
     llm_name = slt_model.config.llm_model_name_or_path
@@ -55,7 +57,7 @@ def main(cfg: DictConfig):
         model=slt_model,
         args=training_args,
         hydra_config=cfg,
-        processing_class=datamodule.val_processor,
+        processing_class=processor,
         test_data_collator=datamodule.test_collator,
     )
 

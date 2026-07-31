@@ -43,7 +43,7 @@ def test_slt_model():
             config_name="base_train",
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
-                "model=qwen3-1.7b-dino-b-dinoframecross",
+                "model=qwen3-1.7b-dino-b-dinoframecrossv2shuffle",
                 "data.train.processor.video_token_scale=1.0",
                 "data.val.processor.video_token_scale=1.0",
                 "data.test.processor.video_token_scale=1.0",
@@ -89,6 +89,7 @@ def test_slt_model():
                     labels=batch["labels"].cuda(),
                     position_ids=batch["position_ids"].cuda(),
                     token_type_ids=batch["token_type_ids"].cuda(),
+                    permute_video_tokens=True,
                 )
                 print(outputs.loss)
                 # print("prompt_length:" + str(batch["input_ids"].shape[1]))
@@ -270,11 +271,11 @@ def test_peft_model():
 
 if __name__ == "__main__":
     # test_model_params()
-    # test_slt_model()
+    test_slt_model()
     # test_model_save()
     # test_verify_gemma3()
     # test_dummy_inputs()
     # test_peft_model()
     # test_dummy_inputs_vl()
     # test_model_save()
-    test_model_load()
+    # test_model_load()
