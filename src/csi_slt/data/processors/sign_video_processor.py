@@ -18,8 +18,8 @@ from albumentations import (
 class SignVideoProcessor(BaseVideoProcessor):
     _auto_class = "AutoVideoProcessor"
     model_input_names = ["pixel_values", "pixel_values_lengths"]
-    image_mean = [0.5, 0.5, 0.5]
-    image_std = [0.5, 0.5, 0.5]
+    image_mean = [0.485, 0.456, 0.406]
+    image_std = [0.229, 0.224, 0.225]
 
     def __init__(self, height=224, width=224, **kwargs):
         super().__init__(**kwargs)
