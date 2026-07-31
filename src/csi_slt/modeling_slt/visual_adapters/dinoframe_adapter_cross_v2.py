@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackboneOutput
+from csi_slt.modeling_slt.misc import random_derangement
 
 
 class DINOFrameAdapterCrossV2(nn.Module):
@@ -78,6 +79,7 @@ class DINOFrameAdapterCrossV2(nn.Module):
     def forward(
         self,
         visual_backbone_output: VisualBackboneOutput,
+        permute_video_tokens: bool = False,
         return_weights: bool = True,
     ) -> VisualAdapterOutput:
         patch_features = visual_backbone_output.visual_features
@@ -135,6 +137,15 @@ class DINOFrameAdapterCrossV2(nn.Module):
             self.shared_mapper(self.fused_patch_norm(pooled_patches))
             + self.fused_patch_type_embedding
         )
+
+        # if permute_video_tokens is True, randomly shuffle the order of frames within each video.
+        if permute_video_tokens:
+            mapped_cls, mapped_fused_patches, patch_weights = (
+                self._permute_video_tokens(
+                    mapped_cls, mapped_fused_patches, patch_weights, visual_length
+                )
+            )
+
         visual_features = torch.stack(
             (mapped_cls, mapped_fused_patches), dim=1
         ).flatten(0, 1)
@@ -154,6 +165,11 @@ class DINOFrameAdapterCrossV2(nn.Module):
             position_ids=position_ids,
             extras={"patch_weights": patch_weights} if return_weights else None,
         )
+
+    @staticmethod
+    def _permute_video_tokens(cls, fused_patch, patch_weights, visual_length):
+        permutation = random_derangement(visual_length, device=cls.device)
+        return (cls[permutation], fused_patch[permutation], patch_weights[permutation])
 
     def similarity_aggregate(
         self,

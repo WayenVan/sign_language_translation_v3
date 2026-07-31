@@ -398,6 +398,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         labels: Optional[torch.Tensor] = None,  # [B, L]
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
+        # ------------ NOTE: special kwars for experimental features ------------
+        permute_video_tokens: Optional[bool] = False,
         **llm_forward_kwargs: dict,
     ):
         # Without explicit lengths, pixel_values must represent one video.
@@ -425,7 +427,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if inputs_embeds is None:
             if pixel_values is not None:
                 prepare_output = self.prepare_for_casual_lm(
-                    input_ids, pixel_values, pixel_values_length
+                    input_ids,
+                    pixel_values,
+                    pixel_values_length,
+                    permute_video_tokens=permute_video_tokens,
                 )
                 inputs_embeds = prepare_output.inputs_embeds
             else:
