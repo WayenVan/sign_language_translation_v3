@@ -29,8 +29,8 @@ else
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-8b-dino-b-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-8b-dinoframev2-shuffle-cross-test \
+  model=qwen3-1.7b-dino-b-dinoframecrossv2shuffle \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-dinoframev2-shuffle-cross-0731 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
@@ -52,3 +52,5 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
 # engine.training_args.dataloader_num_workers=10 # accelerate launch --num_processes=2 --mixed_precision=bf16 \
 # model.config.visual_adapter_kwargs.num_layers=4 \
 # model.config.video_token_scale=0.25 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
+# model=qwen3-8b-dino-b-dinoframecrossv2shuffle \
+#   engine.training_args.output_dir=outputs/qwen3-8b-dinoframev2-shuffle-cross-0730
