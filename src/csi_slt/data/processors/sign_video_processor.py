@@ -8,7 +8,8 @@ from transformers.utils import TensorType
 import numpy as np
 
 from collections.abc import Sequence
-from typing import Union
+from copy import deepcopy
+from typing import Any, Union
 import torch
 
 from albumentations import (
@@ -18,6 +19,7 @@ from albumentations import (
     Normalize,
     RandomCrop,
     ColorJitter,
+    NoOp,
 )
 
 
@@ -44,16 +46,39 @@ class SignVideoProcessor(BaseVideoProcessor):
     def __init__(self, **kwargs: Unpack[SignVideoKwargs]):
         super().__init__(**kwargs)
 
+    def _resolve_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Merge call-time kwargs with the processor's configured defaults.
+
+        Values explicitly supplied for this call take priority. Every other
+        valid field falls back to the corresponding instance/class attribute.
+        The returned dictionary is independent from both inputs, so consumers
+        may safely pop or mutate its values.
+        """
+        valid_keys = set(self.valid_kwargs.__annotations__)
+        unknown_keys = set(kwargs) - valid_keys
+        if unknown_keys:
+            unknown = ", ".join(sorted(unknown_keys))
+            raise TypeError(f"Unexpected video processing keyword(s): {unknown}.")
+
+        return {
+            key: deepcopy(kwargs[key] if key in kwargs else getattr(self, key, None))
+            for key in valid_keys
+        }
+
     @staticmethod
-    def build_train_transform(size, image_mean, image_std):
+    def build_train_transform(kwargs: dict[str, Any]):
         return Compose(
             [
                 # Resize(height=256, width=256),
-                RandomCrop(height=size["height"], width=size["width"], p=1.0),
+                RandomCrop(
+                    height=kwargs["size"]["height"],
+                    width=kwargs["size"]["width"],
+                    p=1.0,
+                ),
                 ColorJitter(p=0.75),
                 Normalize(
-                    mean=image_mean,
-                    std=image_std,
+                    mean=kwargs["image_mean"],
+                    std=kwargs["image_std"],
                     max_pixel_value=1.0,
                 ),
                 HorizontalFlip(p=0.5),
@@ -62,14 +87,18 @@ class SignVideoProcessor(BaseVideoProcessor):
         )
 
     @staticmethod
-    def build_predict_transform(size, image_mean, image_std):
+    def build_predict_transform(kwargs: dict[str, Any]):
         return Compose(
             [
                 # Resize(height=256, width=256),
-                CenterCrop(height=size["height"], width=size["width"], p=1.0),
+                CenterCrop(
+                    height=kwargs["size"]["height"],
+                    width=kwargs["size"]["width"],
+                    p=1.0,
+                ),
                 Normalize(
-                    mean=image_mean,
-                    std=image_std,
+                    mean=kwargs["image_mean"],
+                    std=kwargs["image_std"],
                     max_pixel_value=1.0,
                 ),
             ],
@@ -103,26 +132,21 @@ class SignVideoProcessor(BaseVideoProcessor):
     ):
         videos = self._prepare_videos(videos)
 
-        # Instance attributes provide defaults. Values supplied for this call
-        # temporarily override them without mutating the processor.
-        size = kwargs.pop("size", self.size)
-        image_mean = kwargs.pop("image_mean", self.image_mean)
-        image_std = kwargs.pop("image_std", self.image_std)
-        padding_to_multiple_of = kwargs.pop(
-            "padding_to_multiple_of", self.padding_to_multiple_of
-        )
+        resolved_kwargs = self._resolve_kwargs(kwargs)
 
         process_fn = (
-            self.build_train_transform(size, image_mean, image_std)
+            self.build_train_transform(resolved_kwargs)
             if training
-            else self.build_predict_transform(size, image_mean, image_std)
+            else self.build_predict_transform(resolved_kwargs)
         )
 
         processed_videos = []
         video_lengths = []
         for video in videos:
             video = self.pad_dim_to_multiple_of(
-                video, dim=0, multiple=padding_to_multiple_of
+                video,
+                dim=0,
+                multiple=resolved_kwargs["padding_to_multiple_of"],
             )
 
             video_lengths.append(video.shape[0])

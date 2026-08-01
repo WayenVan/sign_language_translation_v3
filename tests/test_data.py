@@ -34,7 +34,7 @@ def test_datamodule():
     collator = datamodule.train_collator
     collator.debug = True
 
-    datamodule.print_batch(batch_size=16, num_workers=1, random=True)
+    datamodule.print_batch(batch_size=16, num_workers=0, random=True)
 
     # loader = DataLoader(
     #     train_dataset,

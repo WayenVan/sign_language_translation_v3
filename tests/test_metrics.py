@@ -7,6 +7,15 @@ from csi_slt.engine.metrics import SLTMetric
 from csi_slt.constants import LANGUAGE_MAP
 
 
+class _FakeBertScoreMetric:
+    def __init__(self):
+        self.calls = []
+
+    def compute(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"f1": [0.8] * len(kwargs["predictions"])}
+
+
 def _get_language_id(language: str) -> int:
     """从 LANGUAGE_MAP.inverse 中反查语言 ID。"""
     for language_id, language_name in LANGUAGE_MAP.inverse.items():
@@ -14,6 +23,38 @@ def _get_language_id(language: str) -> int:
             return int(language_id)
 
     raise KeyError(f"Language {language!r} is not defined in LANGUAGE_MAP.")
+
+
+def test_bert_score_treats_empty_text_as_zero():
+    metric = object.__new__(SLTMetric)
+    metric.bert_score_model_type = "unused-test-model"
+    metric._bert_score_metric = _FakeBertScoreMetric()
+
+    score = metric._calculate_bert_score_f1(
+        predictions=["valid prediction", "", "   ", "prediction"],
+        references=["valid reference", "reference", "reference", ""],
+    )
+
+    assert score == 0.2
+    assert len(metric._bert_score_metric.calls) == 1
+    assert metric._bert_score_metric.calls[0]["predictions"] == [
+        "valid prediction"
+    ]
+    assert metric._bert_score_metric.calls[0]["references"] == ["valid reference"]
+
+
+def test_bert_score_skips_backend_when_all_text_is_empty():
+    metric = object.__new__(SLTMetric)
+    metric.bert_score_model_type = "unused-test-model"
+    metric._bert_score_metric = _FakeBertScoreMetric()
+
+    score = metric._calculate_bert_score_f1(
+        predictions=["", "   "],
+        references=["reference", "reference"],
+    )
+
+    assert score == 0.0
+    assert metric._bert_score_metric.calls == []
 
 
 def test_slt_metric_quick():

@@ -12,6 +12,7 @@ from ..misc.utils import deep_merge
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.trainer_utils import PredictionOutput
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
+from csi_slt.engine.metrics import SLTMetric
 
 from accelerate import Accelerator
 
@@ -30,7 +31,6 @@ def main(cfg: DictConfig):
     slt_model = SltModel.from_pretrained(
         cfg.model.checkpoint_dir,
     )
-    processor = SignTranslationProcessor.from_pretrained(cfg.model.checkpoint_dir)
 
     # create datamodule
     llm_name = slt_model.config.llm_model_name_or_path
@@ -40,11 +40,14 @@ def main(cfg: DictConfig):
     datamodule.setup()
 
     # generation config
-    #
     generation_config_args = OmegaConf.to_container(
         cfg.engine.generation_config, resolve=True
     )
     model_generation_config = slt_model.generation_config.to_dict()
+
+    metrics = SLTMetric(
+        processor=datamodule.processor,
+    )
 
     # create trainer
     training_args = SltTrainingArguments(
@@ -57,14 +60,20 @@ def main(cfg: DictConfig):
         model=slt_model,
         args=training_args,
         hydra_config=cfg,
-        processing_class=processor,
-        test_data_collator=datamodule.test_collator,
+        processing_class=datamodule.processor,
+        compute_metrics=metrics,
     )
+
+    gen_kwargs = {}
+    if cfg.experiment.permutation is True:
+        gen_kwargs["permute_video_tokens"] = True
 
     predictions = trainer.predict(
         test_dataset=datamodule.test_dataset,
         test_collator=datamodule.test_collator,
+        **gen_kwargs,
     )
+
     trainer.save_predictions(predictions)
 
 

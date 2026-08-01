@@ -83,6 +83,13 @@ class SignTranslationProcessor(ProcessorMixin):
             self.video_soft_token
         )
 
+        if self.video_soft_token_id == tokenizer.unk_token_id or tokenizer.encode(
+            self.video_soft_token, add_special_tokens=False
+        ) != [self.video_soft_token_id]:
+            raise ValueError(
+                f"{self.video_soft_token!r} is not a valid single tokenizer token."
+            )
+
         # Keep template sources instead of Jinja Template instances. ProcessorMixin
         # deep-copies __dict__ during save_pretrained(), while Template objects cannot
         # be deep-copied. The sources are JSON serializable and restore cleanly.

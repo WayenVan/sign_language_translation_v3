@@ -28,13 +28,6 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
             " The final output directory will be `<auto_output_root>/<model_name>`."
         },
     )
-    eval_permute_video_tokens: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to permute video tokens during evaluation. This is useful for testing the model's robustness to token order."
-        },
-    )
-
     @staticmethod
     def __init_output_base_name():
         now = datetime.now()

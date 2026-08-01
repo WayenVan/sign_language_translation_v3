@@ -1,5 +1,5 @@
 defaults:
-  - model: base_eval_model
+  - model: base_model
   - data: ph14t_*x224x224_qwen_multiling
   - engine: base_eval_engine
   - override hydra/hydra_logging: none
@@ -12,3 +12,9 @@ hydra:
   sweep:
     dir: .
   output_subdir: null
+
+model:
+  checkpoint_dir: ""
+
+experiment:
+  permutation: False

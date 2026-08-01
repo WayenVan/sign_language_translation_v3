@@ -574,7 +574,14 @@ class SLTMetric:
         predictions: Sequence[str],
         references: Sequence[str],
     ) -> float:
-        """计算一个语言分组内所有样本的平均 BERTScore-F1。"""
+        """计算一个语言分组内所有样本的平均 BERTScore-F1。
+
+        Empty predictions or references receive a score of zero. In addition
+        to being the conservative metric value, filtering them here avoids an
+        incompatibility between bert-score 0.3.x and Transformers 5.x: the
+        former calls a tokenizer method removed by the latter when encoding an
+        empty string.
+        """
 
         if not predictions:
             return 0.0
@@ -582,21 +589,34 @@ class SLTMetric:
         if len(predictions) != len(references):
             raise ValueError("predictions and references must have the same length.")
 
+        scores = np.zeros(len(predictions), dtype=np.float64)
+        valid_indices = [
+            index
+            for index, (prediction, reference) in enumerate(
+                zip(predictions, references)
+            )
+            if prediction.strip() and reference.strip()
+        ]
+
+        if not valid_indices:
+            return 0.0
+
         result = self._bert_score_metric.compute(
-            predictions=list(predictions),
-            references=list(references),
+            predictions=[predictions[index] for index in valid_indices],
+            references=[references[index] for index in valid_indices],
             model_type=self.bert_score_model_type,
         )
 
         f1_scores = np.asarray(result["f1"], dtype=np.float64)
 
-        if f1_scores.size != len(predictions):
+        if f1_scores.size != len(valid_indices):
             raise ValueError(
                 "BERTScore returned an unexpected number of F1 scores: "
-                f"{f1_scores.size}, expected {len(predictions)}."
+                f"{f1_scores.size}, expected {len(valid_indices)}."
             )
 
-        return float(f1_scores.mean())
+        scores[valid_indices] = f1_scores
+        return float(scores.mean())
 
     # ------------------------------------------------------------------
     # Metric composition

@@ -45,19 +45,20 @@ def test_slt_processor():
         "zh": "jinjas/zh_prompt.md.j2",
     }
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
-    video_processor = SignVideoProcessor(224, 224, downsample_rate=1)
+    video_processor = SignVideoProcessor(
+        image_mean=[0.6, 0.6, 0.6], image_std=[0.2, 0.2, 0.2]
+    )
     processor = SignTranslationProcessor(
         video_processor=video_processor,
         tokenizer=tokenizer,
         prompt_paths_per_language=prompt_paths_per_language,
-        mode="train",
     )
     dataset = Ph14TGeneralDataset(
         data_root="/root/dataset/PHOENIX-2014-T-release-v3",
         mode="train",
     )
-    collator = GeneralSLTCollator(processor=processor)
-    collator.debug = True
+    collator = GeneralSLTCollator(processor=processor, mode="eval")
+    # collator.debug = True
     dataloader = DataLoader(
         dataset, batch_size=2, shuffle=True, num_workers=0, collate_fn=collator
     )

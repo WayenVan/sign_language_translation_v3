@@ -15,6 +15,7 @@ from transformers.models.auto import AutoConfig, AutoModel, AutoModelForCausalLM
 
 from csi_slt.modeling_slt.cross_modal_contrastive_loss import CrossModalContrastiveLoss
 
+from peft import get_peft_model, LoraConfig
 from ..configuration_slt.configuration import SltConfig
 from .output_utils import (
     PrepareForCausalLMOutput,
@@ -120,6 +121,20 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.llm_config = get_text_config(self.llm.config)
         self._configure_generation()
 
+        # freeze the visual backbone and language model parameters by default; only the
+        for param in self.visual_backbone.parameters():
+            param.requires_grad = False
+        for param in self.llm.parameters():
+            param.requires_grad = False
+
+        # WARN: new lora code start here
+        if config.llm_lora:
+            if not config.llm_lora_config:
+                raise ValueError(
+                    "llm_lora_config must be provided when llm_lora is True."
+                )
+            self.llm = get_peft_model(self.llm, LoraConfig(**config.llm_lora_config))
+
         # Keep the existing attribute names for checkpoint compatibility.
         self.start_video_embds = nn.Parameter(
             torch.randn(
@@ -151,13 +166,32 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
 
-        for param in self.visual_backbone.parameters():
-            param.requires_grad = False
-        for param in self.llm.parameters():
-            param.requires_grad = False
-
         self._init_embedding_weights()
         self.post_init()
+
+        # NOTE: tie the weights when using LoRA initialization
+        if config.llm_lora:
+            self._register_llm_tied_weights()
+
+    def _register_llm_tied_weights(self):
+        """Register the actual embedding/head paths after PEFT wraps the LLM."""
+        input_embeddings = self.get_input_embeddings()
+        output_embeddings = self.get_output_embeddings()
+        if input_embeddings is None or output_embeddings is None:
+            return
+
+        module_names = {
+            id(module): name
+            for name, module in self.named_modules(remove_duplicate=False)
+        }
+        input_name = module_names.get(id(input_embeddings))
+        output_name = module_names.get(id(output_embeddings))
+        if input_name is None or output_name is None:
+            raise RuntimeError(
+                "Could not resolve the PEFT-wrapped input/output embedding paths."
+            )
+
+        self.all_tied_weights_keys[f"{output_name}.weight"] = f"{input_name}.weight"
 
     @classmethod
     def from_pretrained_components(
@@ -185,6 +219,30 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return cls(config=config, llm=llm, visual_backbone=visual_backbone)
 
         # fmt: on
+
+    @classmethod
+    def from_pretrained_with_new_lora(
+        cls, peft_config, checkpoint_dir: str, model_dtype="auto"
+    ):
+        model: SltModel = cls.from_pretrained(checkpoint_dir, dtype=model_dtype)
+
+        if model.config.llm_lora:
+            raise ValueError(
+                "The checkpoint already contains LoRA. "
+                "Use SltModel.from_pretrained() to load it."
+            )
+
+        model.llm = get_peft_model(model.llm, peft_config)
+
+        # setup config
+        model.config.llm_lora = True
+        model.config.llm_lora_config = {
+            key: list(value) if isinstance(value, set) else value
+            for key, value in peft_config.to_dict().items()
+        }
+        model._register_llm_tied_weights()
+
+        return model
 
     def _configure_generation(self):
         self.config.bos_token_id = self.llm_config.bos_token_id

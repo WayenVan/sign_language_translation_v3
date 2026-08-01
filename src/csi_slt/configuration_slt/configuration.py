@@ -41,6 +41,8 @@ class SltConfig(PretrainedConfig):
         video_token_scale: float = 1.0,
         llm_model_name_or_path: str = "google/gemma-3-1b-it",
         llm_init_kwargs: Optional[Dict[str, Any]] = None,
+        llm_lora: bool = False,
+        llm_lora_config: Optional[Dict[str, Any]] = None,
         visual_backbone_type: str = "resnet50",
         visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
@@ -111,6 +113,8 @@ class SltConfig(PretrainedConfig):
         self.video_soft_token_id = video_soft_token_id
         self.llm_model_name_or_path = llm_model_name_or_path
         self.llm_init_kwargs = llm_init_kwargs if llm_init_kwargs is not None else {}
+        self.llm_lora = llm_lora
+        self.llm_lora_config = llm_lora_config if llm_lora_config is not None else {}
         self.visual_backbone_type = visual_backbone_type
         self.visual_backbone_config = (
             visual_backbone_config if visual_backbone_config is not None else {}

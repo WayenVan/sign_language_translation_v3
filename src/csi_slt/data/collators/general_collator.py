@@ -48,22 +48,9 @@ class GeneralSLTCollator:
 
         input_text = None
         label_text = None
+
         if self.debug:
-            input_text = self.tokenizer.batch_decode(
-                batch_processed["input_ids"], skip_special_tokens=False
-            )
-            label_ids = batch_processed["labels"]
-            label_ids = torch.where(
-                label_ids == -100,
-                torch.full_like(label_ids, self.tokenizer.pad_token_id).to(
-                    label_ids.device
-                ),
-                label_ids,
-            )
-            label_text = self.tokenizer.batch_decode(
-                label_ids,
-                skip_special_tokens=False,
-            )
+            self._debug(batch_processed)
 
         return {
             **batch_processed.data,
@@ -73,3 +60,20 @@ class GeneralSLTCollator:
             "input_text": input_text,
             "label_text": label_text,
         }
+
+    def _debug(self, batch_processed):
+        input_text = self.tokenizer.batch_decode(
+            batch_processed["input_ids"], skip_special_tokens=False
+        )
+        label_ids = batch_processed["labels"]
+        label_ids = torch.where(
+            label_ids == -100,
+            torch.full_like(label_ids, self.tokenizer.pad_token_id).to(
+                label_ids.device
+            ),
+            label_ids,
+        )
+        label_text = self.tokenizer.batch_decode(
+            label_ids,
+            skip_special_tokens=False,
+        )

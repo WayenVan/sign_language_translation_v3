@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset, ConcatDataset
 from typing import Literal
 import os
+from functools import cached_property
 
 
 class DataModule:
@@ -127,13 +128,14 @@ class DataModule:
                             fraction=self.cfg.test_fraction,
                         )
 
-    @property
+    @cached_property
     def processor(self):
         return instantiate(
             self.cfg.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
             prompt_paths_per_language=self._prompt_paths,
+            _convert_="all",
         )
 
     @property
