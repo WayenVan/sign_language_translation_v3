@@ -20,7 +20,7 @@ set_seed(42)
 
 
 @hydra.main(
-    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="base_train_ft"
+    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/ft"
 )
 def main(cfg: DictConfig):
     acc = Accelerator()

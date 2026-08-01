@@ -1,8 +1,10 @@
+# @package _global_
+
 defaults:
   # - data: ph14t_*x224x224_gemmaslt_multiling
-  - data: ph
-  - override hydra/hydra_logging: none
-  - override hydra/job_logging: none
+  - /data: ph
+  - override /hydra/hydra_logging: none
+  - override /hydra/job_logging: none
   - _self_
 
 hydra:
@@ -21,7 +23,7 @@ model:
     bias: "none"
     target_modules:
       - "q_proj"
-      - k"k_proj"
+      - "k_proj"
       - "v_proj"
       - "o_proj"
 

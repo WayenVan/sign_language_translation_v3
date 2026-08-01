@@ -22,7 +22,7 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
-@hydra.main(version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="base_eval")
+@hydra.main(version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="eval/base")
 def main(cfg: DictConfig):
     # accelerate initialize
     acc = Accelerator()

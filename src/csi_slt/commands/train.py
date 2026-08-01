@@ -25,7 +25,7 @@ set_seed(42)
 
 
 @hydra.main(
-    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="base_train"
+    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/base"
 )
 def main(cfg: DictConfig):
     # accelerate initialize
