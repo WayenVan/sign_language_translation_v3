@@ -1,8 +1,7 @@
 # @package _global_
 
 defaults:
-  # - data: ph14t_*x224x224_gemmaslt_multiling
-  - /data: ph
+  - /data: ph14t_*x224x224_qwen_multiling
   - override /hydra/hydra_logging: none
   - override /hydra/job_logging: none
   - _self_
@@ -17,8 +16,8 @@ hydra:
 model:
   checkpoint_dir: ""
   peft_config:
-    r: 16
-    lora_alpha: 32
+    r: 8
+    lora_alpha: 16
     lora_dropout: 0.05
     bias: "none"
     target_modules:
@@ -29,23 +28,31 @@ model:
 
 engine:
   training_args:
-    num_train_epochs: 80
+    num_train_epochs: 10
     per_device_train_batch_size: 2
-    per_device_eval_batch_size: 2
+    per_device_eval_batch_size: 1
+    # gradient_accumulation_steps: 4
     report_to: wandb
     remove_unused_columns: False
     ddp_find_unused_parameters: False
     save_strategy: steps
-    save_steps: 4000
-    save_total_limit: 1
-    logging_steps: 50
+    save_steps: 1000
+    save_total_limit: 2
+    logging_steps: 25
     eval_strategy: "steps"
-    eval_steps: 4000
-    learning_rate: 1e-5
+    eval_steps: 1000
+    load_best_model_at_end: True
+    metric_for_best_model: "eval_overall_weighted_bleu4"
+    greater_is_better: True
+    learning_rate: 5e-5
+    weight_decay: 0.01
+    warmup_ratio: 0.05
+    max_grad_norm: 1.0
     dataloader_num_workers: 4
-    auto_output_dir: True
-    auto_output_root: outputs/demos_ft_peft
+    auto_output_dir: False
+    disable_tqdm: false
     lr_scheduler_type: cosine
+    output_dir: outputs/test
     dataloader_persistent_workers: True
   generation_config: # NOTE: override the generation config in model config
     max_new_tokens: 128

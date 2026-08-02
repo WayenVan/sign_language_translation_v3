@@ -13,10 +13,12 @@ class DataModule:
         self,
         cfg: DictConfig,
         tokenizer,
+        accelerator=None,
     ):
         super().__init__()
         self.cfg = cfg
         self.tokenizer = tokenizer
+        self.accelerator = accelerator
 
     @property
     def chat_template(self) -> str | None:
@@ -97,6 +99,10 @@ class DataModule:
         if stage == "train" or stage is None:
             self.train_dataset = instantiate(self.cfg.train.dataset)
             self.val_dataset = instantiate(self.cfg.val.dataset)
+
+            self.train_dataset.prepare(self.tokenizer)
+            self.val_dataset.prepare(self.tokenizer)
+
             if self.cfg.fraction_dataset:
                 # If fraction_dataset is True, create a subset of the training dataset
                 #
@@ -120,6 +126,7 @@ class DataModule:
         if stage == "test" or stage is None:
             if self.cfg.test is not None:
                 self.test_dataset = instantiate(self.cfg.test.dataset)
+                self.test_dataset.prepare(self.tokenizer)
                 if self.cfg.fraction_dataset:
                     # If fraction_dataset is True, create a subset of the test dataset
                     if self.cfg.test_fraction < 1.0:

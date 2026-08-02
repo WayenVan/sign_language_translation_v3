@@ -1,10 +1,29 @@
 from torch.utils.data import Dataset
 import numpy
 import os
+from pathlib import Path
 import polars as pl
-from datasets import load_dataset
+from datasets import config as datasets_config
+from datasets import load_dataset, load_from_disk
+from filelock import FileLock
 import pyspng
 from datasets import Dataset as HFDataset
+
+
+def _estimate_label_lengths(batch, tokenizer):
+    """Tokenize labels in batches; ``tokenizer`` participates in map hashing."""
+
+    eos_token = tokenizer.eos_token or ""
+    labels = [text + eos_token for text in batch["translation"]]
+    tokenized = tokenizer(
+        labels,
+        add_special_tokens=False,
+        padding=False,
+        truncation=False,
+    )
+    return {
+        "label_ids_length": [len(input_ids) for input_ids in tokenized["input_ids"]]
+    }
 
 
 class Ph14TMultiLinglDataset(Dataset):
@@ -59,13 +78,6 @@ class Ph14TMultiLinglDataset(Dataset):
         )
         self.assemble_df = assemble_df
 
-        # 只读取 frames 列的列表长度，不打开任何图片。
-        self.lengths = (
-            self.assemble_df.select(pl.col("frames").list.len().alias("length"))
-            .get_column("length")
-            .to_list()
-        )
-
         self.assemble_dataset = HFDataset(self.assemble_df.to_arrow())
 
     def __len__(self):
@@ -98,15 +110,70 @@ class Ph14TMultiLinglDataset(Dataset):
 
         return ret
 
+    def prepare(self, tokenizer, cache_dir: str | os.PathLike | None = None):
+        """Use Datasets' native fingerprint/cache system for token lengths."""
+
+        cache_root = Path(cache_dir or datasets_config.HF_DATASETS_CACHE)
+        cache_root = cache_root / "csi_slt" / "ph14t_multilingual"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        assembled_path = cache_root / (
+            f"assembled-{self.mode}-{self.assemble_dataset._fingerprint}"
+        )
+        lock = FileLock(f"{assembled_path}.lock")
+
+        # Dataset(table) is memory-backed and therefore has no directory in which
+        # map() can place reusable cache files. Persist it once, then let map()
+        # derive cache fingerprints from the function, its arguments (including
+        # the tokenizer), and the disk-backed dataset fingerprint.
+        with lock:
+            if not assembled_path.exists():
+                self.assemble_dataset.save_to_disk(assembled_path)
+
+            self.assemble_dataset = load_from_disk(assembled_path)
+            self.assemble_dataset = self.assemble_dataset.map(
+                _estimate_label_lengths,
+                batched=True,
+                batch_size=1000,
+                fn_kwargs={"tokenizer": tokenizer},
+                load_from_cache_file=True,
+                desc=f"Tokenizing {self.mode} labels for length bucketing",
+            )
+
+        self.label_ids_lengths = [
+            int(length) for length in self.assemble_dataset["label_ids_length"]
+        ]
+        # 只读取 frames 列的列表长度，不打开任何图片。
+        self.video_lengths = (
+            self.assemble_df.select(pl.col("frames").list.len().alias("length"))
+            .get_column("length")
+            .to_list()
+        )
+
+    @classmethod
+    def create_prepared_dataset(
+        cls, tokenizer, *args, cache_dir: str | os.PathLike | None = None, **kwargs
+    ):
+        dataset = cls(*args, **kwargs)
+        dataset.prepare(tokenizer, cache_dir=cache_dir)
+        return dataset
+
 
 if __name__ == "__main__":
+    from transformers import AutoTokenizer
+
     data_root = "dataset/PHOENIX-2014-T-release-v3"
     zh_data_root = "large_files/ph14t_chinese"
     en_data_root = "large_files/ph14t_english"
 
-    ph14t_dataset = Ph14TMultiLinglDataset(
-        data_root, zh_data_root=zh_data_root, en_data_root=en_data_root, mode="train"
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    ph14t_dataset = Ph14TMultiLinglDataset.create_prepared_dataset(
+        tokenizer,
+        data_root,
+        zh_data_root=zh_data_root,
+        en_data_root=en_data_root,
+        mode="train",
     )
+
     print(f"Dataset size: {len(ph14t_dataset)}")
     # print(ph14t_dataset.assemble_df.columns)
     # print(ph14t_dataset.origin_df.columns)

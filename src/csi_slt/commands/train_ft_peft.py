@@ -14,6 +14,7 @@ from peft import (
     LoraConfig,
     TaskType,
 )
+from csi_slt.engine.metrics import SLTMetric
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
@@ -21,9 +22,7 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
-@hydra.main(
-    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="peft/base"
-)
+@hydra.main(version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="peft/base")
 def main(cfg: DictConfig):
     # create model
     # peft confg
@@ -36,11 +35,14 @@ def main(cfg: DictConfig):
         peft_config, cfg.model.checkpoint_dir
     )
 
+    for name, param in slt_model.named_parameters():
+        print(name, param.requires_grad)
+
     # create datamodule
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)
 
     datamodule = DataModule(cfg.data, tokenizer=tokenizer)
-    datamodule.setup("train")
+    datamodule.setup()
 
     # generation config
     generation_config_args = OmegaConf.to_container(
@@ -55,15 +57,19 @@ def main(cfg: DictConfig):
         ),
         **cfg.engine.training_args,
     )
+
+    metrics = SLTMetric(processor=datamodule.processor)
+
     trainer = SltTrainer(
         model=slt_model,
         args=training_args,
         hydra_config=cfg,
         processing_class=datamodule.processor,
         train_dataset=datamodule.train_dataset,
-        eval_dataset=datamodule.val_dataset,
+        eval_dataset=datamodule.test_dataset,
         train_data_collator=datamodule.train_collator,
-        eval_data_collator=datamodule.val_collator,
+        eval_data_collator=datamodule.test_collator,
+        compute_metrics=metrics,
     )
 
     # trainer.evaluate()

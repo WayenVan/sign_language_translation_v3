@@ -1,39 +1,55 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from itertools import chain
 
+import numpy as np
 import torch
 from torch.utils.data import ConcatDataset, Dataset, Sampler, Subset
 from transformers.trainer_pt_utils import get_length_grouped_indices
 
 
-def get_dataset_lengths(dataset: Dataset) -> list[int]:
+def get_dataset_lengths(dataset: Dataset):
     """递归取得 Dataset、Subset 和 ConcatDataset 的样本长度。"""
 
     if isinstance(dataset, Subset):
-        base_lengths = get_dataset_lengths(dataset.dataset)
-        return [base_lengths[int(index)] for index in dataset.indices]
+        video_lengths, label_ids_lengths = get_dataset_lengths(dataset.dataset)
+        indices = np.asarray(dataset.indices, dtype=np.int64)
+        return video_lengths[indices], label_ids_lengths[indices]
 
     if isinstance(dataset, ConcatDataset):
-        return list(
-            chain.from_iterable(
-                get_dataset_lengths(sub_dataset) for sub_dataset in dataset.datasets
-            )
+        child_lengths = [
+            get_dataset_lengths(sub_dataset) for sub_dataset in dataset.datasets
+        ]
+        return (
+            np.concatenate(
+                [video_lengths for video_lengths, _ in child_lengths]
+            ),
+            np.concatenate(
+                [label_ids_lengths for _, label_ids_lengths in child_lengths]
+            ),
         )
 
-    lengths = getattr(dataset, "lengths", None)
-    if lengths is None:
-        raise TypeError(f"{type(dataset).__name__} must expose a `lengths` attribute.")
+    video_lengths = getattr(dataset, "video_lengths", None)
+    label_ids_lengths = getattr(dataset, "label_ids_lengths", None)
 
-    lengths = [int(length) for length in lengths]
+    if video_lengths is None or label_ids_lengths is None:
+        raise TypeError(
+            f"{type(dataset).__name__} must expose `video_lengths` and `label_ids_lengths` attributes."
+        )
 
-    if len(lengths) != len(dataset):
+    video_lengths = [int(length) for length in video_lengths]
+    label_ids_lengths = [int(length) for length in label_ids_lengths]
+
+    if len(video_lengths) != len(dataset):
         raise ValueError(
-            f"Length metadata mismatch: {len(lengths)=}, dataset_size={len(dataset)}."
+            f"Length metadata mismatch: {len(video_lengths)=}, dataset_size={len(dataset)}."
+        )
+    if len(label_ids_lengths) != len(dataset):
+        raise ValueError(
+            f"Length metadata mismatch: {len(label_ids_lengths)=}, dataset_size={len(dataset)}."
         )
 
-    return lengths
+    return np.array(video_lengths), np.array(label_ids_lengths)
 
 
 class GlobalLengthBucketSampler(Sampler[int]):

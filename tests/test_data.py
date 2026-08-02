@@ -13,7 +13,7 @@ from csi_slt.data.datamodule import DataModule
 def test_datamodule():
     with hydra.initialize(config_path="../configs"):
         cfg = hydra.compose(
-            config_name="base_train",
+            config_name="train/base",
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
                 # "model=gemma3-1b-dino-base",

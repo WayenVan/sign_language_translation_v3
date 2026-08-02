@@ -65,9 +65,10 @@
         "--mixed_precision=fp16",
         "-m",
         "csi_slt.commands.train_ft_peft",
+        "model.checkpoint_dir=outputs/qwen3-1.7b-dinoframev2-shuffle-cross-0731//checkpoint-68000",
+        "data.processor.video_token_scale=1.0",
         "engine.training_args.report_to=none",
-        "engine.training_args.auto_output_root=./outputs/debug_outputs",
-        "engine.training_args.dataloader_num_workers=0"
+        "engine.training_args.output_dir=./outputs/debug_outputs"
       ]
     },
     {

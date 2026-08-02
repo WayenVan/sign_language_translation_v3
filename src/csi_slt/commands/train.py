@@ -72,7 +72,7 @@ def main(cfg: DictConfig):
         **cfg.engine.training_args,
     )
     metrics = SLTMetric(
-        processor=datamodule.val_processor,
+        processor=datamodule.processor
         priodic_metrics=[
             XCometLiteMetric(
                 accelerator=acc,
