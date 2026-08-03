@@ -23,6 +23,7 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 if [[ "${1:-}" == "debug" ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
+  export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 使用这个
 else
   export WANDB_PROJECT=sign_language_translation_v3.1
   REPORT_TO=wandb
@@ -44,25 +45,24 @@ DATASET_PATH=$(prepare_dataset \
 echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-8b-dino-b-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-8b-dino-b-dinoframev2-shuffle-cross-test \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
+  model.config.contrastive_loss_weight=0.0 \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0803.2 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=3 \
+  engine.training_args.dataloader_num_workers=8 \
   engine.training_args.dataloader_persistent_workers=False \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE" \
   engine.training_args.report_to="$REPORT_TO" \
+  engine.training_args.ddp_find_unused_parameters=True \
   data=ph14t_*x224x224_qwen_multiling \
-  data.data_root="$DATASET_PATH" \
-  data.train.processor.video_token_scale=1.0 \
-  data.val.processor.video_token_scale=1.0 \
-  data.test.processor.video_token_scale=1.0 \
-  data.train.processor.video_padding_to_multiple_of=4 \
-  data.val.processor.video_padding_to_multiple_of=4 \
-  data.test.processor.video_padding_to_multiple_of=4
+  data.processor.video_token_scale=1.0 \
+  data.processor.video_processor.padding_to_multiple_of=4 \
+  data.processor.video_processor.do_normalize=False # NOTE: 很重要！！！
+
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
 # engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train_ft_peft \
