@@ -20,6 +20,7 @@ from albumentations import (
     RandomCrop,
     ColorJitter,
     NoOp,
+    Resize,
 )
 
 
@@ -32,12 +33,15 @@ class SignVideoKwargs(VideosKwargs, total=False):
 class SignVideoProcessor(BaseVideoProcessor):
     _auto_class = "AutoVideoProcessor"
 
+    # processor kwargs
     model_input_names = ["pixel_values", "pixel_values_lengths"]
     image_mean = [0.485, 0.456, 0.406]
     image_std = [0.229, 0.224, 0.225]
-    size = {"height": 224, "width": 224}
+    crop_size = {"height": 224, "width": 224}
     padding_to_multiple_of = 4
     do_normalize = True
+    do_resize = False
+    size = {"height": 224, "width": 224}
 
     # ------- class attributes for input validation -------
     expected_input_size = {"height": 256, "width": 256}
@@ -72,10 +76,18 @@ class SignVideoProcessor(BaseVideoProcessor):
             [
                 # Resize(height=256, width=256),
                 RandomCrop(
+                    height=kwargs["crop_size"]["height"],
+                    width=kwargs["crop_size"]["width"],
+                    p=1.0,
+                ),
+                HorizontalFlip(p=0.5),
+                Resize(
                     height=kwargs["size"]["height"],
                     width=kwargs["size"]["width"],
                     p=1.0,
-                ),
+                )
+                if kwargs["do_resize"]
+                else NoOp(),
                 ColorJitter(p=0.75),
                 Normalize(
                     mean=kwargs["image_mean"],
@@ -84,7 +96,6 @@ class SignVideoProcessor(BaseVideoProcessor):
                 )
                 if kwargs["do_normalize"]
                 else NoOp(),
-                HorizontalFlip(p=0.5),
             ],
             p=1.0,
         )
@@ -95,10 +106,17 @@ class SignVideoProcessor(BaseVideoProcessor):
             [
                 # Resize(height=256, width=256),
                 CenterCrop(
+                    height=kwargs["crop_size"]["height"],
+                    width=kwargs["crop_size"]["width"],
+                    p=1.0,
+                ),
+                Resize(
                     height=kwargs["size"]["height"],
                     width=kwargs["size"]["width"],
                     p=1.0,
-                ),
+                )
+                if kwargs["do_resize"]
+                else NoOp(),
                 Normalize(
                     mean=kwargs["image_mean"],
                     std=kwargs["image_std"],

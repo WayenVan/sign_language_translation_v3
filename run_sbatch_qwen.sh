@@ -10,6 +10,8 @@
 
 set -euo pipefail
 
+export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
+
 SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
 
 cd "$SCRIPT_DIR"
@@ -23,7 +25,6 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 if [[ "${1:-}" == "debug" ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
-  export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 使用这个
 else
   export WANDB_PROJECT=sign_language_translation_v3.1
   REPORT_TO=wandb
@@ -39,19 +40,18 @@ else
 fi
 
 # 准备数据集，函数输出 DATASET_PATH
-DATASET_PATH=$(prepare_dataset \
-  "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
-  "$HOME/localscratch/ph14t")
-echo "DATASET_PATH=$DATASET_PATH"
+# DATASET_PATH=$(prepare_dataset \
+#   "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
+#   "$HOME/localscratch/ph14t")
+# echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  model.config.contrastive_loss_weight=0.0 \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0803.2 \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0803.384x384 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=8 \
-  engine.training_args.dataloader_persistent_workers=False \
+  engine.training_args.dataloader_num_workers=12 \
+  engine.training_args.dataloader_persistent_workers=True \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
@@ -61,6 +61,8 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   data=ph14t_*x224x224_qwen_multiling \
   data.processor.video_token_scale=1.0 \
   data.processor.video_processor.padding_to_multiple_of=4 \
+  data.processor.video_processor.size.height=384 \
+  data.processor.video_processor.size.width=384 \
   data.processor.video_processor.do_normalize=False # NOTE: 很重要！！！
 
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
