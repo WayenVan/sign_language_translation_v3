@@ -35,9 +35,6 @@ def main(cfg: DictConfig):
         peft_config, cfg.model.checkpoint_dir
     )
 
-    for name, param in slt_model.named_parameters():
-        print(name, param.requires_grad)
-
     # create datamodule
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)
 

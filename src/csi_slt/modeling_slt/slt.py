@@ -209,6 +209,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
+        llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
         # Ensure lm_head and input embeddings are tied even when the source model
         # did not tie them.
         llm.tie_weights(recompute_mapping=True)

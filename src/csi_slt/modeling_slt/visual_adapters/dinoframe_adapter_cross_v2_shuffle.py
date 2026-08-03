@@ -28,6 +28,7 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
         input_dim: int,
         output_dim: int,
         hidden_dim: int | None = None,
+        cls_input_dim: int | None = None,
         temporal_hidden_dim: int | None = None,
         temperature: float = 0.1,
         temporal_gate_init: float = -2.0,
@@ -44,6 +45,7 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             input_dim=input_dim,
             output_dim=output_dim,
             hidden_dim=hidden_dim,
+            cls_input_dim=cls_input_dim,
             temporal_hidden_dim=temporal_hidden_dim,
             temperature=temperature,
             temporal_gate_init=temporal_gate_init,
@@ -127,9 +129,9 @@ if __name__ == "__main__":
     from torch import Tensor
 
     # Original adapter test
-    B, N, D = 8, 16, 768
-    cls_token = torch.randn(B, D).cuda()
-    patch_features = torch.randn(B, N, D).cuda()
+    B, N, D_PATCH, D_CLS = 8, 16, 768, 1024
+    cls_token = torch.randn(B, D_CLS).cuda()
+    patch_features = torch.randn(B, N, D_PATCH).cuda()
     visual_length = torch.tensor([2, 6]).cuda()
 
     visual_backbone_output = VisualBackboneOutput(
@@ -138,7 +140,11 @@ if __name__ == "__main__":
         visual_length=visual_length,
     )
 
-    adapter = DINOFrameAdapterCrossV2Shuffle(input_dim=D, output_dim=512).cuda()
+    adapter = DINOFrameAdapterCrossV2Shuffle(
+        input_dim=D_PATCH,
+        cls_input_dim=D_CLS,
+        output_dim=512,
+    ).cuda()
     adapter.eval()
     with torch.no_grad():
         output = adapter(visual_backbone_output)

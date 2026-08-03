@@ -20,10 +20,12 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2_shuffle import (
     DINOFrameAdapterCrossV2Shuffle,
 )
+from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import CRadioV4Backbone
 
 VISUAL_BACKBONES: Dict[str, nn.Module] = {
     "dinov2": DinoV2Backbone,
     "pretrained": PretrainedBackbone,
+    "c_radio_v4": CRadioV4Backbone,
 }
 VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "token_sampler": TokenSampleAdapter,
@@ -34,4 +36,5 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "dinoframe_cross": DINOFrameAdapterCross,
     "dinoframe_cross_v2": DINOFrameAdapterCrossV2,  # WARN: Two-token V2 adapter.
     "dinoframe_cross_v2_shuffle": DINOFrameAdapterCrossV2Shuffle,
+    "c_radio_v4": CRadioV4Backbone,
 }

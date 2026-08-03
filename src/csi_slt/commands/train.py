@@ -72,7 +72,7 @@ def main(cfg: DictConfig):
         **cfg.engine.training_args,
     )
     metrics = SLTMetric(
-        processor=datamodule.processor
+        processor=datamodule.processor,
         priodic_metrics=[
             XCometLiteMetric(
                 accelerator=acc,
@@ -85,7 +85,7 @@ def main(cfg: DictConfig):
         model=slt_model,
         args=training_args,
         hydra_config=cfg,
-        processing_class=datamodule.val_processor,
+        processing_class=datamodule.processor,
         train_dataset=datamodule.train_dataset,
         eval_dataset=datamodule.test_dataset,
         train_data_collator=datamodule.train_collator,

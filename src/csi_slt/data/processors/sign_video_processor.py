@@ -37,6 +37,7 @@ class SignVideoProcessor(BaseVideoProcessor):
     image_std = [0.229, 0.224, 0.225]
     size = {"height": 224, "width": 224}
     padding_to_multiple_of = 4
+    do_normalize = True
 
     # ------- class attributes for input validation -------
     expected_input_size = {"height": 256, "width": 256}
@@ -80,7 +81,9 @@ class SignVideoProcessor(BaseVideoProcessor):
                     mean=kwargs["image_mean"],
                     std=kwargs["image_std"],
                     max_pixel_value=1.0,
-                ),
+                )
+                if kwargs["do_normalize"]
+                else NoOp(),
                 HorizontalFlip(p=0.5),
             ],
             p=1.0,
@@ -100,7 +103,9 @@ class SignVideoProcessor(BaseVideoProcessor):
                     mean=kwargs["image_mean"],
                     std=kwargs["image_std"],
                     max_pixel_value=1.0,
-                ),
+                )
+                if kwargs["do_normalize"]
+                else NoOp(),
             ],
             p=1.0,
         )
@@ -237,5 +242,6 @@ if __name__ == "__main__":
     video_processor = SignVideoProcessor(
         padding_to_multiple_of=4,
         size={"height": 256, "width": 256},
+        do_normalize=False,
     )
     print(video_processor)
