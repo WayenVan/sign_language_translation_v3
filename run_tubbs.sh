@@ -18,16 +18,18 @@ fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0803 \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0804.512x512 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=8 \
+  engine.training_args.dataloader_num_workers=12 \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm=False \
   engine.training_args.report_to="$REPORT_TO" \
   data=ph14t_*x224x224_qwen_multiling \
+  data.processor.video_processor.size.height=512 \
+  data.processor.video_processor.size.width=512 \
   data.processor.video_token_scale=1.0 \
   data.processor.video_processor.padding_to_multiple_of=4 \
   data.processor.video_processor.do_normalize=False
