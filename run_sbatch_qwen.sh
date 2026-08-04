@@ -4,7 +4,7 @@
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-h100
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256g
 
@@ -45,12 +45,12 @@ fi
 #   "$HOME/localscratch/ph14t")
 # echo "DATASET_PATH=$DATASET_PATH"
 
-accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
+accelerate launch --num_processes=3 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0803.384x384 \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0803.512x512 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=12 \
+  engine.training_args.dataloader_num_workers=8 \
   engine.training_args.dataloader_persistent_workers=True \
   engine.training_args.eval_steps=4000 \
   engine.training_args.save_steps=4000 \
@@ -61,8 +61,9 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   data=ph14t_*x224x224_qwen_multiling \
   data.processor.video_token_scale=1.0 \
   data.processor.video_processor.padding_to_multiple_of=4 \
-  data.processor.video_processor.size.height=384 \
-  data.processor.video_processor.size.width=384 \
+  data.processor.video_processor.size.height=512 \
+  data.processor.video_processor.size.width=512 \
+  data.processor.video_processor.do_resize=True \
   data.processor.video_processor.do_normalize=False # NOTE: 很重要！！！
 
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
