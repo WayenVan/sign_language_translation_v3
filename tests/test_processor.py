@@ -44,9 +44,9 @@ def test_slt_processor():
         "de": "jinjas/de_prompt.md.j2",
         "zh": "jinjas/zh_prompt.md.j2",
     }
-    tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B", trust_remote_code=True)
     video_processor = SignVideoProcessor(
-        image_mean=[0.6, 0.6, 0.6], image_std=[0.2, 0.2, 0.2]
+        # image_mean=[0.6, 0.6, 0.6], image_std=[0.2, 0.2, 0.2]
     )
     processor = SignTranslationProcessor(
         video_processor=video_processor,
@@ -54,10 +54,10 @@ def test_slt_processor():
         prompt_paths_per_language=prompt_paths_per_language,
     )
     dataset = Ph14TGeneralDataset(
-        data_root="/root/dataset/PHOENIX-2014-T-release-v3",
+        data_root="dataset/PHOENIX-2014-T-release-v3",
         mode="train",
     )
-    collator = GeneralSLTCollator(processor=processor, mode="eval")
+    collator = GeneralSLTCollator(processor=processor, mode="train")
     # collator.debug = True
     dataloader = DataLoader(
         dataset, batch_size=2, shuffle=True, num_workers=0, collate_fn=collator
@@ -78,6 +78,6 @@ def test_slt_processor_checkpoint():
 
 if __name__ == "__main__":
     # test_processor_save_load()
-    # test_slt_processor()
+    test_slt_processor()
     # test_slt_processor_checkpoint()
-    test_slt_processor_save_load()
+    # test_slt_processor_save_load()

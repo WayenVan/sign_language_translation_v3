@@ -195,17 +195,14 @@ class SignTranslationProcessor(ProcessorMixin):
             src_lang = [src_lang]
 
         if training:
-            video_batch_features = self.video_processor(
-                videos,
-                training=True,
-                **videos_kwargs,
-            )
+            videos_kwargs["training"] = True
         else:
-            video_batch_features = self.video_processor(
-                videos,
-                training=False,
-                **videos_kwargs,
-            )
+            videos_kwargs["training"] = False
+
+        video_batch_features = self.video_processor(
+            videos,
+            **videos_kwargs,
+        )
 
         video_lengths = video_batch_features.pixel_values_lengths.cpu().numpy()
         video_lengths_tensor = video_batch_features.pixel_values_lengths

@@ -99,8 +99,8 @@ class Ph14TMultiLinglDataset(Dataset):
 
         ret = dict(
             id=data_info["name"],
-            # NOTE: [time, height, width, channel], normalized to [0, 1]
-            video=numpy.array(video_frame, dtype=numpy.float32) / 255.0,
+            # THWC uint8 in [0, 255]; SignVideoProcessor converts it to float32.
+            video=numpy.array(video_frame, dtype=numpy.uint8),
             text=data_info["translation"],
             lang=data_info["lang"],
         )

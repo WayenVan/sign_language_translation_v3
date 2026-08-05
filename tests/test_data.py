@@ -17,7 +17,7 @@ def test_datamodule():
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
                 # "model=gemma3-1b-dino-base",
-                # "data.processor.video_processor.image_mean=[0.6, 0.6, 0.6]",
+                "data.processor.video_processor.do_normalize=False",
             ],
         )
 
