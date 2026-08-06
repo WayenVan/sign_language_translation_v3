@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
+# export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
 
 SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
 
@@ -47,7 +47,7 @@ fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   model=qwen3-1.7b-cradio-h-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-h-dinoframecrossv2shuffle-0805.224x224 \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-h-dinoframecrossv2shuffle-0806.224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=6 \
