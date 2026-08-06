@@ -17,8 +17,8 @@ else
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-cradio-h-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-h-dinoframecrossv2shuffle-0805.224x224 \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0806.224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \

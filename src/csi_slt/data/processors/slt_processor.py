@@ -1,14 +1,9 @@
 from transformers.processing_utils import ProcessorMixin
-from transformers.feature_extraction_utils import FeatureExtractionMixin
-from transformers.models.gemma3.processing_gemma3 import Gemma3Processor
 from transformers.image_processing_utils import (
-    ImageProcessingMixin,
-    BaseImageProcessor,
     BatchFeature,
 )
-from typing import Any
-from transformers.utils import TensorType, filter_out_non_signature_kwargs
-from transformers.processing_utils import ProcessingKwargs, TextKwargs, Unpack
+from transformers.utils import TensorType
+from transformers.processing_utils import ProcessingKwargs, Unpack
 import numpy as np
 from transformers.tokenization_utils_base import TextInput
 

@@ -7,7 +7,10 @@ from transformers.processing_utils import Unpack
 from transformers.utils import TensorType
 from typing import Any
 import torch
+from torchvision import tv_tensors
 from torchvision.transforms import v2
+
+from csi_slt.data.processors.video_transforms import RandomVideoSpeed
 
 
 class SignVideoKwargs(VideosKwargs, total=False):
@@ -15,6 +18,8 @@ class SignVideoKwargs(VideosKwargs, total=False):
 
     padding_to_multiple_of: int
     training: bool
+    do_random_speed: bool
+    random_speed_range: tuple[float, float]
 
 
 class SignVideoProcessor(BaseVideoProcessor):
@@ -29,6 +34,8 @@ class SignVideoProcessor(BaseVideoProcessor):
     training = False
     do_normalize = True
     do_resize = False
+    do_random_speed = True  # random speed augmentation
+    random_speed_range = (0.8, 1.25)
     input_data_format = "channels_last"
     size = {"height": 224, "width": 224}
 
@@ -40,13 +47,14 @@ class SignVideoProcessor(BaseVideoProcessor):
     @staticmethod
     def build_train_transform(kwargs: dict[str, Any]):
         transforms = [
+            RandomVideoSpeed(speed_range=kwargs["random_speed_range"])
+            if kwargs["do_random_speed"]
+            else v2.Identity(),
             v2.RandomCrop((kwargs["crop_size"].height, kwargs["crop_size"].width)),
             v2.RandomHorizontalFlip(p=0.5),
             v2.Resize((kwargs["size"].height, kwargs["size"].width))
             if kwargs["do_resize"]
             else v2.Identity(),
-        ]
-        transforms.append(
             v2.RandomApply(
                 [
                     v2.ColorJitter(
@@ -57,16 +65,12 @@ class SignVideoProcessor(BaseVideoProcessor):
                     )
                 ],
                 p=0.75,
-            )
-        )
-        transforms.extend(
-            [
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize(kwargs["image_mean"], kwargs["image_std"])
-                if kwargs["do_normalize"]
-                else v2.Identity(),
-            ]
-        )
+            ),
+            v2.ToDtype(torch.float32, scale=True),
+            v2.Normalize(kwargs["image_mean"], kwargs["image_std"])
+            if kwargs["do_normalize"]
+            else v2.Identity(),
+        ]
         return v2.Compose(transforms)
 
     @staticmethod
@@ -118,14 +122,19 @@ class SignVideoProcessor(BaseVideoProcessor):
         processed_videos = []
         video_lengths = []
         for video in videos:
-            video = self.pad_dim_to_multiple_of(
-                video,
+            # BaseVideoProcessor has already converted each video to TCHW here.
+            # Mark it explicitly so torchvision v2 applies video-aware kernels
+            # and shares random spatial/color parameters across all frames.
+            video = tv_tensors.Video(video)
+            processed = process_fn(video).as_subclass(torch.Tensor)
+            # Temporal augmentation must run before padding so it cannot sample
+            # synthetic repeated frames. Record the final padded length.
+            processed = self.pad_dim_to_multiple_of(
+                processed,
                 dim=0,
                 multiple=kwargs["padding_to_multiple_of"],
             )
-
-            video_lengths.append(video.shape[0])
-            processed = process_fn(video)
+            video_lengths.append(processed.shape[0])
             processed_videos.append(processed)
 
         video_tensor = torch.cat(
