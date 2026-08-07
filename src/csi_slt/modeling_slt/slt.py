@@ -258,7 +258,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         else:
             self.config.eos_token_id = self.llm_config.eos_token_id
 
-        self.config.eos_token_id = self.llm_config.eos_token_id
         self.config.pad_token_id = self.llm_config.pad_token_id
 
         generation_config = self.llm.generation_config
@@ -266,7 +265,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             generation_config = GenerationConfig()
 
         generation_config.do_sample = False
-        generation_config.max_length = self.MAX_TOKEN_LENGTH
         generation_config.top_k = None
         generation_config.top_p = None
         generation_config.temperature = None

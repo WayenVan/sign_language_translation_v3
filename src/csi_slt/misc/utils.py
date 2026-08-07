@@ -1,8 +1,21 @@
-def deep_merge(d1: dict, d2: dict) -> dict:
-    """递归合并两个字典，d2 覆盖 d1"""
-    for k, v in d2.items():
-        if k in d1 and isinstance(d1[k], dict) and isinstance(v, dict):
-            deep_merge(d1[k], v)
-        else:
-            d1[k] = v
-    return d1
+from __future__ import annotations
+
+from collections.abc import Mapping
+from copy import deepcopy
+from typing import Any
+
+from transformers.generation.configuration_utils import GenerationConfig
+
+
+def merge_generation_config(
+    base: GenerationConfig,
+    overrides: Mapping[str, Any],
+) -> GenerationConfig:
+    """Copy a model generation config and apply validated experiment overrides."""
+    merged = deepcopy(base)
+    unused = merged.update(**overrides)
+    if unused:
+        names = ", ".join(sorted(unused))
+        raise ValueError(f"Unknown generation config arguments: {names}")
+    merged.validate(strict=True)
+    return merged

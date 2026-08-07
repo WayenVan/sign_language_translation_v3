@@ -16,6 +16,7 @@ def test_datamodule():
             config_name="train/base",
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
+                # "datamodule=shared_subset",
                 # "model=gemma3-1b-dino-base",
                 "data.processor.video_processor.do_normalize=False",
             ],
@@ -27,9 +28,10 @@ def test_datamodule():
 
     datamodule = DataModule(
         cfg.data,
+        cfg.datamodule,
         tokenizer=tokenizer,
     )
-    datamodule.setup("train")
+    datamodule.setup("fit")
     train_dataset = datamodule.train_dataset
     collator = datamodule.train_collator
     collator.debug = True

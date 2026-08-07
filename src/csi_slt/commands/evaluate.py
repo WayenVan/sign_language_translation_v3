@@ -8,8 +8,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltConfig, SltModel
-from ..misc.utils import deep_merge
-from transformers.generation.configuration_utils import GenerationConfig
+from ..misc.utils import merge_generation_config
 from transformers.trainer_utils import PredictionOutput
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
 from csi_slt.engine.metrics import SLTMetric
@@ -43,16 +42,15 @@ def main(cfg: DictConfig):
     generation_config_args = OmegaConf.to_container(
         cfg.engine.generation_config, resolve=True
     )
-    model_generation_config = slt_model.generation_config.to_dict()
-
     metrics = SLTMetric(
         processor=datamodule.processor,
     )
 
     # create trainer
     training_args = SltTrainingArguments(
-        generation_config=GenerationConfig(
-            **deep_merge(model_generation_config, generation_config_args)
+        generation_config=merge_generation_config(
+            slt_model.generation_config,
+            generation_config_args,
         ),
         **cfg.engine.training_args,
     )

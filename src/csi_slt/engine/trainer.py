@@ -272,17 +272,31 @@ class SltTrainer(Seq2SeqTrainer):
 
             # Retrieves GenerationConfig from model.generation_config
             gen_config = self.model.generation_config
-            # in case the batch is shorter than max length, the output should be padded
-            if generated_tokens.shape[-1] < gen_config.max_length:
-                generated_tokens = self._pad_tensors_to_max_len(
-                    generated_tokens, gen_config.max_length
-                )
-            elif (
-                gen_config.max_new_tokens is not None
-                and generated_tokens.shape[-1] < gen_config.max_new_tokens + 1
+            default_gen_config = gen_config._get_default_generation_params()
+            gen_config.update(**default_gen_config, defaults_only=True)
+
+            prompt_length_value = inputs["input_ids"].shape[1]
+            max_new_tokens = gen_kwargs.get("max_new_tokens")
+            if max_new_tokens is None:
+                max_new_tokens = gen_config.max_new_tokens
+
+            max_length = gen_kwargs.get("max_length")
+            if max_length is None:
+                max_length = gen_config.max_length
+
+            target_length = (
+                prompt_length_value + max_new_tokens
+                if max_new_tokens is not None
+                else max_length
+            )
+
+            # Pad decoder-only outputs to prompt length plus the generation budget.
+            if (
+                target_length is not None
+                and generated_tokens.shape[-1] < target_length
             ):
                 generated_tokens = self._pad_tensors_to_max_len(
-                    generated_tokens, gen_config.max_new_tokens + 1
+                    generated_tokens, target_length
                 )
 
                 # with torch.no_grad():
@@ -307,14 +321,9 @@ class SltTrainer(Seq2SeqTrainer):
 
             if has_labels:
                 labels = inputs["labels"]
-                if labels.shape[-1] < gen_config.max_length:
-                    labels = self._pad_tensors_to_max_len(labels, gen_config.max_length)
-                elif (
-                    gen_config.max_new_tokens is not None
-                    and labels.shape[-1] < gen_config.max_new_tokens + 1
-                ):
+                if target_length is not None and labels.shape[-1] < target_length:
                     labels = self._pad_tensors_to_max_len(
-                        labels, gen_config.max_new_tokens + 1
+                        labels, target_length
                     )
             else:
                 labels = None
@@ -326,9 +335,11 @@ class SltTrainer(Seq2SeqTrainer):
                 dtype=torch.long,
                 device=generated_tokens.device,
             )
-            _prompt_length = inputs.get("input_ids").shape[1]
             prompt_length = torch.full(
-                (B,), _prompt_length, dtype=torch.long, device=generated_tokens.device
+                (B,),
+                prompt_length_value,
+                dtype=torch.long,
+                device=generated_tokens.device,
             )
         except Exception as e:
             import traceback, sys

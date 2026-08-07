@@ -1,0 +1,5 @@
+strategy:
+  _target_: csi_slt.data.datamodule_strategies.SharedSubsetStrategy
+  source_split: train
+  num_samples: 100
+  seed: 42

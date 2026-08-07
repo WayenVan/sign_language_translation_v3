@@ -10,8 +10,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltConfig, SltModel
-from ..misc.utils import deep_merge
-from transformers.generation.configuration_utils import GenerationConfig
+from ..misc.utils import merge_generation_config
 from csi_slt.engine.metrics import SLTMetric
 from csi_slt.engine.priodic_metrics import XCometLiteMetric
 from huggingface_hub import login
@@ -54,7 +53,7 @@ def main(cfg: DictConfig):
     llm_name = cfg.model.config.llm_model_name_or_path
     tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
-    datamodule = DataModule(cfg.data, tokenizer=tokenizer)
+    datamodule = DataModule(cfg.data, cfg.datamodule, tokenizer=tokenizer)
     datamodule.setup()
 
     # generation config
@@ -62,12 +61,11 @@ def main(cfg: DictConfig):
     generation_config_args = OmegaConf.to_container(
         cfg.engine.generation_config, resolve=True
     )
-    model_generation_config = slt_model.generation_config.to_dict()
-
     # create trainer
     training_args = SltTrainingArguments(
-        generation_config=GenerationConfig(
-            **deep_merge(model_generation_config, generation_config_args)
+        generation_config=merge_generation_config(
+            slt_model.generation_config,
+            generation_config_args,
         ),
         **cfg.engine.training_args,
     )

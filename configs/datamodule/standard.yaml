@@ -1,0 +1,3 @@
+strategy:
+  _target_: csi_slt.data.datamodule_strategies.StandardSplitStrategy
+  train_with_val: false

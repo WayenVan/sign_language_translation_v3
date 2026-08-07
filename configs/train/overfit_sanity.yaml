@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - base
+  - override /datamodule: shared_subset
+  - _self_
+
+datamodule:
+  strategy:
+    num_samples: 100
+    source_split: train
+    seed: 42
+
+engine:
+  training_args:
+    num_train_epochs: 100
+    logging_steps: 1
+    eval_strategy: steps
+    eval_steps: 0.1
+    save_strategy: "no"
+    load_best_model_at_end: false
+    dataloader_drop_last: false
+    output_dir: outputs/shared_subset

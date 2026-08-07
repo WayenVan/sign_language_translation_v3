@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - base
+  - override /datamodule: train_subset
+  - _self_
+
+datamodule:
+  strategy:
+    percentage: 10
+    seed: 42
+
+engine:
+  training_args:
+    do_predict: false
+    num_train_epochs: 50
+    report_to: none
+    eval_strategy: steps
+    eval_steps: 0.1
+    save_strategy: "no"
+    load_best_model_at_end: false
+    output_dir: outputs/quick_validation
