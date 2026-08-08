@@ -37,15 +37,34 @@ class StandardSplitStrategy:
         return arranged
 
 
-class TrainSubsetStrategy:
-    """Train on a deterministic percentage of train and keep val/test intact."""
+class SplitSubsetStrategy:
+    """Select deterministic percentages of the train, val, and test splits."""
 
-    def __init__(self, percentage: float, seed: int = 42) -> None:
-        if not 0 < percentage <= 100:
-            raise ValueError("percentage must be greater than zero and at most 100.")
+    def __init__(
+        self,
+        train_percentage: float = 100,
+        val_percentage: float = 100,
+        test_percentage: float = 100,
+        train_seed: int = 42,
+        val_seed: int = 42,
+        test_seed: int = 42,
+    ) -> None:
+        self.percentages = {
+            "train": train_percentage,
+            "val": val_percentage,
+            "test": test_percentage,
+        }
+        self.seeds = {
+            "train": train_seed,
+            "val": val_seed,
+            "test": test_seed,
+        }
 
-        self.percentage = percentage
-        self.seed = seed
+        for split, percentage in self.percentages.items():
+            if not 0 < percentage <= 100:
+                raise ValueError(
+                    f"{split}_percentage must be greater than zero and at most 100."
+                )
 
     def required_splits(self, stage: Stage) -> tuple[Split, ...]:
         if stage == "fit":
@@ -56,21 +75,35 @@ class TrainSubsetStrategy:
 
     def arrange(self, datasets: Mapping[Split, Dataset], stage: Stage) -> DatasetMap:
         arranged = dict(datasets)
-        if "train" not in arranged:
-            return arranged
+        for split, dataset in datasets.items():
+            arranged[split] = self._subset(
+                dataset,
+                split=split,
+                percentage=self.percentages[split],
+                seed=self.seeds[split],
+            )
+        return arranged
 
-        train_dataset = arranged["train"]
-        dataset_size = len(train_dataset)
+    @staticmethod
+    def _subset(
+        dataset: Dataset,
+        split: Split,
+        percentage: float,
+        seed: int,
+    ) -> Dataset:
+        if percentage == 100:
+            return dataset
+
+        dataset_size = len(dataset)
         if dataset_size == 0:
-            raise ValueError("Cannot sample from an empty training dataset.")
+            raise ValueError(f"Cannot sample from an empty {split} dataset.")
 
-        num_samples = max(1, int(dataset_size * self.percentage / 100))
-        generator = torch.Generator().manual_seed(self.seed)
+        num_samples = max(1, int(dataset_size * percentage / 100))
+        generator = torch.Generator().manual_seed(seed)
         indices = torch.randperm(dataset_size, generator=generator)[
             :num_samples
         ].tolist()
-        arranged["train"] = Subset(train_dataset, indices)
-        return arranged
+        return Subset(dataset, indices)
 
 
 class SharedSubsetStrategy:

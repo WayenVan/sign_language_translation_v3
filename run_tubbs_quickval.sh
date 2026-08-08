@@ -3,7 +3,7 @@
 # 跑一些valid数据实验，使用小数据，混合数据或者验证数据来进行 最小测试
 
 export PYTHONPATH=./src:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1
 
 export WANDB_PROJECT=sign_language_translation_v3.1_quickval
 
@@ -17,9 +17,10 @@ else
   REPORT_TO=wandb
 fi
 
-accelerate launch --num_processes=1 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
+accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   --config-name train/quick_validation \
   model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
+  model.config.contrastive_loss_weight=0.0 \
   engine.training_args.output_dir=outputs/quick_val-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0807.224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \

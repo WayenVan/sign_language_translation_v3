@@ -17,8 +17,8 @@ else
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0806.224x224 \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv2global \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2global-0808.224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
@@ -28,9 +28,10 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.disable_tqdm=False \
   engine.training_args.report_to="$REPORT_TO" \
   data=ph14t_*x224x224_qwen_multiling \
-  data.processor.video_processor.do_resize=False \
-  data.processor.video_token_scale=1.0 \
+  data.processor.video_token_scale=2.0 \
+  data.processor.num_extra_video_tokens=3 \
   data.processor.video_processor.padding_to_multiple_of=4 \
+  data.processor.video_processor.do_resize=False \
   data.processor.video_processor.do_normalize=False
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \

@@ -4,8 +4,8 @@ from torch.utils.data import ConcatDataset, TensorDataset
 
 from csi_slt.data.datamodule_strategies import (
     SharedSubsetStrategy,
+    SplitSubsetStrategy,
     StandardSplitStrategy,
-    TrainSubsetStrategy,
 )
 
 
@@ -53,44 +53,87 @@ def test_standard_strategy_can_append_validation_to_training():
     assert datasets["val"] is val
 
 
-def test_train_subset_samples_only_training_data():
+def test_split_subset_samples_each_split_by_its_percentage():
     train = TensorDataset(torch.arange(20))
-    val = TensorDataset(torch.arange(4))
-    test = TensorDataset(torch.arange(5))
+    val = TensorDataset(torch.arange(20))
+    test = TensorDataset(torch.arange(20))
 
-    datasets = TrainSubsetStrategy(percentage=25, seed=7).arrange(
+    datasets = SplitSubsetStrategy(
+        train_percentage=25,
+        val_percentage=50,
+        test_percentage=75,
+    ).arrange(
         {"train": train, "val": val, "test": test}, stage=None
     )
 
     assert len(datasets["train"]) == 5
-    assert datasets["val"] is val
-    assert datasets["test"] is test
+    assert len(datasets["val"]) == 10
+    assert len(datasets["test"]) == 15
 
 
-def test_train_subset_indices_are_deterministic():
-    train = TensorDataset(torch.arange(20))
+def test_split_subset_seeds_control_splits_independently():
+    datasets = {
+        "train": TensorDataset(torch.arange(100)),
+        "val": TensorDataset(torch.arange(100)),
+        "test": TensorDataset(torch.arange(100)),
+    }
 
-    first = TrainSubsetStrategy(percentage=25, seed=7).arrange(
-        {"train": train}, stage="fit"
-    )["train"]
-    second = TrainSubsetStrategy(percentage=25, seed=7).arrange(
-        {"train": train}, stage="fit"
-    )["train"]
+    first = SplitSubsetStrategy(
+        train_percentage=25,
+        val_percentage=25,
+        test_percentage=25,
+        train_seed=1,
+        val_seed=2,
+        test_seed=3,
+    ).arrange(datasets, stage=None)
+    second = SplitSubsetStrategy(
+        train_percentage=25,
+        val_percentage=25,
+        test_percentage=25,
+        train_seed=1,
+        val_seed=2,
+        test_seed=3,
+    ).arrange(datasets, stage=None)
 
-    assert first.indices == second.indices
+    assert first["train"].indices == second["train"].indices
+    assert first["val"].indices == second["val"].indices
+    assert first["test"].indices == second["test"].indices
+    assert first["train"].indices != first["val"].indices
+    assert first["val"].indices != first["test"].indices
 
 
 @pytest.mark.parametrize("percentage", [0, -1, 101])
-def test_train_subset_rejects_invalid_percentage(percentage):
-    with pytest.raises(ValueError, match="percentage"):
-        TrainSubsetStrategy(percentage=percentage)
+@pytest.mark.parametrize(
+    "argument", ["train_percentage", "val_percentage", "test_percentage"]
+)
+def test_split_subset_rejects_invalid_percentage(argument, percentage):
+    with pytest.raises(ValueError, match=argument):
+        SplitSubsetStrategy(**{argument: percentage})
 
 
-def test_train_subset_keeps_at_least_one_sample():
-    train = TensorDataset(torch.arange(3))
+def test_split_subset_keeps_at_least_one_sample():
+    datasets = {
+        "train": TensorDataset(torch.arange(3)),
+        "val": TensorDataset(torch.arange(3)),
+        "test": TensorDataset(torch.arange(3)),
+    }
 
-    dataset = TrainSubsetStrategy(percentage=1).arrange(
-        {"train": train}, stage="fit"
-    )["train"]
+    subsets = SplitSubsetStrategy(
+        train_percentage=1,
+        val_percentage=1,
+        test_percentage=1,
+    ).arrange(datasets, stage=None)
 
-    assert len(dataset) == 1
+    assert all(len(dataset) == 1 for dataset in subsets.values())
+
+
+def test_split_subset_leaves_full_splits_unchanged():
+    datasets = {
+        "train": TensorDataset(torch.arange(3)),
+        "val": TensorDataset(torch.arange(4)),
+        "test": TensorDataset(torch.arange(5)),
+    }
+
+    arranged = SplitSubsetStrategy().arrange(datasets, stage=None)
+
+    assert all(arranged[split] is dataset for split, dataset in datasets.items())

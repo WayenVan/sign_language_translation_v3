@@ -40,13 +40,13 @@ def test_model_params():
 def test_slt_model():
     with hydra.initialize(config_path="../configs"):
         cfg = hydra.compose(
-            config_name="base_train",
+            config_name="train/base",
             overrides=[
                 "data=ph14t_*x224x224_qwen_multiling",
-                "model=qwen3-1.7b-dino-b-dinoframecrossv2shuffle",
-                "data.train.processor.video_token_scale=1.0",
-                "data.val.processor.video_token_scale=1.0",
-                "data.test.processor.video_token_scale=1.0",
+                "model=qwen3-1.7b-cradio-l-dinoframecrossv2global",
+                "data.processor.video_token_scale=2.0",
+                "data.processor.num_extra_video_tokens=3",
+                "data.processor.video_processor.do_normalize=False",
             ],
         )
         slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
@@ -63,9 +63,10 @@ def test_slt_model():
 
         datamodule = DataModule(
             cfg.data,
+            cfg.datamodule,
             tokenizer=tokenizer,
         )
-        datamodule.setup("train")
+        datamodule.setup("fit")
         train_dataset = datamodule.train_dataset
         val_dataset = datamodule.val_dataset
 

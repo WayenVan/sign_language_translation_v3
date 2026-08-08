@@ -1,15 +1,10 @@
 import logging
 
-from peft import LoraConfig, get_peft_model
-from transformers import AutoModel
 from torch import nn
-from transformers.models.dinov2_with_registers.configuration_dinov2_with_registers import (
-    Dinov2WithRegistersConfig,
+from transformers.models.dinov3_vit import (
+    DINOv3ViTConfig,
+    DINOv3ViTModel,
 )
-from transformers.models.dinov2_with_registers.modeling_dinov2_with_registers import (
-    Dinov2WithRegistersModel,
-)
-from transformers.models.dinov3_vit import DINOv3ViTModel
 
 from csi_slt.modeling_slt.output_utils import VisualBackboneOutput
 
@@ -20,7 +15,7 @@ class DinoV3Backbone(nn.Module):
     def __init__(
         self,
         config: dict,
-        dinov3: Dinov2WithRegistersModel | None = None,
+        dinov3: DINOv3ViTModel | None = None,
     ):
         super().__init__()
         self.id = config.get("id")
@@ -32,10 +27,8 @@ class DinoV3Backbone(nn.Module):
         self.config = config
 
         if dinov3 is None:
-            self.dinov3_config = Dinov2WithRegistersConfig.from_pretrained(self.id)
-            self.visual_encoder = Dinov2WithRegistersModel._from_config(
-                self.dinov3_config
-            )
+            self.dinov3_config = DINOv3ViTConfig.from_pretrained(self.id)
+            self.visual_encoder = DINOv3ViTModel(self.dinov3_config)
         else:
             self.visual_encoder = dinov3
             self.dinov3_config = dinov3.config
@@ -45,18 +38,16 @@ class DinoV3Backbone(nn.Module):
 
     def forward(self, x, t_lengths=None) -> VisualBackboneOutput:
         """
-        video: [B, C, H, W]
+        x: Packed video frames with shape [F, C, H, W].
         """
-        B, C, H, W = x.shape
         feats = self.visual_encoder(x, output_hidden_states=True).hidden_states[
             self.output_layer
         ]
+        first_patch_token = 1 + self.dinov3_config.num_register_tokens
 
         return VisualBackboneOutput(
-            visual_features=feats[
-                :, 1 + self.dinov3_config.num_register_tokens :, :
-            ],  # [B, T-1, C]
-            pooled_visual_features=feats[:, 0, :],  # [B, C]
+            visual_features=feats[:, first_patch_token:, :],  # [F, N, C]
+            pooled_visual_features=feats[:, 0, :],  # [F, C]
             visual_length=t_lengths,
         )
 
@@ -67,7 +58,7 @@ class DinoV3Backbone(nn.Module):
         if id is None:
             raise ValueError("id must be provided in config for DinoV3Backbone")
 
-        dinov3 = Dinov2WithRegistersModel.from_pretrained(id, dtype=dtype)
+        dinov3 = DINOv3ViTModel.from_pretrained(id, dtype=dtype)
         logger.info(f"Loaded pretrained DinoV3 model from {id}")
 
         return cls(config=config, dinov3=dinov3)
@@ -75,13 +66,12 @@ class DinoV3Backbone(nn.Module):
 
 if __name__ == "__main__":
     import torch
-    from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 
-    # model = DinoV3Backbone.from_pretrained_backbone(
-    #     "facebook/dinov3-with-registers-base"
-    # )
     model = DinoV3Backbone.from_pretrained_backbone(
-        config={"id": "facebook/dinov3-with-registers-base", "output_layer": -1}
+        config={
+            "id": "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+            "output_layer": -1,
+        }
     ).cuda()
 
     x = torch.randn(2, 3, 224, 224).cuda()

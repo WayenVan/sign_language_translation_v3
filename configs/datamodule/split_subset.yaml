@@ -1,0 +1,8 @@
+strategy:
+  _target_: csi_slt.data.datamodule_strategies.SplitSubsetStrategy
+  train_percentage: 40
+  val_percentage: 50
+  test_percentage: 50
+  train_seed: 42
+  val_seed: 42
+  test_seed: 42

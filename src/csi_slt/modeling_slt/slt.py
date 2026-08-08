@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Callable, Optional
 
 import torch
@@ -11,7 +12,6 @@ from transformers.masking_utils import (
     create_sliding_window_causal_mask,
 )
 from transformers.modeling_utils import PreTrainedModel
-from transformers.models.auto import AutoConfig, AutoModel, AutoModelForCausalLM
 
 from csi_slt.modeling_slt.cross_modal_contrastive_loss import CrossModalContrastiveLoss
 
@@ -24,7 +24,6 @@ from .output_utils import (
     VisualBackboneOutput,
 )
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
-from torch import Tensor
 
 logger = logging.get_logger(__name__)
 
@@ -51,11 +50,6 @@ def get_llm_cls_by_model_name(model_name):
     return model_cls
 
 
-def get_text_config(config):
-    """Return the text sub‑config for multimodal models, or the config itself."""
-    return config.text_config if hasattr(config, "text_config") else config
-
-
 def token_type_ids_mask_function(
     token_type_ids: Optional[torch.Tensor],
 ) -> Optional[Callable]:
@@ -74,7 +68,7 @@ def token_type_ids_mask_function(
 
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
-    MAX_TOKEN_LENGTH = 512
+    MAX_TOKEN_LENGTH = 1024
 
     # _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
     _keep_in_fp32_modules = ["visual_adapter"]
@@ -114,11 +108,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # Initialize the language model when it was not supplied by the caller.
         if self.llm is None:
             llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
-            llm_config = AutoConfig.from_pretrained(config.llm_model_name_or_path)
-            self.llm = llm_cls._from_config(llm_config)
+            self.llm = llm_cls._from_config(config.llm_config)
 
-        # Configure generation from the language model's text configuration.
-        self.llm_config = get_text_config(self.llm.config)
         self._configure_generation()
 
         # freeze the visual backbone and language model parameters by default; only the
@@ -158,6 +149,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # completed visual token (projection + position) immediately before it
         # is merged into the LLM input sequence.
         # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
+        # Keep the LLM input space separate from the cosine-similarity space.
+        # Both global modalities are projected into a compact shared space;
+        # normalization remains the responsibility of the contrastive loss.
+        self.visual_contrastive_head = nn.Linear(
+            self.config.hidden_size, self.config.contrastive_dim, bias=False
+        )
+        self.text_contrastive_head = nn.Linear(
+            self.config.hidden_size, self.config.contrastive_dim, bias=False
+        )
         # Keep one registered instance so its learnable temperature is included
         # in model parameters, checkpoints, and the optimizer.
         self.contrastive_loss_fct = CrossModalContrastiveLoss(gather_with_grad=True)
@@ -250,28 +250,27 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return model
 
     def _configure_generation(self):
-        self.config.bos_token_id = self.llm_config.bos_token_id
-
-        # Gemma 3 may expose a list here, which this wrapper does not support.
-        if isinstance(self.llm_config.eos_token_id, list):
-            self.config.eos_token_id = self.llm_config.eos_token_id[0]
-        else:
-            self.config.eos_token_id = self.llm_config.eos_token_id
-
-        self.config.pad_token_id = self.llm_config.pad_token_id
-
+        text_config = self.config.get_text_config()
         generation_config = self.llm.generation_config
         if generation_config is None:
-            generation_config = GenerationConfig()
+            generation_config = GenerationConfig.from_model_config(text_config)
+        else:
+            generation_config = deepcopy(generation_config)
+
+        # Token identities come from the canonical text config. Keep a list of
+        # EOS ids intact because GenerationConfig supports multiple stop tokens.
+        for name in ("bos_token_id", "eos_token_id", "pad_token_id"):
+            value = getattr(text_config, name, None)
+            if value is not None:
+                setattr(generation_config, name, value)
 
         generation_config.do_sample = False
         generation_config.top_k = None
         generation_config.top_p = None
         generation_config.temperature = None
 
-        # Preserve the language model's original generation configuration object.
         self.generation_config = generation_config
-        self.has_sliding_layers = "sliding_attention" in self.llm_config.layer_types
+        self.has_sliding_layers = "sliding_attention" in text_config.layer_types
 
     @torch.no_grad()
     def _init_embedding_weights(self):
@@ -347,25 +346,61 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         return visual_adapter_output
 
-    def embed_labels(self, labels) -> tuple[Tensor, Tensor]:
-        """
+    def _encode_labels_for_contrastive(self, labels: torch.Tensor) -> torch.Tensor:
+        """Build one contextual text representation per label sequence.
+
+        ``labels`` uses ``-100`` for positions excluded from the language-model
+        loss. Those positions are converted to padding and masked from the
+        frozen decoder. The last valid token's state is used as the global
+        representation because it has attended to the complete label sequence.
+        When labels end with EOS, this is the EOS token's contextualized state.
+
         Args:
-            labels: [B, T]，无效位置为 -100
+            labels: Token ids with shape ``[B, T]``. Ignored positions are
+                represented by ``-100``.
 
         Returns:
-            embeddings: [B, T, D]
-            mask:       [B, T]，有效位置为 1，无效位置为 0
+            Contextual text features with shape ``[B, D]``.
         """
-        mask = labels.ne(-100)
+        if labels.ndim != 2:
+            raise ValueError(f"labels must have shape [B, T], got {labels.shape}")
 
-        pad_token_id = self.config.pad_token_id
+        valid_mask = labels.ne(-100)
+        if torch.any(valid_mask.sum(dim=-1) == 0):
+            raise ValueError("every label sequence must contain a valid token")
+
+        pad_token_id = self.config.get_text_config().pad_token_id
         if pad_token_id is None:
             pad_token_id = 0
 
-        input_ids = labels.masked_fill(~mask, pad_token_id)
-        embeddings = self.llm.get_input_embeddings()(input_ids)
+        input_ids = labels.masked_fill(~valid_mask, pad_token_id)
+        attention_mask = valid_mask.long()
 
-        return embeddings, mask.long()
+        # Assign compact positions to the valid suffix instead of retaining the
+        # absolute offsets introduced by the ignored prompt prefix.
+        position_ids = attention_mask.cumsum(dim=-1) - 1
+        position_ids.masked_fill_(~valid_mask, 0)
+
+        # Calling the decoder avoids computing the full vocabulary logits. The
+        # textual branch acts only as a target for contrastive alignment.
+        with torch.no_grad():
+            decoder_outputs = self.llm.get_decoder()(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=False,
+                return_dict=True,
+            )
+
+        token_positions = torch.arange(labels.shape[1], device=labels.device)
+        last_valid_indices = (
+            token_positions.masked_fill(~valid_mask, -1).max(dim=-1).values
+        )
+        batch_indices = torch.arange(labels.shape[0], device=labels.device)
+        hidden_states = decoder_outputs.last_hidden_state
+        last_features = hidden_states[batch_indices, last_valid_indices]
+
+        return last_features
 
     def prepare_for_casual_lm(
         self,
@@ -450,6 +485,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_mask=visual_token_mask,  # [B, L]
             visual_features=contrastive_visual_feats,  # [BT, D], with position embedding and RMSNorm, before visual_scale
             visual_length=visual_lengths,  # [B]
+            global_visual_features=visual_output.global_visual_features,  # [B, D]
         )
 
     def forward(
@@ -524,7 +560,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # Generation may have already converted the attention mask into a mapping.
         if not isinstance(causal_mask_mapping := attention_mask, dict):
             mask_kwargs = {
-                "config": self.llm.config.get_text_config(),
+                "config": self.config.get_text_config(),
                 "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
                 "cache_position": cache_position,
@@ -599,14 +635,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # the contrastive objective is disabled.
             contrastive_loss = torch.zeros_like(main_loss)
             if self.config.contrastive_loss_weight > 0.0:
-                text_features, text_mask = self.embed_labels(labels)
-                # Keep the LLM token-embedding space as a fixed contrastive target.
-                text_features = text_features.detach()
+                visual_features = self.visual_contrastive_head(
+                    prepare_output.global_visual_features
+                )
+                text_features = self.text_contrastive_head(
+                    self._encode_labels_for_contrastive(labels)
+                )
                 contrastive_loss = self.contrastive_loss_fct(
-                    visual_features=prepare_output.visual_features,
-                    visual_lengths=prepare_output.visual_length,
+                    visual_features=visual_features,
                     text_features=text_features,
-                    text_mask=text_mask,
                 )
 
             loss = main_loss + self.config.contrastive_loss_weight * contrastive_loss

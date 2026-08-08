@@ -1,5 +1,5 @@
 from torch import nn
-from typing import Dict, Type
+from typing import Dict
 
 
 from .visual_backbones.dinov2_backbone import DinoV2Backbone
@@ -16,6 +16,9 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross import (
 )
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
     DINOFrameAdapterCrossV2,
+)
+from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2_global import (
+    DINOFrameAdapterCrossV2Global,
 )
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2_shuffle import (
     DINOFrameAdapterCrossV2Shuffle,
@@ -35,6 +38,7 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "dinoframe": DINOFrameAdapter,
     "dinoframe_cross": DINOFrameAdapterCross,
     "dinoframe_cross_v2": DINOFrameAdapterCrossV2,  # WARN: Two-token V2 adapter.
+    "dinoframe_cross_v2_global": DINOFrameAdapterCrossV2Global,
     "dinoframe_cross_v2_shuffle": DINOFrameAdapterCrossV2Shuffle,
     "c_radio_v4": CRadioV4Backbone,
 }

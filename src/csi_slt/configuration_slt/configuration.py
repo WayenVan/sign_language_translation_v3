@@ -1,5 +1,5 @@
 from transformers.configuration_utils import PretrainedConfig
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from transformers import AutoConfig
 
 
@@ -22,24 +22,24 @@ class SltConfig(PretrainedConfig):
     The configuration selects component classes by their registry keys and
     forwards the corresponding ``*_config``/``*_kwargs`` dictionaries to the
     component constructors. It does not infer dimensions or temporal reduction
-    from the selected components. Constructing this configuration loads the LLM
-    ``AutoConfig`` from ``llm_model_name_or_path``; that identifier or path must
-    therefore be available even when only constructing configuration objects.
-
-    During model construction, ``num_extra_tokens`` is set to ``2`` and the
-    ``bos_token_id``, ``eos_token_id``, and ``pad_token_id`` fields are copied
-    from the loaded LLM. ``num_hidden_layers`` is derived from the LLM
-    ``AutoConfig`` when that configuration exposes a compatible field.
+    from the selected components. The complete language-model configuration is
+    stored in ``llm_config`` and serialized with this configuration.
+    ``llm_model_name_or_path`` locates the weights and is a compatibility
+    fallback for older checkpoints without an embedded LLM configuration.
     """
 
     model_type = "slt"
+    # Avoid constructing a default SltConfig (and therefore resolving a remote
+    # fallback LLM) merely to compute the serialized config diff.
+    has_no_defaults_at_init = True
 
     def __init__(
         self,
-        hidden_size: int = 512,
+        hidden_size: Optional[int] = None,
         video_soft_token_id: int = -1,
         video_token_scale: float = 1.0,
         llm_model_name_or_path: str = "google/gemma-3-1b-it",
+        llm_config: Optional[Union[PretrainedConfig, Dict[str, Any]]] = None,
         llm_init_kwargs: Optional[Dict[str, Any]] = None,
         llm_lora: bool = False,
         llm_lora_config: Optional[Dict[str, Any]] = None,
@@ -47,18 +47,15 @@ class SltConfig(PretrainedConfig):
         visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
+        contrastive_dim: int = 512,
         contrastive_loss_weight: float = 1.0,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
 
         Args:
-            hidden_size: Hidden width of the language model's text embedding
-                space. It determines the shapes of the learned video boundary
-                embeddings and visual positional embedding in ``SltModel``;
-                it must equal the LLM text hidden size and the output dimension
-                of the selected visual adapter. It is not automatically checked
-                against either component.
+            hidden_size: Compatibility field for older configurations. When
+                provided, it must match the canonical LLM text hidden size.
             video_soft_token_id: Tokenizer id used as each video placeholder in
                 ``input_ids``. The processor emits a contiguous run of these
                 tokens, and the model replaces that run with the start token,
@@ -73,9 +70,10 @@ class SltConfig(PretrainedConfig):
                 must match the selected adapter's effective temporal reduction;
                 it does not rescale token embeddings.
             llm_model_name_or_path: Hugging Face model id or local path for the
-                language model. It is also used to load an ``AutoConfig`` during
-                ``SltConfig`` construction in order to expose
-                ``num_hidden_layers``.
+                language-model weights. It loads the LLM config only when
+                ``llm_config`` is absent.
+            llm_config: Complete LLM configuration, as a ``PretrainedConfig``
+                object or its serialized dictionary.
             llm_init_kwargs: Optional keyword arguments for LLM initialization.
                 They are used by ``SltQwenVLModel`` when loading/constructing
                 its language model. ``SltModel`` and
@@ -100,16 +98,16 @@ class SltConfig(PretrainedConfig):
                 adapter constructor. Its output width must match ``hidden_size``
                 and its temporal downsampling must agree with
                 ``video_token_scale``.
-            contrastive_loss_weight: Stored in the serialized configuration but
-                currently not consumed by ``SltModel`` or ``SltQwenVLModel``
-                when computing their loss. Changing it currently has no effect
-                on training unless an external training loop reads it.
+            contrastive_dim: Output width of the trainable visual and textual
+                projection heads used by global contrastive learning.
+            contrastive_loss_weight: Weight applied to the global video-text
+                contrastive objective before it is added to the language-model
+                loss.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
         super().__init__(**kwargs)
 
-        self.hidden_size = hidden_size
         self.video_soft_token_id = video_soft_token_id
         self.llm_model_name_or_path = llm_model_name_or_path
         self.llm_init_kwargs = llm_init_kwargs if llm_init_kwargs is not None else {}
@@ -123,18 +121,38 @@ class SltConfig(PretrainedConfig):
         self.visual_adapter_kwargs = (
             visual_adapter_kwargs if visual_adapter_kwargs is not None else {}
         )
+        if contrastive_dim <= 0:
+            raise ValueError("contrastive_dim must be positive")
+        self.contrastive_dim = contrastive_dim
         self.contrastive_loss_weight = contrastive_loss_weight
-        llm_config = AutoConfig.from_pretrained(
-            llm_model_name_or_path
-        )  # NOTE: using AutoConfig to support more models
-        if hasattr(llm_config, "num_hidden_layers"):
-            self.num_hidden_layers = llm_config.num_hidden_layers
-        elif hasattr(llm_config, "text_config"):
-            self.num_hidden_layers = llm_config.text_config.num_hidden_layers
+
+        # New checkpoints embed the complete LLM configuration. Loading it by
+        # name is retained only for old configs that do not contain this field.
+        if llm_config is None:
+            llm_config = AutoConfig.from_pretrained(llm_model_name_or_path)
+        elif isinstance(llm_config, dict):
+            llm_config = dict(llm_config)
+            model_type = llm_config.pop("model_type", None)
+            if model_type is None:
+                raise ValueError("Serialized llm_config must contain 'model_type'.")
+            llm_config = AutoConfig.for_model(model_type, **llm_config)
+        elif not isinstance(llm_config, PretrainedConfig):
+            raise TypeError("llm_config must be a PretrainedConfig, a dict, or None.")
+
+        self.llm_config = llm_config
+        text_hidden_size = self.get_text_config().hidden_size
+        if hidden_size is not None and hidden_size != text_hidden_size:
+            raise ValueError(
+                f"hidden_size ({hidden_size}) does not match the LLM text "
+                f"hidden_size ({text_hidden_size})."
+            )
+        # Compatibility alias for the SLT projection modules. Its source of
+        # truth is the embedded LLM text configuration.
+        self.hidden_size = text_hidden_size
 
         self.video_token_scale = video_token_scale
         self.num_extra_tokens = None
 
-        self.bos_token_id = None  # to be set when laoding the tokenizer
-        self.eos_token_id = None  # to be set when laoding the tokenizer
-        self.pad_token_id = None  # to be set when laoding the tokenizer
+    def get_text_config(self, decoder=None, encoder=None) -> PretrainedConfig:
+        """Return the text portion of the embedded language-model config."""
+        return self.llm_config.get_text_config(decoder=decoder, encoder=encoder)

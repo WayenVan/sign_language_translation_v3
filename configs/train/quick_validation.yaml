@@ -2,13 +2,17 @@
 
 defaults:
   - base
-  - override /datamodule: train_subset
+  - override /datamodule: split_subset
   - _self_
 
 datamodule:
   strategy:
-    percentage: 10
-    seed: 42
+    train_percentage: 40
+    val_percentage: 50
+    test_percentage: 50
+    train_seed: 42
+    val_seed: 42
+    test_seed: 42
 
 engine:
   training_args:
@@ -16,7 +20,7 @@ engine:
     num_train_epochs: 50
     report_to: none
     eval_strategy: steps
-    eval_steps: 0.1
+    eval_steps: 0.1 #every 1 epochs
     save_strategy: "no"
     load_best_model_at_end: false
     output_dir: outputs/quick_validation
