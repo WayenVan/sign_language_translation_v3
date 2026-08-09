@@ -52,8 +52,8 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=8 \
   engine.training_args.dataloader_persistent_workers=True \
-  engine.training_args.eval_steps=4000 \
-  engine.training_args.save_steps=4000 \
+  engine.training_args.eval_steps=6000 \
+  engine.training_args.save_steps=6000 \
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE" \
   engine.training_args.report_to="$REPORT_TO" \
