@@ -15,5 +15,5 @@ config:
     cls_input_dim: 2304
     output_dim: 2048
     temperature: 0.1
-    temporal_gate_init: -2 #sigmoid
-  contrastive_loss_weight: 0.1
+    use_short_temporal_conv: false
+  contrastive_loss_weight: 1.0

@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 
+from csi_slt.modeling_slt.misc import mark_module_tree_as_initialized
 from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackboneOutput
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
     DINOFrameAdapterCrossV2,
@@ -47,6 +48,7 @@ class PackedShortTemporalConv(nn.Module):
         self.residual_gate = nn.Parameter(torch.tensor(float(gate_init)))
 
         nn.init.zeros_(self.temporal_conv.weight)
+        mark_module_tree_as_initialized(self)
 
     def forward(
         self, features: torch.Tensor, lengths: torch.Tensor
@@ -79,44 +81,6 @@ class PackedShortTemporalConv(nn.Module):
         return features + torch.sigmoid(self.residual_gate) * packed_residual
 
 
-class MeanGlobalPooling(nn.Module):
-    """Parameter-free video pooling over packed CLS and PATCH streams."""
-
-    def forward(
-        self,
-        cls_tokens: torch.Tensor,
-        patch_tokens: torch.Tensor,
-        lengths: torch.Tensor,
-    ) -> torch.Tensor:
-        if cls_tokens.ndim != 2 or patch_tokens.ndim != 2:
-            raise ValueError("CLS and PATCH tokens must both have shape [sum(T), D]")
-        if cls_tokens.shape != patch_tokens.shape:
-            raise ValueError(
-                "CLS and PATCH token shapes must match, got "
-                f"{tuple(cls_tokens.shape)} and {tuple(patch_tokens.shape)}"
-            )
-        if lengths.ndim != 1 or lengths.numel() == 0:
-            raise ValueError("lengths must be a non-empty 1D tensor")
-        if lengths.is_floating_point() or lengths.is_complex():
-            raise TypeError(f"lengths must use an integer dtype, got {lengths.dtype}")
-        if bool((lengths <= 0).any()):
-            raise ValueError("all temporal lengths must be positive")
-        if int(lengths.sum().item()) != cls_tokens.shape[0]:
-            raise ValueError("lengths.sum() must equal the packed token count")
-
-        cls_sequences = torch.split(cls_tokens, lengths.tolist(), dim=0)
-        patch_sequences = torch.split(patch_tokens, lengths.tolist(), dim=0)
-        return torch.stack(
-            [
-                torch.stack((cls_sequence, patch_sequence), dim=1).mean(dim=(0, 1))
-                for cls_sequence, patch_sequence in zip(
-                    cls_sequences, patch_sequences
-                )
-            ],
-            dim=0,
-        )
-
-
 class DINOFrameAdapterCrossV2Shuffle(nn.Module):
     """Apply V2, then independently temporally compress its CLS/PATCH streams.
 
@@ -140,6 +104,7 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
         temperature: float = 0.1,
         temporal_gate_init: float = -2.0,
         temporal_scale_factor: int = 2,
+        use_short_temporal_conv: bool = False,
         short_temporal_kernel_size: int = 3,
         short_temporal_gate_init: float = -2.0,
     ) -> None:
@@ -150,6 +115,7 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             )
 
         self.temporal_scale_factor = temporal_scale_factor
+        self.use_short_temporal_conv = use_short_temporal_conv
         self.frame_adapter = DINOFrameAdapterCrossV2(
             input_dim=input_dim,
             output_dim=output_dim,
@@ -172,18 +138,23 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             scale_factor=temporal_scale_factor,
         )
         # Keep the semantic CLS stream and motion-oriented PATCH stream
-        # independent while adding a local temporal bias after compression.
-        self.cls_short_temporal_conv = PackedShortTemporalConv(
-            hidden_size=output_dim,
-            kernel_size=short_temporal_kernel_size,
-            gate_init=short_temporal_gate_init,
-        )
-        self.patch_short_temporal_conv = PackedShortTemporalConv(
-            hidden_size=output_dim,
-            kernel_size=short_temporal_kernel_size,
-            gate_init=short_temporal_gate_init,
-        )
-        self.global_pooling = MeanGlobalPooling()
+        # independent when the optional post-shuffle temporal bias is enabled.
+        # Do not construct these modules in the default path, keeping its
+        # parameters and primary output identical to commit 5f86588.
+        if use_short_temporal_conv:
+            self.cls_short_temporal_conv = PackedShortTemporalConv(
+                hidden_size=output_dim,
+                kernel_size=short_temporal_kernel_size,
+                gate_init=short_temporal_gate_init,
+            )
+            self.patch_short_temporal_conv = PackedShortTemporalConv(
+                hidden_size=output_dim,
+                kernel_size=short_temporal_kernel_size,
+                gate_init=short_temporal_gate_init,
+            )
+        else:
+            self.cls_short_temporal_conv = None
+            self.patch_short_temporal_conv = None
 
     def forward(
         self,
@@ -225,16 +196,18 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
         if not torch.equal(compressed_frame_length, patch_frame_length):
             raise RuntimeError("CLS and pooled-patch temporal lengths diverged")
 
-        cls_tokens = self.cls_short_temporal_conv(
-            cls_tokens, compressed_frame_length
-        )
-        patch_tokens = self.patch_short_temporal_conv(
-            patch_tokens, compressed_frame_length
-        )
-        global_visual_features = self.global_pooling(
-            cls_tokens, patch_tokens, compressed_frame_length
-        )
-
+        if self.use_short_temporal_conv:
+            if (
+                self.cls_short_temporal_conv is None
+                or self.patch_short_temporal_conv is None
+            ):
+                raise RuntimeError("short temporal convolution modules are missing")
+            cls_tokens = self.cls_short_temporal_conv(
+                cls_tokens, compressed_frame_length
+            )
+            patch_tokens = self.patch_short_temporal_conv(
+                patch_tokens, compressed_frame_length
+            )
         visual_features = torch.stack((cls_tokens, patch_tokens), dim=1).flatten(0, 1)
         visual_length = compressed_frame_length * 2
         if visual_features.shape[0] != int(visual_length.sum().item()):
@@ -249,20 +222,20 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             ]
         )
         extras = dict(frame_output.extras or {})
-        extras.update(
-            {
-                "cls_short_temporal_gate": torch.sigmoid(
-                    self.cls_short_temporal_conv.residual_gate
-                ),
-                "patch_short_temporal_gate": torch.sigmoid(
-                    self.patch_short_temporal_conv.residual_gate
-                ),
-            }
-        )
+        if self.use_short_temporal_conv:
+            extras.update(
+                {
+                    "cls_short_temporal_gate": torch.sigmoid(
+                        self.cls_short_temporal_conv.residual_gate
+                    ),
+                    "patch_short_temporal_gate": torch.sigmoid(
+                        self.patch_short_temporal_conv.residual_gate
+                    ),
+                }
+            )
 
         return VisualAdapterOutput(
             visual_features=visual_features,
-            global_visual_features=global_visual_features,
             visual_length=visual_length,
             position_ids=position_ids,
             extras=extras,

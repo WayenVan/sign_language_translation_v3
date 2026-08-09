@@ -1,4 +1,20 @@
 import torch
+from torch import nn
+
+
+def mark_module_tree_as_initialized(module: nn.Module) -> None:
+    """Mark a module tree as initialized for Hugging Face model composition.
+
+    Use this after a module has completed either custom initialization or
+    checkpoint loading. ``PreTrainedModel.post_init`` respects the
+    ``_is_hf_initialized`` marker and leaves the complete module tree
+    unchanged when it is later attached to an outer model.
+    """
+    if not isinstance(module, nn.Module):
+        raise TypeError(f"module must be an nn.Module, got {type(module).__name__}")
+
+    for submodule in module.modules():
+        submodule._is_hf_initialized = True
 
 
 def random_derangement(video_lengths, device=None):

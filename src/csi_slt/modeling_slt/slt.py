@@ -23,6 +23,7 @@ from .output_utils import (
     VisualAdapterOutput,
     VisualBackboneOutput,
 )
+from .misc import mark_module_tree_as_initialized
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
 
 logger = logging.get_logger(__name__)
@@ -80,6 +81,23 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_backbone: Optional[nn.Module] = None,
     ):
         super().__init__(config)
+        for component_name, component in (
+            ("llm", llm),
+            ("visual_backbone", visual_backbone),
+        ):
+            if component is not None and not getattr(
+                component, "_is_hf_initialized", False
+            ):
+                logger.warning(
+                    "Externally supplied %s is not marked as initialized and "
+                    "may be initialized by SltModel.post_init(). If it already "
+                    "contains trained or loaded weights, call "
+                    "mark_module_tree_as_initialized(%s) before constructing "
+                    "SltModel.",
+                    component_name,
+                    component_name,
+                )
+
         # Always construct the model structure here to support meta-device models.
         self.llm = llm
         self.visual_backbone = visual_backbone
@@ -125,16 +143,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     "llm_lora_config must be provided when llm_lora is True."
                 )
             self.llm = get_peft_model(self.llm, LoraConfig(**config.llm_lora_config))
+            # PEFT initializes the newly injected LoRA modules itself. Keep the
+            # outer SltModel.post_init() from replacing that initialization.
+            mark_module_tree_as_initialized(self.llm)
 
         # Keep the existing attribute names for checkpoint compatibility.
         self.start_video_embds = nn.Parameter(
-            torch.randn(
+            torch.empty(
                 1, self.config.hidden_size, dtype=torch.float32, device=self.device
             ),
             requires_grad=True,
         )
         self.end_video_embeds = nn.Parameter(
-            torch.randn(
+            torch.empty(
                 1, self.config.hidden_size, dtype=torch.float32, device=self.device
             ),
             requires_grad=True,
@@ -149,10 +170,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # completed visual token (projection + position) immediately before it
         # is merged into the LLM input sequence.
         # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
-        # Contrast visual tokens directly against the frozen LLM text space.
-        # This parameter-free baseline makes the auxiliary objective optimize
-        # the visual adapter rather than being absorbed by a projection head.
-        self.visual_contrastive_head = nn.Identity()
         # Keep one registered instance so its learnable temperature is included
         # in model parameters, checkpoints, and the optimizer.
         self.contrastive_loss_fct = CrossModalContrastiveLoss(gather_with_grad=True)
@@ -161,7 +178,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
 
-        self._init_embedding_weights()
         self.post_init()
 
         # NOTE: tie the weights when using LoRA initialization
@@ -209,6 +225,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # did not tie them.
         llm.tie_weights(recompute_mapping=True)
 
+        # This factory explicitly loaded both components from pretrained
+        # checkpoints. Protect them from the outer SltModel.post_init(); the
+        # ordinary constructor makes no such assumption about supplied modules.
+        mark_module_tree_as_initialized(llm)
+        mark_module_tree_as_initialized(visual_backbone)
+
         logger.info("force retie the lm_head to the input embeddings!!!!!!!!")
 
         return cls(config=config, llm=llm, visual_backbone=visual_backbone)
@@ -233,6 +255,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
 
         model.llm = get_peft_model(model.llm, peft_config)
+        # The checkpoint weights were already loaded and PEFT initialized the
+        # newly injected LoRA modules; the complete wrapped LLM is now ready.
+        mark_module_tree_as_initialized(model.llm)
 
         # setup config
         model.config.llm_lora = True
@@ -268,14 +293,20 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.has_sliding_layers = "sliding_attention" in text_config.layer_types
 
     @torch.no_grad()
-    def _init_embedding_weights(self):
-        # init the start and end video embeddings with the mean of the word embeddings
-        mean = self.llm.get_input_embeddings().weight.data.mean(dim=0, keepdim=True)
-        self.start_video_embds.copy_(mean)
-        self.end_video_embeds.copy_(mean)
+    def _init_weights(self, module: nn.Module) -> None:
+        """Initialize modules owned by SltModel through Hugging Face post_init."""
+        super()._init_weights(module)
 
-        # init the visual position embedding
-        torch.nn.init.trunc_normal_(self.visual_position_embedding.weight, std=0.02)
+        if module is self.visual_position_embedding:
+            nn.init.trunc_normal_(module.weight, std=0.02)
+
+        # Raw parameters are not handled by the generic module-type rules.
+        # smart_apply visits children before their parent, so the LLM token
+        # embeddings are initialized before this root-model branch runs.
+        if module is self:
+            mean = self.llm.get_input_embeddings().weight.mean(dim=0, keepdim=True)
+            self.start_video_embds.copy_(mean)
+            self.end_video_embeds.copy_(mean)
 
     def visual_position_embedding_forward(
         self,
@@ -342,20 +373,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return visual_adapter_output
 
     def _encode_labels_for_contrastive(self, labels: torch.Tensor) -> torch.Tensor:
-        """Build one contextual text representation per label sequence.
+        """Mean-pool frozen LLM token embeddings for each label sequence.
 
         ``labels`` uses ``-100`` for positions excluded from the language-model
-        loss. Those positions are converted to padding and masked from the
-        frozen decoder. The last valid token's state is used as the global
-        representation because it has attended to the complete label sequence.
-        When labels end with EOS, this is the EOS token's contextualized state.
+        loss. Those positions are converted to padding and excluded from the
+        mean. This keeps the text target in the LLM input-embedding space and
+        does not run an additional decoder forward pass.
 
         Args:
             labels: Token ids with shape ``[B, T]``. Ignored positions are
                 represented by ``-100``.
 
         Returns:
-            Contextual text features with shape ``[B, D]``.
+            Mean-pooled text features with shape ``[B, D]``.
         """
         if labels.ndim != 2:
             raise ValueError(f"labels must have shape [B, T], got {labels.shape}")
@@ -369,33 +399,45 @@ class SltModel(PreTrainedModel, GenerationMixin):
             pad_token_id = 0
 
         input_ids = labels.masked_fill(~valid_mask, pad_token_id)
-        attention_mask = valid_mask.long()
+        token_features = self.llm.get_input_embeddings()(input_ids)
+        weights = valid_mask.unsqueeze(-1).to(dtype=token_features.dtype)
+        return (token_features * weights).sum(dim=1) / weights.sum(dim=1)
 
-        # Assign compact positions to the valid suffix instead of retaining the
-        # absolute offsets introduced by the ignored prompt prefix.
-        position_ids = attention_mask.cumsum(dim=-1) - 1
-        position_ids.masked_fill_(~valid_mask, 0)
-
-        # Calling the decoder avoids computing the full vocabulary logits. The
-        # textual branch acts only as a target for contrastive alignment.
-        with torch.no_grad():
-            decoder_outputs = self.llm.get_decoder()(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                return_dict=True,
+    @staticmethod
+    def _encode_visual_features_for_contrastive(
+        visual_features: torch.Tensor,
+        visual_lengths: torch.Tensor,
+    ) -> torch.Tensor:
+        """Mean-pool packed visual tokens into one feature per video."""
+        if visual_features.ndim != 2:
+            raise ValueError(
+                "visual_features must have shape [sum(lengths), D], got "
+                f"{tuple(visual_features.shape)}"
+            )
+        if visual_lengths.ndim != 1 or visual_lengths.numel() == 0:
+            raise ValueError("visual_lengths must be a non-empty 1D tensor")
+        if visual_lengths.is_floating_point() or visual_lengths.is_complex():
+            raise TypeError(
+                "visual_lengths must use an integer dtype, got "
+                f"{visual_lengths.dtype}"
             )
 
-        token_positions = torch.arange(labels.shape[1], device=labels.device)
-        last_valid_indices = (
-            token_positions.masked_fill(~valid_mask, -1).max(dim=-1).values
-        )
-        batch_indices = torch.arange(labels.shape[0], device=labels.device)
-        hidden_states = decoder_outputs.last_hidden_state
-        last_features = hidden_states[batch_indices, last_valid_indices]
+        lengths = visual_lengths.to(device=visual_features.device, dtype=torch.long)
+        if bool((lengths <= 0).any()):
+            raise ValueError("all visual lengths must be positive")
+        if int(lengths.sum().item()) != visual_features.shape[0]:
+            raise ValueError(
+                "visual_lengths.sum() must equal the packed visual token count"
+            )
 
-        return last_features
+        batch_indices = torch.repeat_interleave(
+            torch.arange(lengths.numel(), device=visual_features.device), lengths
+        )
+        pooled_features = visual_features.new_zeros(
+            lengths.numel(), visual_features.shape[-1]
+        )
+        pooled_features.index_add_(0, batch_indices, visual_features)
+        return pooled_features / lengths.to(visual_features.dtype).unsqueeze(-1)
 
     def prepare_for_casual_lm(
         self,
@@ -478,9 +520,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             input_ids=text_input_ids,  # [B, L]
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
-            visual_features=contrastive_visual_feats,  # [BT, D], with position embedding and RMSNorm, before visual_scale
-            visual_length=visual_lengths,  # [B]
-            global_visual_features=visual_output.global_visual_features,  # [B, D]
+            contrastive_features=contrastive_visual_feats,  # [sum(Lv), D], before visual_scale
+            contrastive_lengths=visual_lengths,  # [B]
         )
 
     def forward(
@@ -630,8 +671,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # the contrastive objective is disabled.
             contrastive_loss = torch.zeros_like(main_loss)
             if self.config.contrastive_loss_weight > 0.0:
-                visual_features = self.visual_contrastive_head(
-                    prepare_output.global_visual_features
+                visual_features = self._encode_visual_features_for_contrastive(
+                    prepare_output.contrastive_features,
+                    prepare_output.contrastive_lengths,
                 )
                 text_features = self._encode_labels_for_contrastive(labels).detach()
                 contrastive_loss = self.contrastive_loss_fct(
