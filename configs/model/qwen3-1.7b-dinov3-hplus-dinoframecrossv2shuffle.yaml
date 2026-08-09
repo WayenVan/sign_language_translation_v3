@@ -5,15 +5,15 @@ config:
   video_soft_token_id: 151656
   video_token_scale: 1.0
   llm_model_name_or_path: Qwen/Qwen3-1.7B
-  visual_backbone_type: c_radio_v4
+  visual_backbone_type: dinov3
   visual_backbone_config:
-    id: nvidia/C-RADIOv4-SO400M
+    id: facebook/dinov3-vith16plus-pretrain-lvd1689m
     output_layer: -1
   visual_adapter_type: dinoframe_cross_v2_shuffle
   visual_adapter_kwargs:
-    input_dim: 1152
-    cls_input_dim: 2304
+    input_dim: 1280
+    cls_input_dim: 1280
     output_dim: 2048
     temperature: 0.1
     temporal_gate_init: -2 #sigmoid
-  contrastive_loss_weight: 0.1
+  contrastive_loss_weight: 1.0

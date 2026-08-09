@@ -3,6 +3,7 @@ from typing import Dict
 
 
 from .visual_backbones.dinov2_backbone import DinoV2Backbone
+from .visual_backbones.dinov3_backbone import DinoV3Backbone
 from .visual_adapters.token_sampler_adapter import TokenSampleAdapter
 from .visual_adapters.patch_shuffle import TemporalShuffleAdapter
 from .visual_backbones.pretrained_backbone import PretrainedBackbone
@@ -27,6 +28,7 @@ from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import CRadioV4Ba
 
 VISUAL_BACKBONES: Dict[str, nn.Module] = {
     "dinov2": DinoV2Backbone,
+    "dinov3": DinoV3Backbone,
     "pretrained": PretrainedBackbone,
     "c_radio_v4": CRadioV4Backbone,
 }

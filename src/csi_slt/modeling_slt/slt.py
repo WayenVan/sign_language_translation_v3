@@ -149,15 +149,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # completed visual token (projection + position) immediately before it
         # is merged into the LLM input sequence.
         # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
-        # Keep the LLM input space separate from the cosine-similarity space.
-        # Both global modalities are projected into a compact shared space;
-        # normalization remains the responsibility of the contrastive loss.
-        self.visual_contrastive_head = nn.Linear(
-            self.config.hidden_size, self.config.contrastive_dim, bias=False
-        )
-        self.text_contrastive_head = nn.Linear(
-            self.config.hidden_size, self.config.contrastive_dim, bias=False
-        )
+        # Contrast visual tokens directly against the frozen LLM text space.
+        # This parameter-free baseline makes the auxiliary objective optimize
+        # the visual adapter rather than being absorbed by a projection head.
+        self.visual_contrastive_head = nn.Identity()
         # Keep one registered instance so its learnable temperature is included
         # in model parameters, checkpoints, and the optimizer.
         self.contrastive_loss_fct = CrossModalContrastiveLoss(gather_with_grad=True)
@@ -638,9 +633,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 visual_features = self.visual_contrastive_head(
                     prepare_output.global_visual_features
                 )
-                text_features = self.text_contrastive_head(
-                    self._encode_labels_for_contrastive(labels)
-                )
+                text_features = self._encode_labels_for_contrastive(labels).detach()
                 contrastive_loss = self.contrastive_loss_fct(
                     visual_features=visual_features,
                     text_features=text_features,
