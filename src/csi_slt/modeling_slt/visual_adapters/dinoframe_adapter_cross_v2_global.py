@@ -8,6 +8,7 @@ from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackbon
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
     DINOFrameAdapterCrossV2,
 )
+from csi_slt.modeling_slt.misc import mark_module_tree_as_initialized
 
 
 class DINOFrameAdapterCrossV2Global(nn.Module):
@@ -109,6 +110,8 @@ class DINOFrameAdapterCrossV2Global(nn.Module):
 
         nn.init.trunc_normal_(self.global_token, std=0.02)
         nn.init.trunc_normal_(self.temporal_position_embedding.weight, std=0.02)
+
+        mark_module_tree_as_initialized(self.temporal_position_embedding)
 
     def forward(
         self,
