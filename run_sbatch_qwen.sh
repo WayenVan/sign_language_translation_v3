@@ -46,8 +46,9 @@ DATASET_PATH=$(prepare_dataset \
 echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-dinov3-hplus-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-dinov3-hplus-dinoframecrossv2shuffle-0809.224x224 \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv2global \
+  model.config.contrastive_text_encoding_mode=decoder_last \
+  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv2global-0810.224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=8 \
@@ -59,9 +60,9 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.report_to="$REPORT_TO" \
   engine.training_args.ddp_find_unused_parameters=False \
   data=ph14t_*x224x224_qwen_multiling \
-  data.processor.video_token_scale=1.0 \
+  data.processor.video_token_scale=2.0 \
   data.data_root="$DATASET_PATH" \
-  data.processor.num_extra_video_tokens=2 \
+  data.processor.num_extra_video_tokens=3 \
   data.processor.video_processor.padding_to_multiple_of=4 \
   data.processor.video_processor.do_resize=False \
   data.processor.video_processor.do_normalize=False # NOTE: 很重要！！！
