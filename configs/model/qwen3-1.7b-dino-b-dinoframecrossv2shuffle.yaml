@@ -16,3 +16,5 @@ config:
     temperature: 0.1
     temporal_gate_init: -2 #sigmoid
   contrastive_loss_weight: 1.0
+  contrastive_text_encoding_mode: embedding_mean
+  contrastive_text_queue_size: 1024

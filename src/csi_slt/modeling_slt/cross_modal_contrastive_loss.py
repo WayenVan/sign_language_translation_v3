@@ -5,7 +5,7 @@ Computation flow
 
 Single process::
 
-    visual [B,D] --> FP32 --> normalize --> V @ T^T * scale --> CE(diagonal) --+-- V2T --+
+    visual [B,D] --> FP32 --> normalize --> V @ [T; text queue]^T --> CE --+-- V2T --+
                                                                                     +--> 0.5 * (V2T + T2V) --> loss
     text   [B,D] --> FP32 --> normalize --> T @ V^T * scale --> CE(diagonal) --+-- T2V --+
 
@@ -51,6 +51,8 @@ class CrossModalContrastiveLoss(nn.Module):
         gather_distributed: Gather cross-rank features as global negatives.
         gather_with_grad: Preserve gradients through gathered remote features.
         local_loss: Use local queries against global candidates under DDP.
+        text_queue_size: Number of historical text features used as additional
+            video-to-text negatives. Zero disables the queue.
         process_group: Optional distributed process group.
     """
 
@@ -62,6 +64,7 @@ class CrossModalContrastiveLoss(nn.Module):
         gather_distributed: bool = True,
         gather_with_grad: bool = False,
         local_loss: bool = True,
+        text_queue_size: int = 0,
         process_group: dist.ProcessGroup | None = None,
     ) -> None:
         super().__init__()
@@ -69,6 +72,8 @@ class CrossModalContrastiveLoss(nn.Module):
             raise ValueError("temperature must be positive")
         if max_logit_scale <= 0:
             raise ValueError("max_logit_scale must be positive")
+        if text_queue_size < 0:
+            raise ValueError("text_queue_size must be non-negative")
 
         initial_scale = torch.tensor(math.log(1.0 / temperature))
         if learnable_temperature:
@@ -80,7 +85,15 @@ class CrossModalContrastiveLoss(nn.Module):
         self.gather_distributed = gather_distributed
         self.gather_with_grad = gather_with_grad
         self.local_loss = local_loss
+        self.text_queue_size = text_queue_size
         self.process_group = process_group
+        self.register_buffer("text_queue", torch.empty(0, 0), persistent=False)
+        self.register_buffer(
+            "text_queue_ptr", torch.zeros((), dtype=torch.long), persistent=False
+        )
+        self.register_buffer(
+            "text_queue_count", torch.zeros((), dtype=torch.long), persistent=False
+        )
 
     @property
     def temperature(self) -> torch.Tensor:
@@ -102,7 +115,7 @@ class CrossModalContrastiveLoss(nn.Module):
 
         if not self._distributed_enabled():
             self._require_negatives(visual_features.shape[0])
-            return self._symmetric_loss(
+            loss = self._symmetric_loss(
                 visual_queries=visual_features,
                 text_queries=text_features,
                 visual_candidates=visual_features,
@@ -111,6 +124,8 @@ class CrossModalContrastiveLoss(nn.Module):
                     visual_features.shape[0], device=visual_features.device
                 ),
             )
+            self._enqueue_text_features(text_features)
+            return loss
 
         rank = dist.get_rank(group=self.process_group)
         batch_sizes = self._gather_batch_sizes(
@@ -127,24 +142,30 @@ class CrossModalContrastiveLoss(nn.Module):
             targets = torch.arange(
                 visual_features.shape[0], device=visual_features.device
             ) + sum(batch_sizes[:rank])
-            return self._symmetric_loss(
+            loss = self._symmetric_loss(
                 visual_queries=visual_features,
                 text_queries=text_features,
                 visual_candidates=all_visual_features,
                 text_candidates=all_text_features,
                 targets=targets,
             )
+        else:
+            targets = torch.arange(
+                all_visual_features.shape[0], device=visual_features.device
+            )
+            loss = self._symmetric_loss(
+                visual_queries=all_visual_features,
+                text_queries=all_text_features,
+                visual_candidates=all_visual_features,
+                text_candidates=all_text_features,
+                targets=targets,
+            )
 
-        targets = torch.arange(
-            all_visual_features.shape[0], device=visual_features.device
-        )
-        return self._symmetric_loss(
-            visual_queries=all_visual_features,
-            text_queries=all_text_features,
-            visual_candidates=all_visual_features,
-            text_candidates=all_text_features,
-            targets=targets,
-        )
+        # Every rank gathered features in the same rank order, so enqueuing the
+        # global batch keeps all per-rank queues synchronized without another
+        # collective operation.
+        self._enqueue_text_features(all_text_features)
+        return loss
 
     def _symmetric_loss(
         self,
@@ -155,11 +176,67 @@ class CrossModalContrastiveLoss(nn.Module):
         targets: torch.Tensor,
     ) -> torch.Tensor:
         scale = self._scale()
-        video_to_text = scale * visual_queries @ text_candidates.t()
+        queued_text = self._queued_text_features(
+            feature_dim=text_candidates.shape[-1], device=text_candidates.device
+        )
+        if queued_text.numel() > 0:
+            video_to_text_candidates = torch.cat(
+                (text_candidates, queued_text), dim=0
+            )
+        else:
+            video_to_text_candidates = text_candidates
+
+        video_to_text = scale * visual_queries @ video_to_text_candidates.t()
         text_to_video = scale * text_queries @ visual_candidates.t()
         return 0.5 * (
             F.cross_entropy(video_to_text, targets)
             + F.cross_entropy(text_to_video, targets)
+        )
+
+    def _queued_text_features(
+        self, feature_dim: int, device: torch.device
+    ) -> torch.Tensor:
+        if (
+            not self.training
+            or self.text_queue_size == 0
+            or int(self.text_queue_count.item()) == 0
+        ):
+            return torch.empty(0, feature_dim, dtype=torch.float32, device=device)
+        return self.text_queue[: int(self.text_queue_count.item())]
+
+    @torch.no_grad()
+    def _enqueue_text_features(self, text_features: torch.Tensor) -> None:
+        if not self.training or self.text_queue_size == 0:
+            return
+
+        features = text_features.detach().float()
+        if self.text_queue.shape != (self.text_queue_size, features.shape[-1]):
+            self.text_queue = torch.zeros(
+                self.text_queue_size,
+                features.shape[-1],
+                dtype=torch.float32,
+                device=features.device,
+            )
+            self.text_queue_ptr.zero_()
+            self.text_queue_count.zero_()
+
+        if features.shape[0] >= self.text_queue_size:
+            self.text_queue.copy_(features[-self.text_queue_size :])
+            self.text_queue_ptr.zero_()
+            self.text_queue_count.fill_(self.text_queue_size)
+            return
+
+        count = features.shape[0]
+        ptr = int(self.text_queue_ptr.item())
+        first_count = min(count, self.text_queue_size - ptr)
+        self.text_queue[ptr : ptr + first_count].copy_(features[:first_count])
+        remaining = count - first_count
+        if remaining:
+            self.text_queue[:remaining].copy_(features[first_count:])
+
+        self.text_queue_ptr.fill_((ptr + count) % self.text_queue_size)
+        self.text_queue_count.fill_(
+            min(self.text_queue_size, int(self.text_queue_count.item()) + count)
         )
 
     def _scale(self) -> torch.Tensor:
@@ -248,3 +325,36 @@ if __name__ == "__main__":
     loss.backward()
     print(f"loss: {loss.item():.6f}")
     print(f"temperature: {criterion.temperature.item():.6f}")
+
+
+# local_loss=True example
+# =======================
+#
+# Two ranks, local batch size 2, global batch size 4, text queue size 3.
+# The diagrams show rank 1, whose local positive targets are [2, 3].
+#
+# Video -> Text (text queue is used)
+#
+#                         Current global text                  Text queue
+#                  T0       T1       T2       T3       Q0       Q1       Q2
+#               +--------+--------+--------+--------+--------+--------+--------+
+# V2 (rank 1)   |  neg   |  neg   |  POS   |  neg   |  neg   |  neg   |  neg   |
+#               +--------+--------+--------+--------+--------+--------+--------+
+# V3 (rank 1)   |  neg   |  neg   |  neg   |  POS   |  neg   |  neg   |  neg   |
+#               +--------+--------+--------+--------+--------+--------+--------+
+#
+# logits shape: [local_batch, global_batch + text_queue_size] = [2, 7]
+# targets: [2, 3]
+#
+# Text -> Video (text queue is not used)
+#
+#                         Current global visual
+#                  V0       V1       V2       V3
+#               +--------+--------+--------+--------+
+# T2 (rank 1)   |  neg   |  neg   |  POS   |  neg   |
+#               +--------+--------+--------+--------+
+# T3 (rank 1)   |  neg   |  neg   |  neg   |  POS   |
+#               +--------+--------+--------+--------+
+#
+# logits shape: [local_batch, global_batch] = [2, 4]
+# targets: [2, 3]

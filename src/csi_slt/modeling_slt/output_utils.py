@@ -42,6 +42,7 @@ class PrepareForCausalLMOutput(NamedTuple):
     visual_mask: torch.Tensor  # [B, L]
     contrastive_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
     contrastive_lengths: Optional[torch.Tensor] = None  # [B]
+    global_contrastive_features: Optional[torch.Tensor] = None  # [B, D]
 
 
 @dataclass

@@ -49,6 +49,8 @@ class SltConfig(PretrainedConfig):
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
         contrastive_dim: int = 512,
         contrastive_loss_weight: float = 1.0,
+        contrastive_text_encoding_mode: str = "embedding_mean",
+        contrastive_text_queue_size: int = 0,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -103,6 +105,13 @@ class SltConfig(PretrainedConfig):
             contrastive_loss_weight: Weight applied to the global video-text
                 contrastive objective before it is added to the language-model
                 loss.
+            contrastive_text_encoding_mode: Text representation used by the
+                contrastive objective. ``"embedding_mean"`` mean-pools label
+                token embeddings; ``"decoder_last"`` runs the frozen decoder
+                and uses the last valid token's contextual hidden state.
+            contrastive_text_queue_size: Number of detached historical text
+                features used as additional video-to-text negatives. Zero
+                disables the queue.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -125,6 +134,17 @@ class SltConfig(PretrainedConfig):
             raise ValueError("contrastive_dim must be positive")
         self.contrastive_dim = contrastive_dim
         self.contrastive_loss_weight = contrastive_loss_weight
+        valid_text_encoding_modes = {"embedding_mean", "decoder_last"}
+        if contrastive_text_encoding_mode not in valid_text_encoding_modes:
+            raise ValueError(
+                "contrastive_text_encoding_mode must be one of "
+                f"{sorted(valid_text_encoding_modes)}, got "
+                f"{contrastive_text_encoding_mode!r}"
+            )
+        self.contrastive_text_encoding_mode = contrastive_text_encoding_mode
+        if contrastive_text_queue_size < 0:
+            raise ValueError("contrastive_text_queue_size must be non-negative")
+        self.contrastive_text_queue_size = contrastive_text_queue_size
 
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.

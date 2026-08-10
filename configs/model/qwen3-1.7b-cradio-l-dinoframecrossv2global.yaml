@@ -25,3 +25,5 @@ config:
     local_residual_gate_init: 0.0
   contrastive_dim: 512
   contrastive_loss_weight: 1.0
+  contrastive_text_encoding_mode: embedding_mean
+  contrastive_text_queue_size: 1024

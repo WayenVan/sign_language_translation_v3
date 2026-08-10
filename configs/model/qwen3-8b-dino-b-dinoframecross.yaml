@@ -14,3 +14,5 @@ config:
     input_dim: 768
     output_dim: 4096
   contrastive_loss_weight: 1.0
+  contrastive_text_encoding_mode: embedding_mean
+  contrastive_text_queue_size: 1024

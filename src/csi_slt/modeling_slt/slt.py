@@ -172,7 +172,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
         # Keep one registered instance so its learnable temperature is included
         # in model parameters, checkpoints, and the optimizer.
-        self.contrastive_loss_fct = CrossModalContrastiveLoss(gather_with_grad=True)
+        self.contrastive_loss_fct = CrossModalContrastiveLoss(
+            gather_with_grad=True,
+            text_queue_size=config.contrastive_text_queue_size,
+        )
 
         self.config.num_extra_tokens = 2  # Start and end video tokens.
         self.config.is_encoder_decoder = False
@@ -373,12 +376,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
         return visual_adapter_output
 
     def _encode_labels_for_contrastive(self, labels: torch.Tensor) -> torch.Tensor:
-        """Mean-pool frozen LLM token embeddings for each label sequence.
+        """Encode each label sequence for the contrastive text branch.
 
         ``labels`` uses ``-100`` for positions excluded from the language-model
-        loss. Those positions are converted to padding and excluded from the
-        mean. This keeps the text target in the LLM input-embedding space and
-        does not run an additional decoder forward pass.
+        loss. ``embedding_mean`` mean-pools the valid token embeddings, while
+        ``decoder_last`` runs the frozen decoder and selects the last valid
+        token's contextual hidden state.
 
         Args:
             labels: Token ids with shape ``[B, T]``. Ignored positions are
@@ -399,9 +402,31 @@ class SltModel(PreTrainedModel, GenerationMixin):
             pad_token_id = 0
 
         input_ids = labels.masked_fill(~valid_mask, pad_token_id)
-        token_features = self.llm.get_input_embeddings()(input_ids)
-        weights = valid_mask.unsqueeze(-1).to(dtype=token_features.dtype)
-        return (token_features * weights).sum(dim=1) / weights.sum(dim=1)
+        mode = self.config.contrastive_text_encoding_mode
+        if mode == "embedding_mean":
+            token_features = self.llm.get_input_embeddings()(input_ids)
+            weights = valid_mask.unsqueeze(-1).to(dtype=token_features.dtype)
+            return (token_features * weights).sum(dim=1) / weights.sum(dim=1)
+
+        attention_mask = valid_mask.long()
+        position_ids = attention_mask.cumsum(dim=-1) - 1
+        position_ids.masked_fill_(~valid_mask, 0)
+
+        with torch.no_grad():
+            decoder_outputs = self.llm.get_decoder()(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=False,
+                return_dict=True,
+            )
+
+        token_positions = torch.arange(labels.shape[1], device=labels.device)
+        last_valid_indices = (
+            token_positions.masked_fill(~valid_mask, -1).max(dim=-1).values
+        )
+        batch_indices = torch.arange(labels.shape[0], device=labels.device)
+        return decoder_outputs.last_hidden_state[batch_indices, last_valid_indices]
 
     @staticmethod
     def _encode_visual_features_for_contrastive(
@@ -522,6 +547,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_mask=visual_token_mask,  # [B, L]
             contrastive_features=contrastive_visual_feats,  # [sum(Lv), D], before visual_scale
             contrastive_lengths=visual_lengths,  # [B]
+            global_contrastive_features=visual_output.global_visual_features,
         )
 
     def forward(
@@ -671,10 +697,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # the contrastive objective is disabled.
             contrastive_loss = torch.zeros_like(main_loss)
             if self.config.contrastive_loss_weight > 0.0:
-                visual_features = self._encode_visual_features_for_contrastive(
-                    prepare_output.contrastive_features,
-                    prepare_output.contrastive_lengths,
-                )
+                if prepare_output.global_contrastive_features is not None:
+                    visual_features = prepare_output.global_contrastive_features
+                else:
+                    visual_features = self._encode_visual_features_for_contrastive(
+                        prepare_output.contrastive_features,
+                        prepare_output.contrastive_lengths,
+                    )
                 text_features = self._encode_labels_for_contrastive(labels).detach()
                 contrastive_loss = self.contrastive_loss_fct(
                     visual_features=visual_features,
