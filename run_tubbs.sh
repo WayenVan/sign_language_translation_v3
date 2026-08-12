@@ -3,7 +3,7 @@
 export PYTHONPATH=./src:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0,1
 
-export WANDB_PROJECT=sign_language_translation_v3.1
+export WANDB_PROJECT=sign_language_translation_v3.0-dev
 
 source .venv/bin/activate
 
@@ -12,13 +12,13 @@ if [[ "${1:-}" == "debug" ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
 else
-  export WANDB_PROJECT=sign_language_translation_v3.1
+  export WANDB_PROJECT=sign_language_translation_v3.0-dev
   REPORT_TO=wandb
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-dinov3-hplus-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-dinov3-hplus-dinoframecrossv2shuffle-0810.224x224 \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
+  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0811.224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
