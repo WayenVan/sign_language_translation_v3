@@ -59,6 +59,7 @@ class SltConfig(PretrainedConfig):
         alignment_null_temperature: float = 0.1,
         alignment_beta_ot: float = 1.0,
         alignment_beta_null: float = 0.1,
+        alignment_beta_tv: float = 0.1,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -129,6 +130,8 @@ class SltConfig(PretrainedConfig):
                 softmax.
             alignment_beta_ot: Internal weight of the OT objective.
             alignment_beta_null: Internal weight of the NULL regularizer.
+            alignment_beta_tv: Internal weight of the temporal-variation loss
+                on the row-normalized real-token plan.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -168,7 +171,7 @@ class SltConfig(PretrainedConfig):
             raise ValueError("alignment_null_ratio_max must lie in [0, 1]")
         if alignment_null_temperature <= 0:
             raise ValueError("alignment_null_temperature must be positive")
-        if alignment_beta_ot < 0 or alignment_beta_null < 0:
+        if alignment_beta_ot < 0 or alignment_beta_null < 0 or alignment_beta_tv < 0:
             raise ValueError("alignment beta weights must be non-negative")
         self.alignment_loss_weight = alignment_loss_weight
         self.alignment_eps = alignment_eps
@@ -179,6 +182,7 @@ class SltConfig(PretrainedConfig):
         self.alignment_null_temperature = alignment_null_temperature
         self.alignment_beta_ot = alignment_beta_ot
         self.alignment_beta_null = alignment_beta_null
+        self.alignment_beta_tv = alignment_beta_tv
 
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.

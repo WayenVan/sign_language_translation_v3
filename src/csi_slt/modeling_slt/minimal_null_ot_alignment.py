@@ -168,6 +168,9 @@ class MinimalNullOTAlignment(nn.Module):
         beta_null: Weight of the one-sided NULL-ratio regularization. Increasing
             it more strongly prevents the learnable NULL token/bias from becoming
             a universal low-cost escape route.
+        beta_tv: Weight of the temporal-variation loss on the row-normalized
+            real-token plan. It penalizes adjacent video positions flipping
+            between tokens, keeping the learned alignment temporally coherent.
     """
 
     def __init__(
@@ -182,6 +185,7 @@ class MinimalNullOTAlignment(nn.Module):
         null_temperature: float = 0.1,
         beta_ot: float = 1.0,
         beta_null: float = 0.1,
+        beta_tv: float = 0.1,
     ) -> None:
         super().__init__()
         if not 0 < null_mass_prior < 1:
@@ -190,6 +194,8 @@ class MinimalNullOTAlignment(nn.Module):
             raise ValueError("null_ratio_max must lie in [0, 1]")
         if null_temperature <= 0:
             raise ValueError("null_temperature must be positive")
+        if beta_ot < 0 or beta_null < 0 or beta_tv < 0:
+            raise ValueError("beta weights must be non-negative")
 
         self.eps = float(eps)
         self.n_iters = int(n_iters)
@@ -199,6 +205,7 @@ class MinimalNullOTAlignment(nn.Module):
         self.null_temperature = float(null_temperature)
         self.beta_ot = float(beta_ot)
         self.beta_null = float(beta_null)
+        self.beta_tv = float(beta_tv)
 
         # This is only a dimension adapter. There is no D x D orthogonal T.
         self.video_proj: nn.Module
@@ -238,6 +245,39 @@ class MinimalNullOTAlignment(nn.Module):
         real_mass = (1.0 - null_prior) * real_distribution  # [B, U]
         return torch.cat((null_prior, real_mass), dim=1)  # [B, U+1]
 
+    def _compute_tv_loss(
+        self, alignment: torch.Tensor, video_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Temporal-variation loss on the row-normalized real-token plan.
+
+        Implements the VTaMo temporal-variation term (paper Eq.(6)):
+
+        ``L_tv = (1 / ((M-1) * U)) * sum_{m,k} |A_hat[m+1,k] - A_hat[m,k]|``
+
+        where ``A_hat`` is the transport plan row-normalized over the real
+        pseudo-label columns (NULL excluded). Only adjacent video positions
+        where BOTH are valid contribute. Row-normalization follows the paper
+        and makes the penalty scale-invariant to per-position transported mass;
+        the mask excludes padding/boundary pairs.
+
+        Args:
+            alignment: Transport plan ``[B, M, U+1]`` (column 0 is NULL).
+            video_mask: Valid video positions ``[B, M]``.
+
+        Returns:
+            Scalar TV loss.
+        """
+        # Exclude the NULL column; keep only real pseudo-label columns.
+        real_plan = alignment[:, :, 1:]  # [B, M, U]
+        # Row-normalize over real tokens -> A_hat (paper Eq.(6)).
+        real_plan = real_plan / real_plan.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        # Adjacent-row absolute difference: [B, M-1, U].
+        diff = (real_plan[:, 1:, :] - real_plan[:, :-1, :]).abs()
+        # Only count pairs where both video positions are valid.
+        pair_mask = (video_mask[:, 1:] * video_mask[:, :-1]).unsqueeze(-1)  # [B, M-1, 1]
+        num_pairs = pair_mask.sum().clamp_min(1)
+        return (diff * pair_mask).sum() / (num_pairs * real_plan.shape[-1])
+
     def forward(
         self,
         video_features: Tensor,
@@ -257,7 +297,7 @@ class MinimalNullOTAlignment(nn.Module):
             pseudo_confidence: Optional non-negative label reliability ``[B, U]``.
 
         Returns:
-            total_loss: ``beta_ot * L_uot + beta_null * L_null``.
+            total_loss: ``beta_ot * L_uot + beta_tv * L_tv + beta_null * L_null``.
             info: Detached component losses, NULL statistics, and alignment
                 ``[B, M, U+1]`` for logging/visualization only.
         """
@@ -318,7 +358,14 @@ class MinimalNullOTAlignment(nn.Module):
         soft_null_per_sample = soft_null_per_sample / valid_video.sum(dim=-1).clamp_min(1)
         null_reg_loss = torch.relu(soft_null_per_sample - self.null_ratio_max).square().mean()
 
-        total_loss = self.beta_ot * ot_loss + self.beta_null * null_reg_loss
+        # Temporal variation: keep adjacent video positions from flipping tokens.
+        tv_loss = self._compute_tv_loss(alignment, video_mask)
+
+        total_loss = (
+            self.beta_ot * ot_loss
+            + self.beta_tv * tv_loss
+            + self.beta_null * null_reg_loss
+        )
 
         hard_null = alignment.argmax(dim=-1).eq(0).to(dtype)  # [B, M]
         hard_null_ratio = (hard_null * valid_video).sum() / valid_video.sum().clamp_min(1)
@@ -328,6 +375,7 @@ class MinimalNullOTAlignment(nn.Module):
             "ot_loss": ot_loss.detach(),
             "transport_loss": transport_loss.detach(),
             "target_mass_kl": target_mass_kl.detach(),
+            "tv_loss": tv_loss.detach(),
             "null_reg_loss": null_reg_loss.detach(),
             "soft_null_ratio": soft_null_per_sample.mean().detach(),
             "hard_null_ratio": hard_null_ratio.detach(),

@@ -192,6 +192,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             null_temperature=config.alignment_null_temperature,
             beta_ot=config.alignment_beta_ot,
             beta_null=config.alignment_beta_null,
+            beta_tv=config.alignment_beta_tv,
         )
 
         self.config.num_extra_tokens = 2  # Start and end video tokens.
