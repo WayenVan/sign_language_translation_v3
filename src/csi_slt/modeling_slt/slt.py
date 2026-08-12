@@ -165,9 +165,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
         # Learn one attention score per visual token for video-level pooling.
-        self.visual_global_attention = nn.Linear(
-            self.config.hidden_size, 1, bias=False
-        )
+        self.visual_global_attention = nn.Linear(self.config.hidden_size, 1, bias=False)
         # 全局可学习标量，初始不改变特征
         self.visual_scale = nn.Parameter(torch.tensor(1.0))
         # The adapter projection and learned visual positions can have a
@@ -259,8 +257,43 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # fmt: on
 
     @classmethod
+    def from_pretrained_components_with_lora(
+        cls,
+        config: SltConfig,
+        peft_config: LoraConfig,
+        llm_dtype="auto",
+        visual_backbone_dtype="auto",
+    ):
+        model = cls.from_pretrained_components(
+            config=config,
+            llm_dtype=llm_dtype,
+            visual_backbone_dtype=visual_backbone_dtype,
+        )
+
+        if model.config.llm_lora:
+            raise ValueError(
+                "The checkpoint already contains LoRA. "
+                "Use SltModel.from_pretrained() to load it."
+            )
+
+        model.llm = get_peft_model(model.llm, peft_config)
+        # The checkpoint weights were already loaded and PEFT initialized the
+        # newly injected LoRA modules; the complete wrapped LLM is now ready.
+        mark_module_tree_as_initialized(model.llm)
+
+        # setup config
+        model.config.llm_lora = True
+        model.config.llm_lora_config = {
+            key: list(value) if isinstance(value, set) else value
+            for key, value in peft_config.to_dict().items()
+        }
+        model._register_llm_tied_weights()
+
+        return model
+
+    @classmethod
     def from_pretrained_with_new_lora(
-        cls, peft_config, checkpoint_dir: str, model_dtype="auto"
+        cls, peft_config: LoraConfig, checkpoint_dir: str, model_dtype="auto"
     ):
         model: SltModel = cls.from_pretrained(checkpoint_dir, dtype=model_dtype)
 
@@ -413,9 +446,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             and ``[B, T, D]`` respectively.
         """
         if input_ids.ndim != 2:
-            raise ValueError(
-                f"input_ids must have shape [B, T], got {input_ids.shape}"
-            )
+            raise ValueError(f"input_ids must have shape [B, T], got {input_ids.shape}")
         if attention_mask.shape != input_ids.shape:
             raise ValueError(
                 "attention_mask must have the same shape as input_ids, got "
