@@ -28,7 +28,7 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.disable_tqdm=False \
   engine.training_args.report_to="$REPORT_TO" \
   engine.llm_dtype=bfloat16 \
-  engine.visual_backbone_dtype=bfloat16 \
+  engine.visual_backbone_dtype=float32 \
   data=ph14t_*x224x224_qwen_multiling \
   data.processor.video_token_scale=1.0 \
   data.processor.num_extra_video_tokens=2 \

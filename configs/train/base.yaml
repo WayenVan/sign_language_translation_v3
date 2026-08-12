@@ -21,7 +21,7 @@ engine:
   training_args:
     do_train: true
     do_predict: true
-    num_train_epochs: 60
+    num_train_epochs: 35
     per_device_train_batch_size: 2
     per_device_eval_batch_size: 1
     report_to: wandb
