@@ -41,7 +41,7 @@ val:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
     data_root: ${data.data_root}
-    mode: dev
+    mode: validation
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
