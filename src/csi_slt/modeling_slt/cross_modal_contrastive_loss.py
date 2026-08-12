@@ -114,7 +114,12 @@ class CrossModalContrastiveLoss(nn.Module):
         text_features = F.normalize(text_features.float(), dim=-1)
 
         if not self._distributed_enabled():
-            self._require_negatives(visual_features.shape[0])
+            if visual_features.shape[0] < 2:
+                # No positive/negative comparison is possible; retain a valid
+                # zero-gradient graph for batches with missing pseudo-glosses.
+                return (
+                    visual_features.sum() + text_features.sum() + self._scale()
+                ) * 0.0
             loss = self._symmetric_loss(
                 visual_queries=visual_features,
                 text_queries=text_features,
@@ -131,7 +136,13 @@ class CrossModalContrastiveLoss(nn.Module):
         batch_sizes = self._gather_batch_sizes(
             visual_features.shape[0], visual_features.device
         )
-        self._require_negatives(sum(batch_sizes))
+        global_batch_size = sum(batch_sizes)
+        if global_batch_size < 2:
+            # Every rank observes the same count, so all ranks safely take this
+            # branch after participating in the size collective.
+            return (
+                visual_features.sum() + text_features.sum() + self._scale()
+            ) * 0.0
 
         all_visual_features = self._gather_features(
             visual_features, batch_sizes, rank
@@ -139,16 +150,27 @@ class CrossModalContrastiveLoss(nn.Module):
         all_text_features = self._gather_features(text_features, batch_sizes, rank)
 
         if self.local_loss:
-            targets = torch.arange(
-                visual_features.shape[0], device=visual_features.device
-            ) + sum(batch_sizes[:rank])
-            loss = self._symmetric_loss(
-                visual_queries=visual_features,
-                text_queries=text_features,
-                visual_candidates=all_visual_features,
-                text_candidates=all_text_features,
-                targets=targets,
-            )
+            if visual_features.shape[0] == 0:
+                loss = (
+                    all_visual_features.sum()
+                    + all_text_features.sum()
+                    + self._scale()
+                ) * 0.0
+            else:
+                targets = torch.arange(
+                    visual_features.shape[0], device=visual_features.device
+                ) + sum(batch_sizes[:rank])
+                loss = self._symmetric_loss(
+                    visual_queries=visual_features,
+                    text_queries=text_features,
+                    visual_candidates=all_visual_features,
+                    text_candidates=all_text_features,
+                    targets=targets,
+                )
+                # DDP averages ranks; reweight uneven valid counts to recover
+                # an average over valid samples rather than over ranks.
+                loss = loss * dist.get_world_size(group=self.process_group)
+                loss = loss * visual_features.shape[0] / global_batch_size
         else:
             targets = torch.arange(
                 all_visual_features.shape[0], device=visual_features.device
@@ -301,20 +323,12 @@ class CrossModalContrastiveLoss(nn.Module):
                 f"got {tuple(visual_features.shape)} and "
                 f"{tuple(text_features.shape)}"
             )
-        if visual_features.shape[0] == 0 or visual_features.shape[1] == 0:
-            raise ValueError("global features must be non-empty")
+        if visual_features.shape[1] == 0:
+            raise ValueError("global feature dimension must be non-empty")
         if visual_features.device != text_features.device:
             raise ValueError("visual_features and text_features must share a device")
         if not visual_features.is_floating_point() or not text_features.is_floating_point():
             raise TypeError("visual_features and text_features must be floating point")
-
-    @staticmethod
-    def _require_negatives(global_batch_size: int) -> None:
-        if global_batch_size < 2:
-            raise ValueError(
-                "contrastive learning requires at least two global sample pairs"
-            )
-
 
 if __name__ == "__main__":
     torch.manual_seed(42)

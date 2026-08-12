@@ -729,16 +729,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
                         "pseudo_gloss_input_ids and pseudo_gloss_attention_mask "
                         "are required when contrastive loss is enabled"
                     )
+                # Empty pseudo-glosses carry no auxiliary supervision.  Keep
+                # their translation CE, but exclude them from both auxiliaries.
+                valid_pseudo = pseudo_gloss_attention_mask.bool().any(dim=-1)
                 global_text_features, local_text_features = (
                     self._encode_pseudo_gloss_for_contrastive(
-                        pseudo_gloss_input_ids,
-                        pseudo_gloss_attention_mask,
+                        pseudo_gloss_input_ids[valid_pseudo],
+                        pseudo_gloss_attention_mask[valid_pseudo],
                     )
                 )
 
             if self.config.contrastive_loss_weight > 0.0:
                 contrastive_loss = self.contrastive_loss_fct(
-                    visual_features=global_visual_features,
+                    visual_features=global_visual_features[valid_pseudo],
                     text_features=global_text_features.detach(),
                 )
 
@@ -747,12 +750,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     local_visual_features,
                     prepare_output.contrastive_lengths,
                 )
-                alignment_loss, _alignment_info = self.local_alignment_loss_fct(
-                    video_features=padded_visual_features,
-                    pseudo_embeddings=local_text_features,
-                    video_mask=visual_mask,
-                    pseudo_mask=pseudo_gloss_attention_mask,
-                )
+                if valid_pseudo.any():
+                    alignment_loss, _alignment_info = self.local_alignment_loss_fct(
+                        video_features=padded_visual_features[valid_pseudo],
+                        pseudo_embeddings=local_text_features,
+                        video_mask=visual_mask[valid_pseudo],
+                        pseudo_mask=pseudo_gloss_attention_mask[valid_pseudo],
+                    )
 
             loss = (
                 main_loss

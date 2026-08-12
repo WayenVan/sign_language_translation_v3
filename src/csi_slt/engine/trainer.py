@@ -55,6 +55,14 @@ class SltTrainer(Seq2SeqTrainer):
     ):
         super().__init__(*args, **kwargs)
 
+        # ``SltModel.forward`` accepts arbitrary LLM kwargs, which makes
+        # Transformers infer that it consumes ``num_items_in_batch``.  Its
+        # language-model CE and auxiliary objectives are already mean-reduced,
+        # however, and do not use that value.  Keep the standard DDP averaging
+        # path; otherwise Trainer multiplies the complete loss by world size
+        # when ``average_tokens_across_devices=True``.
+        self.model_accepts_loss_kwargs = False
+
         self.eval_data_collator = (
             eval_data_collator if eval_data_collator is not None else self.data_collator
         )

@@ -91,3 +91,16 @@ def test_text_queue_is_inactive_during_evaluation():
     assert queued.shape == (0, 2)
     criterion._enqueue_text_features(torch.ones(2, 2))
     assert criterion.text_queue_count.item() == 2
+
+
+def test_empty_local_batch_returns_differentiable_zero():
+    criterion = CrossModalContrastiveLoss(gather_distributed=False)
+    visual = torch.empty(0, 2, requires_grad=True)
+    text = torch.empty(0, 2, requires_grad=True)
+
+    loss = criterion(visual, text)
+    loss.backward()
+
+    assert loss.item() == 0.0
+    assert visual.grad is not None
+    assert text.grad is not None
