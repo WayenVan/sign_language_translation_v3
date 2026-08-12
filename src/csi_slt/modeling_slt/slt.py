@@ -14,6 +14,7 @@ from transformers.masking_utils import (
 from transformers.modeling_utils import PreTrainedModel
 
 from csi_slt.modeling_slt.cross_modal_contrastive_loss import CrossModalContrastiveLoss
+from csi_slt.modeling_slt.minimal_null_ot_alignment import MinimalNullOTAlignment
 
 from peft import get_peft_model, LoraConfig
 from ..configuration_slt.configuration import SltConfig
@@ -23,7 +24,7 @@ from .output_utils import (
     VisualAdapterOutput,
     VisualBackboneOutput,
 )
-from .misc import mark_module_tree_as_initialized
+from .misc import mark_module_tree_as_initialized, packed_to_padded
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
 
 logger = logging.get_logger(__name__)
@@ -163,6 +164,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
+        # Learn one attention score per visual token for video-level pooling.
+        self.visual_global_attention = nn.Linear(
+            self.config.hidden_size, 1, bias=False
+        )
         # 全局可学习标量，初始不改变特征
         self.visual_scale = nn.Parameter(torch.tensor(1.0))
         # The adapter projection and learned visual positions can have a
@@ -175,6 +180,18 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.contrastive_loss_fct = CrossModalContrastiveLoss(
             gather_with_grad=True,
             text_queue_size=config.contrastive_text_queue_size,
+        )
+        self.local_alignment_loss_fct = MinimalNullOTAlignment(
+            video_dim=config.hidden_size,
+            text_dim=config.hidden_size,
+            eps=config.alignment_eps,
+            n_iters=config.alignment_n_iters,
+            target_relaxation=config.alignment_target_relaxation,
+            null_mass_prior=config.alignment_null_mass_prior,
+            null_ratio_max=config.alignment_null_ratio_max,
+            null_temperature=config.alignment_null_temperature,
+            beta_ot=config.alignment_beta_ot,
+            beta_null=config.alignment_beta_null,
         )
 
         self.config.num_extra_tokens = 2  # Start and end video tokens.
@@ -375,65 +392,55 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         return visual_adapter_output
 
-    def _encode_labels_for_contrastive(self, labels: torch.Tensor) -> torch.Tensor:
-        """Encode each label sequence for the contrastive text branch.
+    def _encode_pseudo_gloss_for_contrastive(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode pseudo-gloss tokens for the contrastive text branch.
 
-        ``labels`` uses ``-100`` for positions excluded from the language-model
-        loss. ``embedding_mean`` mean-pools the valid token embeddings, while
-        ``decoder_last`` runs the frozen decoder and selects the last valid
-        token's contextual hidden state.
+        The global representation is the masked mean of the word embeddings.
+        The unpooled word embeddings are also returned for the later local-
+        alignment path.
 
         Args:
-            labels: Token ids with shape ``[B, T]``. Ignored positions are
-                represented by ``-100``.
+            input_ids: Pseudo-gloss token ids with shape ``[B, T]``.
+            attention_mask: Pseudo-gloss attention mask with shape ``[B, T]``.
 
         Returns:
-            Mean-pooled text features with shape ``[B, D]``.
+            A pair ``(global_features, local_features)`` with shapes ``[B, D]``
+            and ``[B, T, D]`` respectively.
         """
-        if labels.ndim != 2:
-            raise ValueError(f"labels must have shape [B, T], got {labels.shape}")
-
-        valid_mask = labels.ne(-100)
-        if torch.any(valid_mask.sum(dim=-1) == 0):
-            raise ValueError("every label sequence must contain a valid token")
-
-        pad_token_id = self.config.get_text_config().pad_token_id
-        if pad_token_id is None:
-            pad_token_id = 0
-
-        input_ids = labels.masked_fill(~valid_mask, pad_token_id)
-        mode = self.config.contrastive_text_encoding_mode
-        if mode == "embedding_mean":
-            token_features = self.llm.get_input_embeddings()(input_ids)
-            weights = valid_mask.unsqueeze(-1).to(dtype=token_features.dtype)
-            return (token_features * weights).sum(dim=1) / weights.sum(dim=1)
-
-        attention_mask = valid_mask.long()
-        position_ids = attention_mask.cumsum(dim=-1) - 1
-        position_ids.masked_fill_(~valid_mask, 0)
-
-        with torch.no_grad():
-            decoder_outputs = self.llm.get_decoder()(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                return_dict=True,
+        if input_ids.ndim != 2:
+            raise ValueError(
+                f"input_ids must have shape [B, T], got {input_ids.shape}"
+            )
+        if attention_mask.shape != input_ids.shape:
+            raise ValueError(
+                "attention_mask must have the same shape as input_ids, got "
+                f"{attention_mask.shape} and {input_ids.shape}"
             )
 
-        token_positions = torch.arange(labels.shape[1], device=labels.device)
-        last_valid_indices = (
-            token_positions.masked_fill(~valid_mask, -1).max(dim=-1).values
-        )
-        batch_indices = torch.arange(labels.shape[0], device=labels.device)
-        return decoder_outputs.last_hidden_state[batch_indices, last_valid_indices]
+        valid_mask = attention_mask.bool()
+        if torch.any(valid_mask.sum(dim=-1) == 0):
+            raise ValueError("every pseudo-gloss sequence must contain a valid token")
 
-    @staticmethod
+        local_features = self.llm.get_input_embeddings()(input_ids)
+        weights = valid_mask.unsqueeze(-1).to(dtype=local_features.dtype)
+        global_features = (local_features * weights).sum(dim=1) / weights.sum(dim=1)
+        return global_features, local_features
+
     def _encode_visual_features_for_contrastive(
+        self,
         visual_features: torch.Tensor,
         visual_lengths: torch.Tensor,
-    ) -> torch.Tensor:
-        """Mean-pool packed visual tokens into one feature per video."""
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return global and local features from the current visual tokens.
+
+        The local representation is the packed visual feature tensor itself.
+        The global representation uses learned attention weights normalized
+        independently within each video.
+        """
         if visual_features.ndim != 2:
             raise ValueError(
                 "visual_features must have shape [sum(lengths), D], got "
@@ -454,14 +461,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 "visual_lengths.sum() must equal the packed visual token count"
             )
 
-        batch_indices = torch.repeat_interleave(
-            torch.arange(lengths.numel(), device=visual_features.device), lengths
-        )
-        pooled_features = visual_features.new_zeros(
-            lengths.numel(), visual_features.shape[-1]
-        )
-        pooled_features.index_add_(0, batch_indices, visual_features)
-        return pooled_features / lengths.to(visual_features.dtype).unsqueeze(-1)
+        feature_sequences = torch.split(visual_features, lengths.tolist(), dim=0)
+        global_features = []
+        for sequence in feature_sequences:
+            attention_logits = self.visual_global_attention(sequence).squeeze(-1)
+            attention_weights = torch.softmax(attention_logits.float(), dim=0).to(
+                dtype=sequence.dtype
+            )
+            global_features.append(
+                (sequence * attention_weights.unsqueeze(-1)).sum(dim=0)
+            )
+
+        global_features = torch.stack(global_features, dim=0)
+        return global_features, visual_features
 
     def prepare_for_casual_lm(
         self,
@@ -546,7 +558,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_mask=visual_token_mask,  # [B, L]
             contrastive_features=contrastive_visual_feats,  # [sum(Lv), D], before visual_scale
             contrastive_lengths=visual_lengths,  # [B]
-            global_contrastive_features=visual_output.global_visual_features,
         )
 
     def forward(
@@ -685,6 +696,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         loss = None
         main_loss = None
         contrastive_loss = None
+        alignment_loss = None
         if labels is not None:
             # Shift so that tokens before position n predict token n.
             shift_logits = outputs.logits[..., :-1, :].contiguous()
@@ -695,28 +707,64 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
 
             # Keep this as a tensor so it can be logged consistently even when
-            # the contrastive objective is disabled.
+            # either auxiliary objective is disabled.
             contrastive_loss = torch.zeros_like(main_loss)
-            if self.config.contrastive_loss_weight > 0.0:
-                if prepare_output.global_contrastive_features is not None:
-                    visual_features = prepare_output.global_contrastive_features
-                else:
-                    visual_features = self._encode_visual_features_for_contrastive(
+            alignment_loss = torch.zeros_like(main_loss)
+            auxiliary_loss_enabled = (
+                self.config.contrastive_loss_weight > 0.0
+                or self.config.alignment_loss_weight > 0.0
+            )
+            if auxiliary_loss_enabled:
+                global_visual_features, local_visual_features = (
+                    self._encode_visual_features_for_contrastive(
                         prepare_output.contrastive_features,
                         prepare_output.contrastive_lengths,
                     )
-                text_features = self._encode_labels_for_contrastive(labels).detach()
-                contrastive_loss = self.contrastive_loss_fct(
-                    visual_features=visual_features,
-                    text_features=text_features,
+                )
+                if (
+                    pseudo_gloss_input_ids is None
+                    or pseudo_gloss_attention_mask is None
+                ):
+                    raise ValueError(
+                        "pseudo_gloss_input_ids and pseudo_gloss_attention_mask "
+                        "are required when contrastive loss is enabled"
+                    )
+                global_text_features, local_text_features = (
+                    self._encode_pseudo_gloss_for_contrastive(
+                        pseudo_gloss_input_ids,
+                        pseudo_gloss_attention_mask,
+                    )
                 )
 
-            loss = main_loss + self.config.contrastive_loss_weight * contrastive_loss
+            if self.config.contrastive_loss_weight > 0.0:
+                contrastive_loss = self.contrastive_loss_fct(
+                    visual_features=global_visual_features,
+                    text_features=global_text_features.detach(),
+                )
+
+            if self.config.alignment_loss_weight > 0.0:
+                padded_visual_features, visual_mask = packed_to_padded(
+                    local_visual_features,
+                    prepare_output.contrastive_lengths,
+                )
+                alignment_loss, _alignment_info = self.local_alignment_loss_fct(
+                    video_features=padded_visual_features,
+                    pseudo_embeddings=local_text_features,
+                    video_mask=visual_mask,
+                    pseudo_mask=pseudo_gloss_attention_mask,
+                )
+
+            loss = (
+                main_loss
+                + self.config.contrastive_loss_weight * contrastive_loss
+                + self.config.alignment_loss_weight * alignment_loss
+            )
 
         return SltCausalLMOutputWithPast(
             loss=loss,
             main_loss=main_loss,
             contrastive_loss=contrastive_loss,
+            alignment_loss=alignment_loss,
             logits=outputs.logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,

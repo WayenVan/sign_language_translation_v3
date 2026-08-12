@@ -23,3 +23,12 @@ config:
     attn_drop: 0.0
     drop_path: 0.0
     eps: 1e-6
+  alignment_loss_weight: 1.0
+  alignment_eps: 0.12
+  alignment_n_iters: 10
+  alignment_target_relaxation: 0.5
+  alignment_null_mass_prior: 0.2
+  alignment_null_ratio_max: 0.2
+  alignment_null_temperature: 0.1
+  alignment_beta_ot: 1.0
+  alignment_beta_null: 0.1

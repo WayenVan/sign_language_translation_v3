@@ -29,8 +29,6 @@ class DINOFrameAdapterCrossV2Global(nn.Module):
 
         [GLOBAL, CLS_0, PATCH_0, CLS_1, PATCH_1, ...]
 
-    ``global_visual_features`` contains the same GLOBAL tokens as a dense
-    ``[batch, output_dim]`` tensor for a later global contrastive objective.
     """
 
     def __init__(
@@ -201,7 +199,6 @@ class DINOFrameAdapterCrossV2Global(nn.Module):
 
         return VisualAdapterOutput(
             visual_features=torch.cat(packed_features, dim=0),
-            global_visual_features=global_features,
             visual_length=local_lengths + 1,
             position_ids=torch.cat(packed_position_ids, dim=0),
             extras=extras,
@@ -259,7 +256,6 @@ if __name__ == "__main__":
     output = adapter(backbone_output)
     print("visual features:", output.visual_features.shape)
     print("visual lengths:", output.visual_length)
-    print("global features:", output.global_visual_features.shape)
 
 
 # Model structure
@@ -331,16 +327,7 @@ if __name__ == "__main__":
 #          [GLOBAL, CLS_0, PATCH_0, CLS_1, PATCH_1, ...]
 #                     packed length per video = 2T + 1
 #                                   |
-#                    +--------------+--------------+
-#                    |                             |
-#                    v                             v
-#          global_visual_features            All visual tokens
-#                    |                       are injected into LLM
-#                    v                             |
-#          Global video-text                       v
-#          contrastive objective             Translation objective
-#                    |                             |
-#                    +--------------+--------------+
 #                                   |
 #                                   v
-#             total_loss = main_loss + weight * contrastive_loss
+#                    All visual tokens are exposed
+#                    through visual_features only

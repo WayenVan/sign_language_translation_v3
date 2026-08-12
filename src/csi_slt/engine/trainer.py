@@ -117,7 +117,7 @@ class SltTrainer(Seq2SeqTrainer):
             num_items_in_batch=num_items_in_batch,
         )
 
-        for name in ("main_loss", "contrastive_loss"):
+        for name in ("main_loss", "contrastive_loss", "alignment_loss"):
             value = getattr(outputs, name, None)
             if value is None and isinstance(outputs, dict):
                 value = outputs.get(name)
@@ -132,7 +132,7 @@ class SltTrainer(Seq2SeqTrainer):
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        """Add distributed averages of loss components to normal Trainer logs."""
+        """Add loss components and alignment epsilon to training logs."""
         if "loss" in logs and self._loss_component_count:
             count = torch.tensor(
                 self._loss_component_count, device=self.args.device, dtype=torch.float
@@ -143,6 +143,12 @@ class SltTrainer(Seq2SeqTrainer):
                 logs[name] = global_total / global_count
             self._loss_component_totals.clear()
             self._loss_component_count = 0
+
+        if "loss" in logs:
+            model = self.accelerator.unwrap_model(self.model)
+            alignment_module = getattr(model, "local_alignment_loss_fct", None)
+            if alignment_module is not None:
+                logs["alignment_epsilon"] = float(alignment_module.eps)
 
         super().log(logs, start_time=start_time)
 

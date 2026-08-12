@@ -42,6 +42,7 @@ engine:
     auto_output_dir: False
     output_dir: outputs/test
     lr_scheduler_type: cosine
+    restore_callback_states_from_checkpoint: true
     dataloader_persistent_workers: True
     dataloader_drop_last: true
   generation_config:
@@ -52,6 +53,11 @@ engine:
     # length_penalty: 1.0
   metrics:
     xcomet_every_n_evaluations: -1
+
+  alignment_epsilon_scheduler:
+    eps_max: 0.12
+    eps_min: 0.03
+    anneal_ratio: 0.8
 
   llm_dtype: auto
   visual_backbone_dtype: auto

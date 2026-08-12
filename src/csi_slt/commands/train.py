@@ -13,6 +13,7 @@ from ..modeling_slt.slt import SltConfig, SltModel
 from ..misc.utils import merge_generation_config
 from csi_slt.engine.metrics import SLTMetric
 from csi_slt.engine.priodic_metrics import XCometLiteMetric
+from csi_slt.engine.callbacks import AlignmentEpsilonSchedulerCallback
 from huggingface_hub import login
 
 login(token=os.getenv("HF_TOKEN"))
@@ -82,6 +83,14 @@ def main(cfg: DictConfig):
     trainer = SltTrainer(
         model=slt_model,
         args=training_args,
+        callbacks=[
+            AlignmentEpsilonSchedulerCallback(
+                **OmegaConf.to_container(
+                    cfg.engine.alignment_epsilon_scheduler,
+                    resolve=True,
+                )
+            )
+        ],
         hydra_config=cfg,
         processing_class=datamodule.processor,
         train_dataset=datamodule.train_dataset,

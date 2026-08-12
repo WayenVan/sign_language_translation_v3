@@ -1,18 +1,96 @@
-from transformers.trainer_callback import TrainerCallback, CallbackHandler
+from transformers.trainer_callback import (
+    CallbackHandler,
+    ExportableState,
+    TrainerCallback,
+)
 import os
 import shutil
 from transformers import logging
-import torchinfo
-import torch
 from omegaconf import OmegaConf
 import time
 from accelerate import Accelerator
 from ..misc.git_utils import save_git_state
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer import _is_peft_model
+from csi_slt.modeling_slt.minimal_null_ot_alignment import CosineEpsilonScheduler
 
 
 logger = logging.get_logger(__name__)
+
+
+class AlignmentEpsilonSchedulerCallback(TrainerCallback, ExportableState):
+    """Own and checkpoint the local-alignment epsilon scheduler.
+
+    The scheduler advances after each optimizer update, so epsilon remains fixed
+    across all micro-batches in a gradient-accumulation step. Its state is saved
+    in ``TrainerState.stateful_callbacks`` and restored with the checkpoint.
+    """
+
+    def __init__(
+        self,
+        eps_max: float = 0.12,
+        eps_min: float = 0.03,
+        anneal_ratio: float = 0.8,
+    ):
+        self.eps_max = float(eps_max)
+        self.eps_min = float(eps_min)
+        self.anneal_ratio = float(anneal_ratio)
+        self.scheduler = None
+        self.scheduler_state = None
+
+    def state(self) -> dict:
+        scheduler_state = (
+            self.scheduler.state_dict()
+            if self.scheduler is not None
+            else self.scheduler_state
+        )
+        return {
+            "args": {
+                "eps_max": self.eps_max,
+                "eps_min": self.eps_min,
+                "anneal_ratio": self.anneal_ratio,
+            },
+            "attributes": {"scheduler_state": scheduler_state},
+        }
+
+    @staticmethod
+    def _unwrap_training_model(kwargs):
+        trainer = kwargs.get("trainer")
+        if trainer is not None:
+            return trainer.accelerator.unwrap_model(trainer.model)
+        return unwrap_model(kwargs["model"])
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        model = self._unwrap_training_model(kwargs)
+        config = model.config
+        if config.alignment_loss_weight <= 0:
+            return
+        if not hasattr(model, "local_alignment_loss_fct"):
+            raise AttributeError(
+                "alignment scheduling is enabled, but the model has no "
+                "local_alignment_loss_fct"
+            )
+
+        self.scheduler = CosineEpsilonScheduler(
+            alignment_module=model.local_alignment_loss_fct,
+            total_steps=state.max_steps,
+            eps_max=self.eps_max,
+            eps_min=self.eps_min,
+            anneal_ratio=self.anneal_ratio,
+        )
+        if self.scheduler_state is not None:
+            self.scheduler.load_state_dict(self.scheduler_state)
+        epsilon = model.local_alignment_loss_fct.eps
+        logger.info(
+            "Initialized alignment epsilon scheduler at step %d/%d: %.6f",
+            self.scheduler.current_step,
+            state.max_steps,
+            epsilon,
+        )
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.scheduler is not None:
+            self.scheduler.step()
 
 
 class SltTrainerCallbackHandler(CallbackHandler):

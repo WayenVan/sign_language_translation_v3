@@ -49,8 +49,16 @@ class SltConfig(PretrainedConfig):
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
         contrastive_dim: int = 512,
         contrastive_loss_weight: float = 1.0,
-        contrastive_text_encoding_mode: str = "embedding_mean",
         contrastive_text_queue_size: int = 0,
+        alignment_loss_weight: float = 1.0,
+        alignment_eps: float = 0.12,
+        alignment_n_iters: int = 10,
+        alignment_target_relaxation: float = 0.5,
+        alignment_null_mass_prior: float = 0.2,
+        alignment_null_ratio_max: float = 0.2,
+        alignment_null_temperature: float = 0.1,
+        alignment_beta_ot: float = 1.0,
+        alignment_beta_null: float = 0.1,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -105,13 +113,22 @@ class SltConfig(PretrainedConfig):
             contrastive_loss_weight: Weight applied to the global video-text
                 contrastive objective before it is added to the language-model
                 loss.
-            contrastive_text_encoding_mode: Text representation used by the
-                contrastive objective. ``"embedding_mean"`` mean-pools label
-                token embeddings; ``"decoder_last"`` runs the frozen decoder
-                and uses the last valid token's contextual hidden state.
             contrastive_text_queue_size: Number of detached historical text
                 features used as additional video-to-text negatives. Zero
                 disables the queue.
+            alignment_loss_weight: Weight of local visual/pseudo-gloss OT
+                alignment in the total training loss. Zero disables it.
+            alignment_eps: Initial entropy coefficient for semi-unbalanced
+                Sinkhorn OT. Training may update it through a scheduler.
+            alignment_n_iters: Number of Sinkhorn scaling iterations.
+            alignment_target_relaxation: KL strength for the relaxed target
+                marginal.
+            alignment_null_mass_prior: Prior transport mass assigned to NULL.
+            alignment_null_ratio_max: Maximum preferred local NULL ratio.
+            alignment_null_temperature: Temperature for the NULL preference
+                softmax.
+            alignment_beta_ot: Internal weight of the OT objective.
+            alignment_beta_null: Internal weight of the NULL regularizer.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -134,17 +151,34 @@ class SltConfig(PretrainedConfig):
             raise ValueError("contrastive_dim must be positive")
         self.contrastive_dim = contrastive_dim
         self.contrastive_loss_weight = contrastive_loss_weight
-        valid_text_encoding_modes = {"embedding_mean", "decoder_last"}
-        if contrastive_text_encoding_mode not in valid_text_encoding_modes:
-            raise ValueError(
-                "contrastive_text_encoding_mode must be one of "
-                f"{sorted(valid_text_encoding_modes)}, got "
-                f"{contrastive_text_encoding_mode!r}"
-            )
-        self.contrastive_text_encoding_mode = contrastive_text_encoding_mode
         if contrastive_text_queue_size < 0:
             raise ValueError("contrastive_text_queue_size must be non-negative")
         self.contrastive_text_queue_size = contrastive_text_queue_size
+        if alignment_loss_weight < 0:
+            raise ValueError("alignment_loss_weight must be non-negative")
+        if alignment_eps <= 0:
+            raise ValueError("alignment_eps must be positive")
+        if alignment_n_iters <= 0:
+            raise ValueError("alignment_n_iters must be positive")
+        if alignment_target_relaxation <= 0:
+            raise ValueError("alignment_target_relaxation must be positive")
+        if not 0 < alignment_null_mass_prior < 1:
+            raise ValueError("alignment_null_mass_prior must lie in (0, 1)")
+        if not 0 <= alignment_null_ratio_max <= 1:
+            raise ValueError("alignment_null_ratio_max must lie in [0, 1]")
+        if alignment_null_temperature <= 0:
+            raise ValueError("alignment_null_temperature must be positive")
+        if alignment_beta_ot < 0 or alignment_beta_null < 0:
+            raise ValueError("alignment beta weights must be non-negative")
+        self.alignment_loss_weight = alignment_loss_weight
+        self.alignment_eps = alignment_eps
+        self.alignment_n_iters = alignment_n_iters
+        self.alignment_target_relaxation = alignment_target_relaxation
+        self.alignment_null_mass_prior = alignment_null_mass_prior
+        self.alignment_null_ratio_max = alignment_null_ratio_max
+        self.alignment_null_temperature = alignment_null_temperature
+        self.alignment_beta_ot = alignment_beta_ot
+        self.alignment_beta_null = alignment_beta_null
 
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.

@@ -24,9 +24,6 @@ class VisualBackboneOutput(ModelOutput):
 class VisualAdapterOutput(ModelOutput):
     # NOTE: this should only contains visual tokens
     visual_features: torch.Tensor  # [visual_length_1+visual_length_2..., feature_dim] adapted visual features, might contains spatial dimensions
-    global_visual_features: Optional[torch.Tensor] = (
-        None  # [batch_size, feature_dim] optional video-level global features
-    )
     visual_length: Optional[torch.Tensor] = (
         None  # [batch_size] length of visual feautres for each sample in the batch
     )
@@ -42,7 +39,6 @@ class PrepareForCausalLMOutput(NamedTuple):
     visual_mask: torch.Tensor  # [B, L]
     contrastive_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
     contrastive_lengths: Optional[torch.Tensor] = None  # [B]
-    global_contrastive_features: Optional[torch.Tensor] = None  # [B, D]
 
 
 @dataclass
@@ -51,3 +47,4 @@ class SltCausalLMOutputWithPast(CausalLMOutputWithPast):
 
     main_loss: Optional[torch.Tensor] = None
     contrastive_loss: Optional[torch.Tensor] = None
+    alignment_loss: Optional[torch.Tensor] = None
