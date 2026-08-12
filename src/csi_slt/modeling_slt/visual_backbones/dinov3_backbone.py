@@ -7,6 +7,7 @@ from transformers.models.dinov3_vit import (
 )
 
 from csi_slt.modeling_slt.output_utils import VisualBackboneOutput
+from csi_slt.modeling_slt.misc import mark_module_tree_as_initialized
 
 logger = logging.getLogger(__name__)
 

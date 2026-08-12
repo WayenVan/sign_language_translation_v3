@@ -443,8 +443,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             raise ValueError("visual_lengths must be a non-empty 1D tensor")
         if visual_lengths.is_floating_point() or visual_lengths.is_complex():
             raise TypeError(
-                "visual_lengths must use an integer dtype, got "
-                f"{visual_lengths.dtype}"
+                f"visual_lengths must use an integer dtype, got {visual_lengths.dtype}"
             )
 
         lengths = visual_lengths.to(device=visual_features.device, dtype=torch.long)
@@ -561,6 +560,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,  # [B, L]
         labels: Optional[torch.Tensor] = None,  # [B, L]
+        pseudo_gloss_input_ids: Optional[torch.Tensor] = None,  # [B, L]
+        pseudo_gloss_attention_mask: Optional[torch.Tensor] = None,  # [B, L]
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
         # ------------ NOTE: special kwars for experimental features ------------

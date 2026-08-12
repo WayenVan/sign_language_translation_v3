@@ -5,9 +5,6 @@ prompt_templates:
   de: jinjas/de_prompt.md.j2
   en: jinjas/en_prompt.md.j2
 
-en_data_root: large_files/ph14t_english
-zh_data_root: large_files/ph14t_chinese
-
 assemble: True
 
 processor:
@@ -34,8 +31,6 @@ train:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
     data_root: ${data.data_root}
-    zh_data_root: ${data.zh_data_root}
-    en_data_root: ${data.en_data_root}
     mode: train
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
@@ -46,8 +41,6 @@ val:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
     data_root: ${data.data_root}
-    zh_data_root: ${data.zh_data_root}
-    en_data_root: ${data.en_data_root}
     mode: dev
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
@@ -58,8 +51,6 @@ test:
   dataset:
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
     data_root: ${data.data_root}
-    zh_data_root: ${data.zh_data_root}
-    en_data_root: ${data.en_data_root}
     mode: test
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator

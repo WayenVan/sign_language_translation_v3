@@ -40,10 +40,15 @@ class GeneralSLTCollator:
             zbatch["text"],
             zbatch["lang"],
         )
+        pseudo_gloss = zbatch.get("pseudo_gloss")
 
         training = self.mode == "train"
         batch_processed = self.processor(
-            videos=videos, text=texts, src_lang=lang, training=training
+            videos=videos,
+            text=texts,
+            src_lang=lang,
+            pseudo_gloss=pseudo_gloss,
+            training=training,
         )
 
         input_text = None

@@ -2,12 +2,10 @@ from torch.utils.data import Dataset
 import numpy
 import os
 from pathlib import Path
-import polars as pl
 from datasets import config as datasets_config
 from datasets import load_dataset, load_from_disk
 from filelock import FileLock
 import pyspng
-from datasets import Dataset as HFDataset
 
 
 def _estimate_label_lengths(batch, tokenizer):
@@ -30,61 +28,25 @@ class Ph14TMultiLinglDataset(Dataset):
     def __init__(
         self,
         data_root: str,
-        zh_data_root: str,
-        en_data_root: str,
         mode: str = "train",
+        pseudo_gloss_column: str = "pseudo_gloss_strict",
         pipline=None,
     ):
         self.data_root = data_root
-        self.zh_data_root = zh_data_root
-        self.en_data_root = en_data_root
-
         self.mode = mode
-
-        self.hg_dataset = load_dataset(
-            "WayenVan/PHOENIX-Weather14T",
-            split=mode,
-            name="video_level",
-        )
-        self.origin_df = self.hg_dataset.to_polars()
-
-        self.zh_df = pl.read_csv(
-            os.path.join(zh_data_root, f"ph14t_{mode}_Chinese.csv"),
-            has_header=True,
-            separator="|",
-        )
-        self.en_df = pl.read_csv(
-            os.path.join(en_data_root, f"ph14t_{mode}_English.csv"),
-            has_header=True,
-            separator="|",
-        )
-        self.de_df = self.origin_df.select(["name", "translation"])
-
-        self.ids = self.hg_dataset.unique("name")
+        self.pseudo_gloss_column = pseudo_gloss_column
         self.pipline = pipline
 
-        self._create_assemble_df()
-
-    def _create_assemble_df(self):
-        # Merge
-        #
-        zh_df = self.zh_df.with_columns(pl.lit("zh").alias("lang"))
-        en_df = self.en_df.with_columns(pl.lit("en").alias("lang"))
-        de_df = self.de_df.with_columns(pl.lit("de").alias("lang"))
-
-        assemble_df = en_df.vstack(zh_df).vstack(de_df)
-        assemble_df = assemble_df.join(
-            self.origin_df.drop("translation"), on="name", how="left"
+        self.hg_dataset = load_dataset(
+            "WayenVan/ph14t-multilang",
+            split=mode,
         )
-        self.assemble_df = assemble_df
-
-        self.assemble_dataset = HFDataset(self.assemble_df.to_arrow())
 
     def __len__(self):
-        return len(self.assemble_df)
+        return len(self.hg_dataset)
 
     def __getitem__(self, idx):
-        data_info = self.assemble_dataset[idx]
+        data_info = self.hg_dataset[idx]
 
         video_frame_file_name = data_info["frames"]
         video_frame = []
@@ -103,6 +65,7 @@ class Ph14TMultiLinglDataset(Dataset):
             video=numpy.array(video_frame, dtype=numpy.uint8),
             text=data_info["translation"],
             lang=data_info["lang"],
+            pseudo_gloss=data_info[self.pseudo_gloss_column],
         )
 
         if self.pipline:
@@ -117,7 +80,7 @@ class Ph14TMultiLinglDataset(Dataset):
         cache_root = cache_root / "csi_slt" / "ph14t_multilingual"
         cache_root.mkdir(parents=True, exist_ok=True)
         assembled_path = cache_root / (
-            f"assembled-{self.mode}-{self.assemble_dataset._fingerprint}"
+            f"assembled-{self.mode}-{self.hg_dataset._fingerprint}"
         )
         lock = FileLock(f"{assembled_path}.lock")
 
@@ -127,10 +90,10 @@ class Ph14TMultiLinglDataset(Dataset):
         # the tokenizer), and the disk-backed dataset fingerprint.
         with lock:
             if not assembled_path.exists():
-                self.assemble_dataset.save_to_disk(assembled_path)
+                self.hg_dataset.save_to_disk(assembled_path)
 
-            self.assemble_dataset = load_from_disk(assembled_path)
-            self.assemble_dataset = self.assemble_dataset.map(
+            self.hg_dataset = load_from_disk(assembled_path)
+            self.hg_dataset = self.hg_dataset.map(
                 _estimate_label_lengths,
                 batched=True,
                 batch_size=1000,
@@ -140,14 +103,10 @@ class Ph14TMultiLinglDataset(Dataset):
             )
 
         self.label_ids_lengths = [
-            int(length) for length in self.assemble_dataset["label_ids_length"]
+            int(length) for length in self.hg_dataset["label_ids_length"]
         ]
         # 只读取 frames 列的列表长度，不打开任何图片。
-        self.video_lengths = (
-            self.assemble_df.select(pl.col("frames").list.len().alias("length"))
-            .get_column("length")
-            .to_list()
-        )
+        self.video_lengths = [len(frames) for frames in self.hg_dataset["frames"]]
 
     @classmethod
     def create_prepared_dataset(
@@ -162,16 +121,12 @@ if __name__ == "__main__":
     from transformers import AutoTokenizer
 
     data_root = "dataset/PHOENIX-2014-T-release-v3"
-    zh_data_root = "large_files/ph14t_chinese"
-    en_data_root = "large_files/ph14t_english"
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     ph14t_dataset = Ph14TMultiLinglDataset.create_prepared_dataset(
         tokenizer,
         data_root,
-        zh_data_root=zh_data_root,
-        en_data_root=en_data_root,
-        mode="train",
+        mode="validation",
     )
 
     print(f"Dataset size: {len(ph14t_dataset)}")

@@ -167,11 +167,76 @@ class SignTranslationProcessor(ProcessorMixin):
         cache[lang] = prompt
         return prompt
 
+    @staticmethod
+    def _validate_and_batch_inputs(
+        videos: Union[list[np.ndarray], np.ndarray],
+        text: Union[list[TextInput], TextInput],
+        src_lang: Union[list[str], str],
+        pseudo_gloss: Union[list[str], str] | None,
+    ) -> tuple[list[np.ndarray], list[TextInput], list[str], list[str] | None]:
+        """Validate processor inputs and normalize single samples to batches."""
+
+        if isinstance(videos, np.ndarray):
+            videos = [videos]
+        elif isinstance(videos, (list, tuple)):
+            videos = list(videos)
+        else:
+            raise TypeError("videos must be a numpy array or a list of numpy arrays")
+
+        if isinstance(text, str):
+            text = [text]
+        elif isinstance(text, (list, tuple)):
+            text = list(text)
+        else:
+            raise TypeError("text must be a string or a list of strings")
+
+        if isinstance(src_lang, str):
+            src_lang = [src_lang]
+        elif isinstance(src_lang, (list, tuple)):
+            src_lang = list(src_lang)
+        else:
+            raise TypeError("src_lang must be a string or a list of strings")
+
+        if isinstance(pseudo_gloss, str):
+            pseudo_gloss = [pseudo_gloss]
+        elif isinstance(pseudo_gloss, (list, tuple)):
+            pseudo_gloss = list(pseudo_gloss)
+        elif pseudo_gloss is not None:
+            raise TypeError("pseudo_gloss must be a string, a list of strings, or None")
+
+        batch_size = len(videos)
+        if batch_size == 0:
+            raise ValueError("videos must contain at least one sample")
+
+        batch_fields = {"text": text, "src_lang": src_lang}
+        if pseudo_gloss is not None:
+            batch_fields["pseudo_gloss"] = pseudo_gloss
+        for name, values in batch_fields.items():
+            if len(values) != batch_size:
+                raise ValueError(
+                    f"{name} batch size ({len(values)}) does not match "
+                    f"videos batch size ({batch_size})"
+                )
+
+        if not all(isinstance(video, np.ndarray) for video in videos):
+            raise TypeError("every item in videos must be a numpy array")
+        if not all(isinstance(value, str) for value in text):
+            raise TypeError("every item in text must be a string")
+        if not all(isinstance(value, str) for value in src_lang):
+            raise TypeError("every item in src_lang must be a string")
+        if pseudo_gloss is not None and not all(
+            isinstance(value, str) for value in pseudo_gloss
+        ):
+            raise TypeError("every item in pseudo_gloss must be a string")
+
+        return videos, text, src_lang, pseudo_gloss
+
     def __call__(
         self,
         videos: Union[list[np.ndarray], np.ndarray],
         text: Union[list[TextInput], TextInput],
         src_lang: Union[list[str], str],
+        pseudo_gloss: Union[list[str], str] | None = None,
         training: bool = True,
         add_bos_token: bool = False,
         add_eos_token: bool = True,
@@ -184,10 +249,12 @@ class SignTranslationProcessor(ProcessorMixin):
         )
         videos_kwargs = output_kwargs["videos_kwargs"]
 
-        if isinstance(text, str):
-            text = [text]
-        if isinstance(src_lang, str):
-            src_lang = [src_lang]
+        videos, text, src_lang, pseudo_gloss = self._validate_and_batch_inputs(
+            videos,
+            text,
+            src_lang,
+            pseudo_gloss,
+        )
 
         if training:
             videos_kwargs["training"] = True
@@ -269,12 +336,16 @@ class SignTranslationProcessor(ProcessorMixin):
             pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
             pos_ids = pos_ids.clamp(min=0)
             pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
-            # pos_ids = self.position_augmentation(pos_ids, inputs_pt.attention_mask)
-            # pos_ids = torch.arange(
-            #     0,
-            #     inputs_pt.input_ids.shape[1],
-            #     device=inputs_pt.input_ids.device,
-            # ).unsqueeze(0)
+
+        # handle pseudo glosses, if present
+        pseudo_gloss_pt = None
+        if pseudo_gloss is not None:
+            pseudo_gloss_pt = self.tokenizer(
+                pseudo_gloss,
+                add_special_tokens=False,
+                return_tensors="pt",
+                padding=True,
+            )
 
         data = {
             "pixel_values": video_batch_features.pixel_values,
@@ -288,77 +359,8 @@ class SignTranslationProcessor(ProcessorMixin):
 
         if pos_ids is not None:
             data["position_ids"] = pos_ids
+        if pseudo_gloss_pt is not None:
+            data["pseudo_gloss_input_ids"] = pseudo_gloss_pt.input_ids
+            data["pseudo_gloss_attention_mask"] = pseudo_gloss_pt.attention_mask
 
         return BatchFeature(data=data, tensor_type=TensorType.PYTORCH)
-
-    def position_augmentation(self, position_ids, attention_mask):
-        # 50% 进行随机偏移
-        position_ids = self.random_shift_position_ids(
-            position_ids, attention_mask, shift_range=self.position_shift_range, p=0.5
-        )
-        # # 20% 进行缩放
-        # if torch.rand(1).item() < 0.2:
-        #     position_ids = self..random_scale_position_ids(
-        #         position_ids, attention_mask, scale_range=(0.95, 1.05)
-        #     )
-        return position_ids
-
-    @staticmethod
-    def random_shift_position_ids(
-        position_ids, attention_mask, p=1.0, shift_range=(-4, 4), training=True
-    ):
-        """
-        对 position_ids 增加随机偏移，模拟不同的起点位置。
-        Args:
-            position_ids: (batch, seq_len)
-            attention_mask: (batch, seq_len)
-            shift_range: 偏移范围 (min, max)
-            training: 是否在训练阶段启用
-        """
-        if not training:
-            return position_ids  # 推理时不增强
-        # 为每个 batch 生成一个独立的偏移量
-        batch_size = position_ids.size(0)
-        shifts = torch.randint(
-            shift_range[0],
-            shift_range[1] + 1,
-            (batch_size,),
-            device=position_ids.device,
-        )
-        # 广播到整行
-        shifts = shifts.unsqueeze(1).expand_as(position_ids)
-
-        # 以概率 p 应用偏移
-        probs = torch.full((batch_size, 1), p, device=position_ids.device)
-        mask = torch.bernoulli(probs).long().expand_as(position_ids)
-        shifts = shifts * mask
-
-        # 只对非 padding token 加偏移（防止 pad token pos 出界）
-        augmented_pos = position_ids + shifts * attention_mask
-        return augmented_pos
-
-    @staticmethod
-    def random_scale_position_ids(
-        position_ids, attention_mask, scale_range=(0.9, 1.1), training=True
-    ):
-        """
-        对 position_ids 做随机缩放，模拟序列密度变化。
-        """
-        if not training:
-            return position_ids
-        batch_size = position_ids.size(0)
-        scales = torch.empty(batch_size, device=position_ids.device).uniform_(
-            *scale_range
-        )
-        scales = scales.unsqueeze(1).expand_as(position_ids)
-        # 只缩放有效部分
-        scaled_pos = (position_ids.float() * scales) * attention_mask
-        return scaled_pos.long()
-
-    @staticmethod
-    def jitter_position_ids(position_ids, attention_mask, noise_std=0.5, training=True):
-        if not training:
-            return position_ids
-        noise = torch.randn_like(position_ids.float()) * noise_std
-        noisy_pos = position_ids.float() + noise * attention_mask
-        return noisy_pos.long()
