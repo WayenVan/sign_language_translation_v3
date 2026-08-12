@@ -1,14 +1,8 @@
 # @package _global_
 
 defaults:
-  - /model: base_model
-  # - model: pretrained_encoder_model
-  - /data: ph14t_*x224x224_qwen_multiling
-  # - data: ph14t_*x224x224_qwen
-  - /datamodule: standard
-  - /peft: none
-  - override /hydra/hydra_logging: none
-  - override /hydra/job_logging: none
+  - base
+  - override /peft: lora
   - _self_
 
 hydra:
@@ -46,14 +40,6 @@ engine:
     restore_callback_states_from_checkpoint: true
     dataloader_persistent_workers: True
     dataloader_drop_last: true
-  generation_config:
-    max_new_tokens: 128
-    do_sample: false
-    # num_beams: 4
-    # early_stopping: true
-    # length_penalty: 1.0
-  metrics:
-    xcomet_every_n_evaluations: -1
 
   alignment_epsilon_scheduler:
     eps_max: 0.12
@@ -62,3 +48,12 @@ engine:
 
   llm_dtype: auto
   visual_backbone_dtype: auto
+peft:
+  lora_config:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    target_modules:
+      - "q_proj"
+      - "v_proj"

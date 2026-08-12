@@ -34,14 +34,26 @@ def main(cfg: DictConfig):
     # create model
     slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
 
-    if cfg.model.type == "qwenvl":
-        from ..modeling_slt.slt_qwen_vl import SltQwenVLModel
+    if cfg.peft.type == "lora":
+        from peft import LoraConfig, TaskType
 
-        slt_model = SltQwenVLModel(slt_config)
-    else:
+        lora_args = OmegaConf.to_container(cfg.peft.lora_config, resolve=True)
+        peft_config = LoraConfig(
+            **lora_args,
+            task_type=TaskType.CAUSAL_LM,
+        )
+        slt_model = SltModel.from_pretrained_components_with_lora(
+            slt_config,
+            peft_config,
+            cfg.engine.llm_dtype,
+            cfg.engine.visual_backbone_dtype,
+        )
+    elif cfg.peft.type == "none":
         slt_model = SltModel.from_pretrained_components(
             slt_config, cfg.engine.llm_dtype, cfg.engine.visual_backbone_dtype
         )
+    else:
+        raise ValueError(f"Unknown peft type: {cfg.peft.type}")
 
     # fix parameters
     # for param in slt_model.llm.parameters():
