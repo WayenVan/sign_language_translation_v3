@@ -41,6 +41,7 @@ class GeneralSLTCollator:
             zbatch["lang"],
         )
         pseudo_gloss = zbatch.get("pseudo_gloss")
+        semantic_ids = zbatch.get("semantic_ids")
 
         training = self.mode == "train"
         batch_processed = self.processor(
@@ -48,6 +49,7 @@ class GeneralSLTCollator:
             text=texts,
             src_lang=lang,
             pseudo_gloss=pseudo_gloss,
+            semantic_ids=semantic_ids,
             training=training,
         )
 

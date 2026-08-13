@@ -61,6 +61,9 @@ class Ph14TMultiLinglDataset(Dataset):
 
         ret = dict(
             id=data_info["name"],
+            # Samples sharing this dataset-provided name are semantically
+            # equivalent positives for the global contrastive objective.
+            semantic_ids=data_info["name"],
             # THWC uint8 in [0, 255]; SignVideoProcessor converts it to float32.
             video=numpy.array(video_frame, dtype=numpy.uint8),
             text=data_info["translation"],

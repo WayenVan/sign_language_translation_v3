@@ -5,9 +5,9 @@ Computation flow
 
 Single process::
 
-    visual [B,D] --> FP32 --> normalize --> V @ [T; text queue]^T --> CE --+-- V2T --+
-                                                                                    +--> 0.5 * (V2T + T2V) --> loss
-    text   [B,D] --> FP32 --> normalize --> T @ V^T * scale --> CE(diagonal) --+-- T2V --+
+    visual [B,D] --> FP32 --> normalize --> V @ [T; text queue]^T --> MP-NCE --+-- V2T --+
+                                                                                        +--> 0.5 * (V2T + T2V) --> loss
+    text   [B,D] --> FP32 --> normalize --> T @ V^T * scale --> MP-NCE --+-- T2V --+
 
 Distributed training with ``local_loss=True``::
 
@@ -18,9 +18,10 @@ Distributed training with ``local_loss=True``::
     local T [b,D] --> normalize --+--> T_query @ V_global^T * scale --> CE(global target) --+-- T2V --+
                                   +--> differentiable/regular all-gather --> T_global [B,D]
 
-The positive target is the paired sample on the similarity-matrix diagonal.
-All other samples in the local/global batch act as negatives. The learnable
-``logit_scale = 1 / temperature`` is clamped before it scales cosine logits.
+When semantic IDs are supplied, every candidate sharing the query ID is a
+positive; other IDs are negatives. Without IDs, the original paired-diagonal
+cross-entropy behavior is retained. The learnable ``logit_scale = 1 /
+temperature`` is clamped before it scales cosine logits.
 """
 
 import math
@@ -89,6 +90,9 @@ class CrossModalContrastiveLoss(nn.Module):
         self.process_group = process_group
         self.register_buffer("text_queue", torch.empty(0, 0), persistent=False)
         self.register_buffer(
+            "text_queue_ids", torch.empty(0, dtype=torch.long), persistent=False
+        )
+        self.register_buffer(
             "text_queue_ptr", torch.zeros((), dtype=torch.long), persistent=False
         )
         self.register_buffer(
@@ -104,9 +108,11 @@ class CrossModalContrastiveLoss(nn.Module):
         self,
         visual_features: torch.Tensor,
         text_features: torch.Tensor,
+        semantic_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute symmetric InfoNCE from two paired ``[B, D]`` tensors."""
+        """Compute symmetric multi-positive InfoNCE from paired features."""
         self._validate_features(visual_features, text_features)
+        self._validate_semantic_ids(semantic_ids, visual_features)
 
         # Contrastive logits are especially sensitive to reduced-precision
         # normalization and also require both modalities to share a dtype.
@@ -128,8 +134,10 @@ class CrossModalContrastiveLoss(nn.Module):
                 targets=torch.arange(
                     visual_features.shape[0], device=visual_features.device
                 ),
+                query_ids=semantic_ids,
+                candidate_ids=semantic_ids,
             )
-            self._enqueue_text_features(text_features)
+            self._enqueue_text_features(text_features, semantic_ids)
             return loss
 
         rank = dist.get_rank(group=self.process_group)
@@ -148,6 +156,11 @@ class CrossModalContrastiveLoss(nn.Module):
             visual_features, batch_sizes, rank
         )
         all_text_features = self._gather_features(text_features, batch_sizes, rank)
+        all_semantic_ids = (
+            self._gather_ids(semantic_ids, batch_sizes)
+            if semantic_ids is not None
+            else None
+        )
 
         if self.local_loss:
             if visual_features.shape[0] == 0:
@@ -166,6 +179,8 @@ class CrossModalContrastiveLoss(nn.Module):
                     visual_candidates=all_visual_features,
                     text_candidates=all_text_features,
                     targets=targets,
+                    query_ids=semantic_ids,
+                    candidate_ids=all_semantic_ids,
                 )
                 # DDP averages ranks; reweight uneven valid counts to recover
                 # an average over valid samples rather than over ranks.
@@ -181,12 +196,14 @@ class CrossModalContrastiveLoss(nn.Module):
                 visual_candidates=all_visual_features,
                 text_candidates=all_text_features,
                 targets=targets,
+                query_ids=all_semantic_ids,
+                candidate_ids=all_semantic_ids,
             )
 
         # Every rank gathered features in the same rank order, so enqueuing the
         # global batch keeps all per-rank queues synchronized without another
         # collective operation.
-        self._enqueue_text_features(all_text_features)
+        self._enqueue_text_features(all_text_features, all_semantic_ids)
         return loss
 
     def _symmetric_loss(
@@ -196,6 +213,8 @@ class CrossModalContrastiveLoss(nn.Module):
         visual_candidates: torch.Tensor,
         text_candidates: torch.Tensor,
         targets: torch.Tensor,
+        query_ids: torch.Tensor | None = None,
+        candidate_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         scale = self._scale()
         queued_text = self._queued_text_features(
@@ -210,6 +229,23 @@ class CrossModalContrastiveLoss(nn.Module):
 
         video_to_text = scale * visual_queries @ video_to_text_candidates.t()
         text_to_video = scale * text_queries @ visual_candidates.t()
+        if query_ids is not None:
+            if candidate_ids is None:
+                raise ValueError("candidate_ids are required when query_ids are provided")
+            queued_ids = self._queued_text_ids(device=candidate_ids.device)
+            video_to_text_ids = (
+                torch.cat((candidate_ids, queued_ids), dim=0)
+                if queued_ids.numel() > 0
+                else candidate_ids
+            )
+            return 0.5 * (
+                self._multi_positive_nce(
+                    video_to_text, query_ids[:, None].eq(video_to_text_ids[None, :])
+                )
+                + self._multi_positive_nce(
+                    text_to_video, query_ids[:, None].eq(candidate_ids[None, :])
+                )
+            )
         return 0.5 * (
             F.cross_entropy(video_to_text, targets)
             + F.cross_entropy(text_to_video, targets)
@@ -226,12 +262,47 @@ class CrossModalContrastiveLoss(nn.Module):
             return torch.empty(0, feature_dim, dtype=torch.float32, device=device)
         return self.text_queue[: int(self.text_queue_count.item())]
 
+    def _queued_text_ids(self, device: torch.device) -> torch.Tensor:
+        if (
+            not self.training
+            or self.text_queue_size == 0
+            or int(self.text_queue_count.item()) == 0
+        ):
+            return torch.empty(0, dtype=torch.long, device=device)
+        return self.text_queue_ids[: int(self.text_queue_count.item())]
+
+    @staticmethod
+    def _multi_positive_nce(
+        logits: torch.Tensor, positive_mask: torch.Tensor
+    ) -> torch.Tensor:
+        if not bool(positive_mask.any(dim=-1).all()):
+            raise ValueError("every contrastive query must have at least one positive")
+        positive_logits = logits.masked_fill(~positive_mask, -torch.inf)
+        return (
+            torch.logsumexp(logits, dim=-1)
+            - torch.logsumexp(positive_logits, dim=-1)
+        ).mean()
+
     @torch.no_grad()
-    def _enqueue_text_features(self, text_features: torch.Tensor) -> None:
+    def _enqueue_text_features(
+        self,
+        text_features: torch.Tensor,
+        semantic_ids: torch.Tensor | None = None,
+    ) -> None:
         if not self.training or self.text_queue_size == 0:
             return
 
         features = text_features.detach().float()
+        ids = (
+            semantic_ids.detach().long()
+            if semantic_ids is not None
+            else torch.full(
+                (features.shape[0],),
+                torch.iinfo(torch.long).min,
+                dtype=torch.long,
+                device=features.device,
+            )
+        )
         if self.text_queue.shape != (self.text_queue_size, features.shape[-1]):
             self.text_queue = torch.zeros(
                 self.text_queue_size,
@@ -239,11 +310,18 @@ class CrossModalContrastiveLoss(nn.Module):
                 dtype=torch.float32,
                 device=features.device,
             )
+            self.text_queue_ids = torch.full(
+                (self.text_queue_size,),
+                torch.iinfo(torch.long).min,
+                dtype=torch.long,
+                device=features.device,
+            )
             self.text_queue_ptr.zero_()
             self.text_queue_count.zero_()
 
         if features.shape[0] >= self.text_queue_size:
             self.text_queue.copy_(features[-self.text_queue_size :])
+            self.text_queue_ids.copy_(ids[-self.text_queue_size :])
             self.text_queue_ptr.zero_()
             self.text_queue_count.fill_(self.text_queue_size)
             return
@@ -252,9 +330,11 @@ class CrossModalContrastiveLoss(nn.Module):
         ptr = int(self.text_queue_ptr.item())
         first_count = min(count, self.text_queue_size - ptr)
         self.text_queue[ptr : ptr + first_count].copy_(features[:first_count])
+        self.text_queue_ids[ptr : ptr + first_count].copy_(ids[:first_count])
         remaining = count - first_count
         if remaining:
             self.text_queue[:remaining].copy_(features[first_count:])
+            self.text_queue_ids[:remaining].copy_(ids[first_count:])
 
         self.text_queue_ptr.fill_((ptr + count) % self.text_queue_size)
         self.text_queue_count.fill_(
@@ -307,6 +387,21 @@ class CrossModalContrastiveLoss(nn.Module):
             dim=0,
         )
 
+    def _gather_ids(
+        self, semantic_ids: torch.Tensor, batch_sizes: tuple[int, ...]
+    ) -> torch.Tensor:
+        max_batch_size = max(batch_sizes)
+        padded = F.pad(
+            semantic_ids,
+            (0, max_batch_size - semantic_ids.shape[0]),
+            value=torch.iinfo(torch.long).min,
+        )
+        gathered = [torch.empty_like(padded) for _ in batch_sizes]
+        dist.all_gather(gathered, padded, group=self.process_group)
+        return torch.cat(
+            [rank_ids[:size] for rank_ids, size in zip(gathered, batch_sizes)], dim=0
+        )
+
     @staticmethod
     def _validate_features(
         visual_features: torch.Tensor, text_features: torch.Tensor
@@ -329,6 +424,19 @@ class CrossModalContrastiveLoss(nn.Module):
             raise ValueError("visual_features and text_features must share a device")
         if not visual_features.is_floating_point() or not text_features.is_floating_point():
             raise TypeError("visual_features and text_features must be floating point")
+
+    @staticmethod
+    def _validate_semantic_ids(
+        semantic_ids: torch.Tensor | None, visual_features: torch.Tensor
+    ) -> None:
+        if semantic_ids is None:
+            return
+        if semantic_ids.ndim != 1 or semantic_ids.shape[0] != visual_features.shape[0]:
+            raise ValueError("semantic_ids must have shape [batch]")
+        if semantic_ids.dtype != torch.long:
+            raise TypeError("semantic_ids must use torch.long")
+        if semantic_ids.device != visual_features.device:
+            raise ValueError("semantic_ids and features must share a device")
 
 if __name__ == "__main__":
     torch.manual_seed(42)

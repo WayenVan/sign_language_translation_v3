@@ -676,6 +676,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         labels: Optional[torch.Tensor] = None,  # [B, L]
         pseudo_gloss_input_ids: Optional[torch.Tensor] = None,  # [B, L]
         pseudo_gloss_attention_mask: Optional[torch.Tensor] = None,  # [B, L]
+        semantic_ids: Optional[torch.Tensor] = None,  # [B]
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
         # ------------ NOTE: special kwars for experimental features ------------
@@ -916,6 +917,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 contrastive_loss = self.contrastive_loss_fct(
                     visual_features=global_visual_features[valid_pseudo],
                     text_features=global_text_features.detach(),
+                    semantic_ids=(
+                        semantic_ids[valid_pseudo]
+                        if semantic_ids is not None
+                        else None
+                    ),
                 )
 
             loss = (
