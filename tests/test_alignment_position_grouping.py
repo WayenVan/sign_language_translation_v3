@@ -28,7 +28,7 @@ def test_grouped_adapter_style_packed_position_ids_are_padded_per_video():
     ]
 
 
-def test_group_alignment_averages_rows_with_shared_positions():
+def test_group_alignment_sums_rows_with_shared_positions():
     alignment = torch.tensor(
         [
             [
@@ -62,8 +62,8 @@ def test_group_alignment_averages_rows_with_shared_positions():
 
     expected = torch.tensor(
         [
-            [[0.0, 0.7, 0.3], [0.0, 0.1, 0.9], [0.0, 0.5, 0.5]],
-            [[0.0, 0.5, 0.5], [0.0, 0.3, 0.7], [0.0, 0.0, 0.0]],
+            [[0.0, 1.4, 0.6], [0.0, 0.2, 1.8], [0.0, 1.0, 1.0]],
+            [[0.0, 1.0, 1.0], [0.0, 0.6, 1.4], [0.0, 0.0, 0.0]],
         ]
     )
     torch.testing.assert_close(grouped, expected)
@@ -118,6 +118,23 @@ def test_grouped_tv_operates_between_positions_not_token_types():
     tv_loss = module._compute_tv_loss(grouped, grouped_mask)
 
     torch.testing.assert_close(tv_loss, torch.tensor(0.0))
+
+
+def test_tv_is_mean_l1_distance_and_is_invariant_to_padded_targets():
+    module = MinimalNullOTAlignment(video_dim=2, text_dim=2)
+    video_mask = torch.ones(1, 2, dtype=torch.long)
+
+    # The real-token distribution switches completely, so its L1 distance is 2.
+    alignment = torch.tensor([[[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]])
+    padded_alignment = torch.tensor(
+        [[[0.0, 1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0, 0.0]]]
+    )
+
+    tv_loss = module._compute_tv_loss(alignment, video_mask)
+    padded_tv_loss = module._compute_tv_loss(padded_alignment, video_mask)
+
+    torch.testing.assert_close(tv_loss, torch.tensor(2.0))
+    torch.testing.assert_close(padded_tv_loss, tv_loss)
 
 
 def test_alignment_info_exposes_the_position_grouping_used_by_tv():

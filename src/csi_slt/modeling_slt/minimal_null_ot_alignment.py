@@ -128,7 +128,7 @@ def group_alignment_by_position_ids(
     video_mask: Tensor,
     visual_position_ids: Tensor,
 ) -> tuple[Tensor, Tensor]:
-    """Average transport rows that share a temporal visual position.
+    """Sum transport rows that share a temporal visual position.
 
     Within each video, valid position IDs must start at zero and may only stay
     unchanged or increase by one. Padding positions must use ``-100``. These
@@ -140,7 +140,7 @@ def group_alignment_by_position_ids(
         visual_position_ids: Padded temporal IDs ``[B, M]``.
 
     Returns:
-        Averaged transport plans ``[B, G, K]`` and group mask ``[B, G]``.
+        Aggregated transport plans ``[B, G, K]`` and group mask ``[B, G]``.
     """
     if alignment.ndim != 3:
         raise ValueError("alignment must have shape [B, M, K]")
@@ -191,7 +191,6 @@ def group_alignment_by_position_ids(
     group_counts = alignment.new_zeros(alignment.shape[0], num_groups)
     group_counts.scatter_add_(1, safe_position_ids, valid.to(alignment.dtype))
     grouped_mask = group_counts.gt(0)
-    grouped_alignment = grouped_alignment / group_counts.clamp_min(1).unsqueeze(-1)
     return grouped_alignment, grouped_mask
 
 
@@ -322,15 +321,18 @@ class MinimalNullOTAlignment(nn.Module):
     ) -> torch.Tensor:
         """Temporal-variation loss on the row-normalized real-token plan.
 
-        Implements the VTaMo temporal-variation term (paper Eq.(6)):
+        Uses the mean L1 distance between adjacent row-normalized plans:
 
-        ``L_tv = (1 / ((M-1) * U)) * sum_{m,k} |A_hat[m+1,k] - A_hat[m,k]|``
+        ``L_tv = (1 / N_pairs) * sum_m ||A_hat[m+1] - A_hat[m]||_1``
 
         where ``A_hat`` is the transport plan row-normalized over the real
         pseudo-label columns (NULL excluded). Only adjacent video positions
         where BOTH are valid contribute. Row-normalization follows the paper
         and makes the penalty scale-invariant to per-position transported mass;
-        the mask excludes padding/boundary pairs.
+        the mask excludes padding/boundary pairs. Unlike averaging over both
+        pairs and the padded pseudo-label width, this normalization keeps the
+        loss in ``[0, 2]`` and makes its scale independent of pseudo-label
+        sequence length and batch padding.
 
         Args:
             alignment: Transport plan ``[B, M, U+1]`` (column 0 is NULL).
@@ -348,7 +350,7 @@ class MinimalNullOTAlignment(nn.Module):
         # Only count pairs where both video positions are valid.
         pair_mask = (video_mask[:, 1:] * video_mask[:, :-1]).unsqueeze(-1)  # [B, M-1, 1]
         num_pairs = pair_mask.sum().clamp_min(1)
-        return (diff * pair_mask).sum() / (num_pairs * real_plan.shape[-1])
+        return (diff * pair_mask).sum() / num_pairs
 
     def forward(
         self,
