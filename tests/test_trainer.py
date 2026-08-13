@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import torch
 from torch import nn
-from transformers import Seq2SeqTrainingArguments
+from transformers import GenerationConfig, Seq2SeqTrainingArguments
 
 from csi_slt.engine.trainer import SltTrainer
 
@@ -41,3 +41,104 @@ def test_trainer_does_not_claim_model_handles_num_items_in_batch(tmp_path):
 
     assert loss.item() == 8.0
     assert "num_items_in_batch" not in model.last_kwargs
+
+
+def test_compute_loss_does_not_forward_generation_fields(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+    )
+    model = _MeanReducedModelWithKwargs()
+    trainer = SltTrainer(model=model, args=args)
+
+    trainer.compute_loss(
+        model,
+        {
+            "labels": torch.tensor([[1]]),
+            "generation_input_ids": torch.tensor([[2]]),
+            "generation_attention_mask": torch.tensor([[1]]),
+            "generation_token_type_ids": torch.tensor([[0]]),
+        },
+    )
+
+    assert not any(name.startswith("generation_") for name in model.last_kwargs)
+
+
+class _GenerationModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(()))
+        self.config = SimpleNamespace(pad_token_id=0)
+        self.generation_config = GenerationConfig(
+            pad_token_id=0,
+            max_new_tokens=2,
+        )
+        self.generate_kwargs = None
+
+    def forward(self, input_ids=None, **kwargs):
+        return {"loss": self.weight * 0, "logits": torch.empty(0)}
+
+    def generate(self, **kwargs):
+        self.generate_kwargs = kwargs
+        input_ids = kwargs["input_ids"]
+        new_token = torch.full(
+            (input_ids.shape[0], 1),
+            9,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+        return torch.cat((input_ids, new_token), dim=-1)
+
+
+def test_prediction_step_uses_prompt_only_generation_fields(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+        predict_with_generate=True,
+    )
+    model = _GenerationModel()
+    trainer = SltTrainer(model=model, args=args)
+    full_input_ids = torch.tensor([[3, 4, 5, 6, 7]])
+    prompt_input_ids = torch.tensor([[3, 4, 5]])
+    labels = torch.tensor([[-100, -100, -100, 6, 7]])
+    lang_ids = torch.tensor([1])
+
+    _, predictions, label_output = trainer.prediction_step(
+        model,
+        {
+            "input_ids": full_input_ids,
+            "attention_mask": torch.ones_like(full_input_ids),
+            "position_ids": torch.arange(5).unsqueeze(0),
+            "token_type_ids": torch.zeros_like(full_input_ids),
+            "labels": labels,
+            "lang_ids": lang_ids,
+            "pixel_values": torch.zeros(2, 3, 1, 1),
+            "pixel_values_length": torch.tensor([2]),
+            "generation_input_ids": prompt_input_ids,
+            "generation_attention_mask": torch.ones_like(prompt_input_ids),
+            "generation_token_type_ids": torch.zeros_like(prompt_input_ids),
+        },
+        prediction_loss_only=False,
+    )
+
+    assert torch.equal(
+        model.generate_kwargs["input_ids"].cpu(),
+        prompt_input_ids,
+    )
+    assert set(model.generate_kwargs).isdisjoint(
+        {
+            "labels",
+            "position_ids",
+            "lang_ids",
+            "generation_input_ids",
+            "generation_attention_mask",
+            "generation_token_type_ids",
+        }
+    )
+    generated_tokens, generated_lengths, prompt_lengths = predictions
+    assert generated_tokens.shape == (1, 5)
+    assert generated_lengths.tolist() == [5]
+    assert prompt_lengths.tolist() == [3]
+    output_labels, output_lang_ids = label_output
+    assert torch.equal(output_labels.cpu(), labels)
+    assert torch.equal(output_lang_ids.cpu(), lang_ids)

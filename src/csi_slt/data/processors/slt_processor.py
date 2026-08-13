@@ -1,3 +1,5 @@
+import hashlib
+
 from transformers.processing_utils import ProcessorMixin
 from transformers.image_processing_utils import (
     BatchFeature,
@@ -24,6 +26,20 @@ from csi_slt.constants import LANGUAGE_MAP, LANGUAGE_NAME_MAP
 class SignTranslationProcessingKwargs(ProcessingKwargs, total=False):
     videos_kwargs: SignVideoKwargs
     _defaults = {}
+
+
+def _stable_semantic_id(value: str | int) -> int:
+    """Encode a dataset semantic ID as a deterministic signed int64."""
+    if isinstance(value, int):
+        if not -(2**63) <= value < 2**63:
+            raise ValueError("integer semantic IDs must fit in torch.long")
+        return value
+    if not isinstance(value, str):
+        raise TypeError("semantic IDs must be strings or integers")
+    digest = hashlib.blake2b(
+        value.encode("utf-8"), digest_size=8, person=b"csi-slt"
+    ).digest()
+    return int.from_bytes(digest, byteorder="little", signed=True)
 
 
 class SignTranslationProcessor(ProcessorMixin):
@@ -173,7 +189,14 @@ class SignTranslationProcessor(ProcessorMixin):
         text: Union[list[TextInput], TextInput],
         src_lang: Union[list[str], str],
         pseudo_gloss: Union[list[str], str] | None,
-    ) -> tuple[list[np.ndarray], list[TextInput], list[str], list[str] | None]:
+        semantic_ids: Union[list[str | int], str, int] | None,
+    ) -> tuple[
+        list[np.ndarray],
+        list[TextInput],
+        list[str],
+        list[str] | None,
+        list[str | int] | None,
+    ]:
         """Validate processor inputs and normalize single samples to batches."""
 
         if isinstance(videos, np.ndarray):
@@ -204,6 +227,15 @@ class SignTranslationProcessor(ProcessorMixin):
         elif pseudo_gloss is not None:
             raise TypeError("pseudo_gloss must be a string, a list of strings, or None")
 
+        if isinstance(semantic_ids, (str, int)):
+            semantic_ids = [semantic_ids]
+        elif isinstance(semantic_ids, (list, tuple)):
+            semantic_ids = list(semantic_ids)
+        elif semantic_ids is not None:
+            raise TypeError(
+                "semantic_ids must be a string, integer, list, or None"
+            )
+
         batch_size = len(videos)
         if batch_size == 0:
             raise ValueError("videos must contain at least one sample")
@@ -211,6 +243,8 @@ class SignTranslationProcessor(ProcessorMixin):
         batch_fields = {"text": text, "src_lang": src_lang}
         if pseudo_gloss is not None:
             batch_fields["pseudo_gloss"] = pseudo_gloss
+        if semantic_ids is not None:
+            batch_fields["semantic_ids"] = semantic_ids
         for name, values in batch_fields.items():
             if len(values) != batch_size:
                 raise ValueError(
@@ -229,7 +263,11 @@ class SignTranslationProcessor(ProcessorMixin):
         ):
             raise TypeError("every item in pseudo_gloss must be a string")
 
-        return videos, text, src_lang, pseudo_gloss
+        if semantic_ids is not None:
+            for value in semantic_ids:
+                _stable_semantic_id(value)
+
+        return videos, text, src_lang, pseudo_gloss, semantic_ids
 
     def __call__(
         self,
@@ -237,6 +275,7 @@ class SignTranslationProcessor(ProcessorMixin):
         text: Union[list[TextInput], TextInput],
         src_lang: Union[list[str], str],
         pseudo_gloss: Union[list[str], str] | None = None,
+        semantic_ids: Union[list[str | int], str, int] | None = None,
         training: bool = True,
         add_bos_token: bool = False,
         add_eos_token: bool = True,
@@ -249,11 +288,18 @@ class SignTranslationProcessor(ProcessorMixin):
         )
         videos_kwargs = output_kwargs["videos_kwargs"]
 
-        videos, text, src_lang, pseudo_gloss = self._validate_and_batch_inputs(
+        (
             videos,
             text,
             src_lang,
             pseudo_gloss,
+            semantic_ids,
+        ) = self._validate_and_batch_inputs(
+            videos,
+            text,
+            src_lang,
+            pseudo_gloss,
+            semantic_ids,
         )
 
         if training:
@@ -296,8 +342,10 @@ class SignTranslationProcessor(ProcessorMixin):
             labels.append(label)
             language_ids.append(LANGUAGE_MAP[lang])
 
-            input_text = prompt + label if training else prompt
-            input_texts.append(input_text)
+            # Keep the supervised model input identical between training and
+            # evaluation. Generation receives its prompt-only inputs through
+            # the dedicated ``generation_*`` fields below.
+            input_texts.append(prompt + label)
 
         # pad on the left
         self.tokenizer.padding_side = "left"
@@ -309,6 +357,15 @@ class SignTranslationProcessor(ProcessorMixin):
             padding=True,
         )
 
+        generation_inputs_pt = None
+        if not training:
+            generation_inputs_pt = self.tokenizer(
+                prompts,
+                add_special_tokens=False,
+                return_tensors="pt",
+                padding=True,
+            )
+
         max_length = inputs_pt.input_ids.size(1)
 
         labels_pt = self.tokenizer(
@@ -319,7 +376,10 @@ class SignTranslationProcessor(ProcessorMixin):
             return_tensors="pt",
         )
 
-        labels_pt.input_ids[labels_pt.input_ids == self.tokenizer.pad_token_id] = -100
+        # Mask only tokenizer-added padding positions. Comparing token IDs
+        # directly would also hide a real EOS token for tokenizers that use the
+        # same ID for padding and EOS.
+        labels_pt.input_ids.masked_fill_(labels_pt.attention_mask == 0, -100)
 
         # Prepare source input
         assert torch.all(
@@ -329,13 +389,24 @@ class SignTranslationProcessor(ProcessorMixin):
                 + self.num_extra_video_tokens
             )
         ), "The number of image soft tokens does not match the expected number."
+        if generation_inputs_pt is not None:
+            assert torch.all(
+                generation_inputs_pt.input_ids.eq(self.video_soft_token_id).sum(-1)
+                == (
+                    video_lengths_tensor * self.video_token_scale
+                    + self.num_extra_video_tokens
+                )
+            ), (
+                "The number of image soft tokens in generation inputs does not "
+                "match the expected number."
+            )
 
-        # calcuate the postional ids
-        pos_ids = None
-        if training:  # WARN: ONLY train need position ids, we don't need it when generating sequence, there is a bug
-            pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
-            pos_ids = pos_ids.clamp(min=0)
-            pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
+        # Position IDs belong to the supervised forward input in every mode.
+        # They are intentionally omitted from the prompt-only generation input
+        # because passing them to generate currently causes incorrect decoding.
+        pos_ids = inputs_pt.attention_mask.cumsum(-1) - 1
+        pos_ids = pos_ids.clamp(min=0)
+        pos_ids = torch.where(inputs_pt.attention_mask == 0, 1, pos_ids)
 
         # handle pseudo glosses, if present
         pseudo_gloss_pt = None
@@ -355,12 +426,24 @@ class SignTranslationProcessor(ProcessorMixin):
             "labels": labels_pt.input_ids,
             "token_type_ids": (inputs_pt.input_ids == self.video_soft_token_id).long(),
             "lang_ids": torch.tensor(language_ids).long(),
+            "position_ids": pos_ids,
         }
 
-        if pos_ids is not None:
-            data["position_ids"] = pos_ids
+        if generation_inputs_pt is not None:
+            data["generation_input_ids"] = generation_inputs_pt.input_ids
+            data["generation_attention_mask"] = (
+                generation_inputs_pt.attention_mask
+            )
+            data["generation_token_type_ids"] = (
+                generation_inputs_pt.input_ids == self.video_soft_token_id
+            ).long()
         if pseudo_gloss_pt is not None:
             data["pseudo_gloss_input_ids"] = pseudo_gloss_pt.input_ids
             data["pseudo_gloss_attention_mask"] = pseudo_gloss_pt.attention_mask
+        if semantic_ids is not None:
+            data["semantic_ids"] = torch.tensor(
+                [_stable_semantic_id(value) for value in semantic_ids],
+                dtype=torch.long,
+            )
 
         return BatchFeature(data=data, tensor_type=TensorType.PYTORCH)

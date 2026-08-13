@@ -118,9 +118,14 @@ class SltTrainer(Seq2SeqTrainer):
         num_items_in_batch: Optional[Union[torch.Tensor, int]] = None,
     ):
         """Compute the optimization loss and retain individual loss terms for logging."""
+        model_inputs = {
+            name: value
+            for name, value in inputs.items()
+            if not name.startswith("generation_")
+        }
         loss, outputs = super().compute_loss(
             model,
-            inputs,
+            model_inputs,
             return_outputs=True,
             num_items_in_batch=num_items_in_batch,
         )
@@ -233,20 +238,30 @@ class SltTrainer(Seq2SeqTrainer):
                 "synced_gpus", default_synced_gpus
             )
 
-            generation_inputs = inputs.copy()
-            # If the `decoder_input_ids` was created from `labels`, evict the former, so that the model can freely generate
-            # (otherwise, it would continue generating from the padded `decoder_input_ids`)
-            if (
-                "labels" in generation_inputs
-                and "decoder_input_ids" in generation_inputs
-                and generation_inputs["labels"].shape
-                == generation_inputs["decoder_input_ids"].shape
-            ):
-                generation_inputs = {
-                    k: v
-                    for k, v in inputs.items()
-                    if k not in ("decoder_input_ids", "decoder_attention_mask")
-                }
+            generation_field_map = {
+                "generation_input_ids": "input_ids",
+                "generation_attention_mask": "attention_mask",
+                "generation_token_type_ids": "token_type_ids",
+            }
+            missing_generation_fields = [
+                name for name in generation_field_map if name not in inputs
+            ]
+            if missing_generation_fields:
+                raise ValueError(
+                    "Evaluation batches must provide prompt-only generation "
+                    "fields; missing: " + ", ".join(missing_generation_fields)
+                )
+
+            generation_inputs = {
+                model_name: inputs[batch_name]
+                for batch_name, model_name in generation_field_map.items()
+            }
+            for shared_name in ("pixel_values", "pixel_values_length"):
+                if shared_name not in inputs:
+                    raise ValueError(
+                        f"Evaluation batch is missing required {shared_name!r}"
+                    )
+                generation_inputs[shared_name] = inputs[shared_name]
 
             summon_full_params_context = (
                 FullyShardedDataParallel.summon_full_params(self.model)
@@ -255,27 +270,7 @@ class SltTrainer(Seq2SeqTrainer):
             )
 
             # NOTE: language_ids will be save per batch
-            lang_ids = None
-            if "lang_ids" in generation_inputs:
-                lang_ids = generation_inputs.pop("lang_ids")
-
-            # NOTE: pop possible unused keys for generation
-            unsed_keys = [
-                "names",
-                "target_text",
-                "prompts",
-                "input_text",
-                "lang",
-                "original_videos",
-            ]
-            for key in unsed_keys:
-                if key in generation_inputs:
-                    generation_inputs.pop(key)
-
-            if "position_ids" in generation_inputs:
-                raise ValueError(
-                    "position_ids should not be passed to generate function"
-                )  # NOTE: this is important, or will lead to bug behavior
+            lang_ids = inputs.get("lang_ids")
 
             with summon_full_params_context:
                 generated_tokens = self.model.generate(
@@ -293,7 +288,7 @@ class SltTrainer(Seq2SeqTrainer):
             default_gen_config = gen_config._get_default_generation_params()
             gen_config.update(**default_gen_config, defaults_only=True)
 
-            prompt_length_value = inputs["input_ids"].shape[1]
+            prompt_length_value = generation_inputs["input_ids"].shape[1]
             max_new_tokens = gen_kwargs.get("max_new_tokens")
             if max_new_tokens is None:
                 max_new_tokens = gen_config.max_new_tokens
