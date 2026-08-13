@@ -60,6 +60,7 @@ class SltConfig(PretrainedConfig):
         alignment_beta_ot: float = 1.0,
         alignment_beta_null: float = 0.1,
         alignment_beta_tv: float = 0.1,
+        alignment_pooling_distill_weight: float = 0.0,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -132,6 +133,9 @@ class SltConfig(PretrainedConfig):
             alignment_beta_null: Internal weight of the NULL regularizer.
             alignment_beta_tv: Internal weight of the temporal-variation loss
                 on the row-normalized real-token plan.
+            alignment_pooling_distill_weight: Weight of the KL loss that uses
+                detached non-NULL OT mass to supervise visual-only global
+                attention. Zero disables attention distillation.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -173,6 +177,13 @@ class SltConfig(PretrainedConfig):
             raise ValueError("alignment_null_temperature must be positive")
         if alignment_beta_ot < 0 or alignment_beta_null < 0 or alignment_beta_tv < 0:
             raise ValueError("alignment beta weights must be non-negative")
+        if alignment_pooling_distill_weight < 0:
+            raise ValueError("alignment_pooling_distill_weight must be non-negative")
+        if alignment_pooling_distill_weight > 0 and alignment_loss_weight <= 0:
+            raise ValueError(
+                "alignment_loss_weight must be positive when alignment pooling "
+                "distillation is enabled"
+            )
         self.alignment_loss_weight = alignment_loss_weight
         self.alignment_eps = alignment_eps
         self.alignment_n_iters = alignment_n_iters
@@ -183,6 +194,7 @@ class SltConfig(PretrainedConfig):
         self.alignment_beta_ot = alignment_beta_ot
         self.alignment_beta_null = alignment_beta_null
         self.alignment_beta_tv = alignment_beta_tv
+        self.alignment_pooling_distill_weight = alignment_pooling_distill_weight
 
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.

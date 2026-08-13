@@ -125,7 +125,12 @@ class SltTrainer(Seq2SeqTrainer):
             num_items_in_batch=num_items_in_batch,
         )
 
-        for name in ("main_loss", "contrastive_loss", "alignment_loss"):
+        for name in (
+            "main_loss",
+            "contrastive_loss",
+            "alignment_loss",
+            "alignment_pooling_loss",
+        ):
             value = getattr(outputs, name, None)
             if value is None and isinstance(outputs, dict):
                 value = outputs.get(name)

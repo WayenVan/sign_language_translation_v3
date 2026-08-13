@@ -48,3 +48,4 @@ class SltCausalLMOutputWithPast(CausalLMOutputWithPast):
     main_loss: Optional[torch.Tensor] = None
     contrastive_loss: Optional[torch.Tensor] = None
     alignment_loss: Optional[torch.Tensor] = None
+    alignment_pooling_loss: Optional[torch.Tensor] = None

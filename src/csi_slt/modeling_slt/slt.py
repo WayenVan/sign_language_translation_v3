@@ -466,7 +466,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self,
         visual_features: torch.Tensor,
         visual_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return global and local features from the current visual tokens.
 
         The local representation is the packed visual feature tensor itself.
@@ -495,17 +495,73 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         feature_sequences = torch.split(visual_features, lengths.tolist(), dim=0)
         global_features = []
+        packed_attention_weights = []
         for sequence in feature_sequences:
             attention_logits = self.visual_global_attention(sequence).squeeze(-1)
-            attention_weights = torch.softmax(attention_logits.float(), dim=0).to(
-                dtype=sequence.dtype
-            )
+            attention_weights_float = torch.softmax(attention_logits.float(), dim=0)
+            packed_attention_weights.append(attention_weights_float)
+            attention_weights = attention_weights_float.to(dtype=sequence.dtype)
             global_features.append(
                 (sequence * attention_weights.unsqueeze(-1)).sum(dim=0)
             )
 
         global_features = torch.stack(global_features, dim=0)
-        return global_features, visual_features
+        return (
+            global_features,
+            visual_features,
+            torch.cat(packed_attention_weights, dim=0),
+        )
+
+    @staticmethod
+    def _alignment_pooling_distillation_loss(
+        alignment: torch.Tensor,
+        student_attention: torch.Tensor,
+        visual_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Distil non-NULL OT relevance into visual-only global attention.
+
+        ``alignment`` has shape ``[B, M, U+1]`` with NULL in column zero.
+        The teacher is the fraction of each valid row's transport assigned to
+        real pseudo-gloss targets, normalized across visual positions. It is
+        detached so this auxiliary loss only updates the visual attention path.
+        """
+        if alignment.ndim != 3 or alignment.shape[-1] < 2:
+            raise ValueError("alignment must have shape [B, M, U+1] with U >= 1")
+        if student_attention.ndim != 2:
+            raise ValueError("student_attention must have shape [B, M]")
+        if visual_mask.ndim != 2:
+            raise ValueError("visual_mask must have shape [B, M]")
+        if alignment.shape[:2] != student_attention.shape:
+            raise ValueError("alignment and student_attention dimensions must match")
+        if student_attention.shape != visual_mask.shape:
+            raise ValueError("student_attention and visual_mask shapes must match")
+
+        valid = visual_mask.bool()
+        if bool((valid.sum(dim=-1) == 0).any()):
+            raise ValueError("every sample must contain a valid visual position")
+
+        with torch.no_grad():
+            plan = alignment.detach().float()
+            row_mass = plan.sum(dim=-1)
+            real_mass = plan[:, :, 1:].sum(dim=-1)
+            relevance = (real_mass / row_mass.clamp_min(1e-12)) * valid
+            relevance_sum = relevance.sum(dim=-1, keepdim=True)
+            uniform = valid.float() / valid.sum(dim=-1, keepdim=True)
+            teacher_attention = torch.where(
+                relevance_sum > 1e-12,
+                relevance / relevance_sum.clamp_min(1e-12),
+                uniform,
+            )
+
+        student = student_attention.float().masked_fill(~valid, 0.0)
+        student = student / student.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        # Writing KL explicitly avoids evaluating log(0) at padded positions.
+        teacher_terms = teacher_attention.clamp_min(1e-12)
+        student_terms = student.clamp_min(1e-12)
+        per_position_kl = teacher_attention * (
+            teacher_terms.log() - student_terms.log()
+        )
+        return (per_position_kl * valid).sum(dim=-1).mean()
 
     def prepare_for_casual_lm(
         self,
@@ -729,6 +785,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         main_loss = None
         contrastive_loss = None
         alignment_loss = None
+        alignment_pooling_loss = None
         if labels is not None:
             # Shift so that tokens before position n predict token n.
             shift_logits = outputs.logits[..., :-1, :].contiguous()
@@ -742,16 +799,20 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # either auxiliary objective is disabled.
             contrastive_loss = torch.zeros_like(main_loss)
             alignment_loss = torch.zeros_like(main_loss)
+            alignment_pooling_loss = torch.zeros_like(main_loss)
             auxiliary_loss_enabled = (
                 self.config.contrastive_loss_weight > 0.0
                 or self.config.alignment_loss_weight > 0.0
+                or self.config.alignment_pooling_distill_weight > 0.0
             )
             if auxiliary_loss_enabled:
-                global_visual_features, local_visual_features = (
-                    self._encode_visual_features_for_contrastive(
-                        prepare_output.contrastive_features,
-                        prepare_output.contrastive_lengths,
-                    )
+                (
+                    global_visual_features,
+                    local_visual_features,
+                    packed_visual_attention,
+                ) = self._encode_visual_features_for_contrastive(
+                    prepare_output.contrastive_features,
+                    prepare_output.contrastive_lengths,
                 )
                 if (
                     pseudo_gloss_input_ids is None
@@ -771,29 +832,52 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     )
                 )
 
+            if (
+                self.config.alignment_loss_weight > 0.0
+                or self.config.alignment_pooling_distill_weight > 0.0
+            ):
+                padded_visual_features, visual_mask = packed_to_padded(
+                    local_visual_features,
+                    prepare_output.contrastive_lengths,
+                )
+                if valid_pseudo.any():
+                    alignment_loss, alignment_info = self.local_alignment_loss_fct(
+                        video_features=padded_visual_features[valid_pseudo],
+                        pseudo_embeddings=local_text_features,
+                        video_mask=visual_mask[valid_pseudo],
+                        pseudo_mask=pseudo_gloss_attention_mask[valid_pseudo],
+                    )
+                    if self.config.alignment_pooling_distill_weight > 0.0:
+                        padded_visual_attention, attention_mask = packed_to_padded(
+                            packed_visual_attention,
+                            prepare_output.contrastive_lengths,
+                        )
+                        if not torch.equal(attention_mask, visual_mask):
+                            raise RuntimeError(
+                                "visual feature and attention masks diverged"
+                            )
+                        alignment_pooling_loss = (
+                            self._alignment_pooling_distillation_loss(
+                                alignment=alignment_info["alignment"],
+                                student_attention=padded_visual_attention[
+                                    valid_pseudo
+                                ],
+                                visual_mask=visual_mask[valid_pseudo],
+                            )
+                        )
+
             if self.config.contrastive_loss_weight > 0.0:
                 contrastive_loss = self.contrastive_loss_fct(
                     visual_features=global_visual_features[valid_pseudo],
                     text_features=global_text_features.detach(),
                 )
 
-            if self.config.alignment_loss_weight > 0.0:
-                padded_visual_features, visual_mask = packed_to_padded(
-                    local_visual_features,
-                    prepare_output.contrastive_lengths,
-                )
-                if valid_pseudo.any():
-                    alignment_loss, _alignment_info = self.local_alignment_loss_fct(
-                        video_features=padded_visual_features[valid_pseudo],
-                        pseudo_embeddings=local_text_features,
-                        video_mask=visual_mask[valid_pseudo],
-                        pseudo_mask=pseudo_gloss_attention_mask[valid_pseudo],
-                    )
-
             loss = (
                 main_loss
                 + self.config.contrastive_loss_weight * contrastive_loss
                 + self.config.alignment_loss_weight * alignment_loss
+                + self.config.alignment_pooling_distill_weight
+                * alignment_pooling_loss
             )
 
         return SltCausalLMOutputWithPast(
@@ -801,6 +885,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             main_loss=main_loss,
             contrastive_loss=contrastive_loss,
             alignment_loss=alignment_loss,
+            alignment_pooling_loss=alignment_pooling_loss,
             logits=outputs.logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,

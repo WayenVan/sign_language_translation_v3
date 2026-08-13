@@ -126,9 +126,9 @@ def generalized_kl(actual: Tensor, prior: Tensor) -> Tensor:
 class MinimalNullOTAlignment(nn.Module):
     """Align video features to frozen pseudo-label embeddings with NULL support.
 
-    The module returns a scalar training loss and detached diagnostics. In
-    particular, the returned alignment is not intended to feed, reorder, or
-    otherwise condition a validation/inference path.
+    The module returns a scalar training loss and detached diagnostics. The
+    detached plan may supervise another training-only branch, but is not
+    intended to feed, reorder, or otherwise condition validation/inference.
 
     Args:
         video_dim: Input video-feature dimension ``Dv``. The input tensor has
@@ -382,7 +382,8 @@ class MinimalNullOTAlignment(nn.Module):
             "actual_null_mass": actual_null_mass.detach(),
             "null_bias": self.null_bias.detach(),
             "epsilon": self.eps,
-            # Detached by design: this plan is diagnostic, not an inference input.
+            # Detached by design: diagnostics or a training-only teacher, never
+            # a validation/inference input.
             "alignment": alignment.detach(),  # [B, M, U+1]
         }
         return total_loss, info
