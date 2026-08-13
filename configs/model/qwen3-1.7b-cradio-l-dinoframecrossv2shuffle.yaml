@@ -16,9 +16,10 @@ config:
     output_dim: 2048
     temperature: 0.1
     use_short_temporal_conv: false
-  contrastive_loss_weight: 0.5
+  contrastive_loss_weight: 0.25
   contrastive_text_queue_size: 1024
-  alignment_loss_weight: 2.0
+  alignment_loss_weight: 1.0
+  alignment_pooling_distill_weight: 0.5
   alignment_eps: 0.12
   alignment_n_iters: 10
   alignment_target_relaxation: 0.5
@@ -27,3 +28,4 @@ config:
   alignment_null_temperature: 0.1
   alignment_beta_ot: 1.0
   alignment_beta_null: 0.1
+  alignment_beta_tv: 2.0

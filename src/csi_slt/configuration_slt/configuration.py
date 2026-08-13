@@ -48,7 +48,7 @@ class SltConfig(PretrainedConfig):
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
         contrastive_dim: int = 512,
-        contrastive_loss_weight: float = 1.0,
+        contrastive_loss_weight: float = 0.25,
         contrastive_text_queue_size: int = 0,
         alignment_loss_weight: float = 1.0,
         alignment_eps: float = 0.12,
@@ -59,8 +59,8 @@ class SltConfig(PretrainedConfig):
         alignment_null_temperature: float = 0.1,
         alignment_beta_ot: float = 1.0,
         alignment_beta_null: float = 0.1,
-        alignment_beta_tv: float = 0.1,
-        alignment_pooling_distill_weight: float = 0.0,
+        alignment_beta_tv: float = 2.0,
+        alignment_pooling_distill_weight: float = 0.5,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
