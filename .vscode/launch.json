@@ -18,7 +18,7 @@
         "--mixed_precision=bf16",
         "-m",
         "csi_slt.commands.train",
-        "model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle",
+        "model=qwen3-1.7b-cradio-l-dinoframecrossv2groupedshuffle",
         "data=ph14t_*x224x224_qwen_multiling",
         "datamodule=shared_subset",
         "engine.training_args.report_to=none",

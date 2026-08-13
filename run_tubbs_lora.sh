@@ -18,8 +18,8 @@ fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
   --config-name train/with_lora \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0811.224x224-lora \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv2groupedshuffle \
+  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-denoframecrossv2groupedshuffle-0811.224x224-lora \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
