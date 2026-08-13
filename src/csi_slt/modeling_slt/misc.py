@@ -58,6 +58,30 @@ def packed_to_padded(
     return padded, mask.long()
 
 
+def packed_position_ids_to_padded(
+    packed_position_ids: torch.Tensor,
+    lengths: torch.Tensor | list[int] | tuple[int, ...],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pad packed visual position IDs with the ``-100`` sentinel.
+
+    Visual adapters emit one-dimensional IDs aligned with packed visual tokens
+    ``[sum(lengths)]``. Consumers such as batched alignment require
+    ``[B, max(lengths)]`` plus a mask; this helper is the explicit boundary
+    between those two representations.
+    """
+    if not isinstance(packed_position_ids, torch.Tensor):
+        raise TypeError("packed_position_ids must be a torch.Tensor")
+    if packed_position_ids.ndim != 1:
+        raise ValueError("packed_position_ids must have shape [sum(lengths)]")
+    if packed_position_ids.is_floating_point() or packed_position_ids.is_complex():
+        raise TypeError("packed_position_ids must use an integer dtype")
+    return packed_to_padded(
+        packed_position_ids,
+        lengths,
+        padding_value=-100,
+    )
+
+
 def padded_to_packed(
     padded_features: torch.Tensor, mask: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:

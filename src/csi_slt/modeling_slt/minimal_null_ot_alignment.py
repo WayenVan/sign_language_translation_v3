@@ -123,6 +123,78 @@ def generalized_kl(actual: Tensor, prior: Tensor) -> Tensor:
     return (terms * valid).sum(dim=-1).mean()
 
 
+def group_alignment_by_position_ids(
+    alignment: Tensor,
+    video_mask: Tensor,
+    visual_position_ids: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Average transport rows that share a temporal visual position.
+
+    Within each video, valid position IDs must start at zero and may only stay
+    unchanged or increase by one. Padding positions must use ``-100``. These
+    constraints ensure that grouping preserves the original temporal order.
+
+    Args:
+        alignment: Transport plan ``[B, M, K]``.
+        video_mask: Valid visual-token mask ``[B, M]``.
+        visual_position_ids: Padded temporal IDs ``[B, M]``.
+
+    Returns:
+        Averaged transport plans ``[B, G, K]`` and group mask ``[B, G]``.
+    """
+    if alignment.ndim != 3:
+        raise ValueError("alignment must have shape [B, M, K]")
+    if video_mask.ndim != 2 or video_mask.shape != alignment.shape[:2]:
+        raise ValueError("video_mask shape must equal alignment.shape[:2]")
+    if visual_position_ids.ndim != 2 or visual_position_ids.shape != video_mask.shape:
+        raise ValueError("visual_position_ids shape must equal video_mask shape")
+    if visual_position_ids.is_floating_point() or visual_position_ids.is_complex():
+        raise TypeError("visual_position_ids must use an integer dtype")
+    if (
+        alignment.device != video_mask.device
+        or alignment.device != visual_position_ids.device
+    ):
+        raise ValueError(
+            "alignment, video_mask, and visual_position_ids must share a device"
+        )
+
+    valid = video_mask.bool()
+    if bool((valid.sum(dim=-1) == 0).any()):
+        raise ValueError("every video must contain a valid visual token")
+    if bool((visual_position_ids[~valid] != -100).any()):
+        raise ValueError("padded visual_position_ids must be -100")
+
+    # Padded rows are validated independently because videos have variable
+    # lengths. This branch only checks small integer metadata, not features.
+    for batch_index in range(alignment.shape[0]):
+        position_ids = visual_position_ids[batch_index, valid[batch_index]]
+        if int(position_ids[0].item()) != 0:
+            raise ValueError("visual_position_ids must start at 0 in every video")
+        steps = position_ids[1:] - position_ids[:-1]
+        if bool(((steps < 0) | (steps > 1)).any()):
+            raise ValueError(
+                "visual_position_ids must be consecutive and non-decreasing "
+                "within every video"
+            )
+
+    num_groups = int(visual_position_ids[valid].max().item()) + 1
+    safe_position_ids = visual_position_ids.clamp_min(0)
+    expanded_ids = safe_position_ids.unsqueeze(-1).expand_as(alignment)
+
+    grouped_alignment = alignment.new_zeros(
+        alignment.shape[0], num_groups, alignment.shape[-1]
+    )
+    grouped_alignment.scatter_add_(
+        1, expanded_ids, alignment * valid.unsqueeze(-1).to(alignment.dtype)
+    )
+
+    group_counts = alignment.new_zeros(alignment.shape[0], num_groups)
+    group_counts.scatter_add_(1, safe_position_ids, valid.to(alignment.dtype))
+    grouped_mask = group_counts.gt(0)
+    grouped_alignment = grouped_alignment / group_counts.clamp_min(1).unsqueeze(-1)
+    return grouped_alignment, grouped_mask
+
+
 class MinimalNullOTAlignment(nn.Module):
     """Align video features to frozen pseudo-label embeddings with NULL support.
 
@@ -285,6 +357,7 @@ class MinimalNullOTAlignment(nn.Module):
         video_mask: Tensor,
         pseudo_mask: Tensor,
         pseudo_confidence: Optional[Tensor] = None,
+        visual_position_ids: Optional[Tensor] = None,
     ) -> Tuple[Tensor, AlignmentInfo]:
         """Compute semi-unbalanced OT alignment and NULL regularization.
 
@@ -295,15 +368,21 @@ class MinimalNullOTAlignment(nn.Module):
             video_mask: Valid video positions ``[B, M]``.
             pseudo_mask: Valid pseudo-label positions ``[B, U]``.
             pseudo_confidence: Optional non-negative label reliability ``[B, U]``.
+            visual_position_ids: Optional temporal group IDs ``[B, M]``. Valid
+                IDs must start at zero and be consecutive within every video;
+                padding must be ``-100``. When omitted, every valid visual token
+                is treated as its own temporal position.
 
         Returns:
             total_loss: ``beta_ot * L_uot + beta_tv * L_tv + beta_null * L_null``.
             info: Detached component losses, NULL statistics, and alignment
-                ``[B, M, U+1]`` for logging/visualization only.
+                tensors for logging/visualization only. ``alignment`` retains
+                token-level rows ``[B, M, U+1]``; ``grouped_alignment`` contains
+                position-grouped rows ``[B, G, U+1]`` used by TV.
         """
         batch_size, _, _ = video_features.shape
         _, _, text_dim = pseudo_embeddings.shape
-        dtype, device = video_features.dtype, video_features.device
+        dtype = video_features.dtype
 
         projected_video = self.video_proj(video_features)  # [B, M, Dt]
         video_unit = F.normalize(projected_video, dim=-1)  # [B, M, Dt]
@@ -358,8 +437,19 @@ class MinimalNullOTAlignment(nn.Module):
         soft_null_per_sample = soft_null_per_sample / valid_video.sum(dim=-1).clamp_min(1)
         null_reg_loss = torch.relu(soft_null_per_sample - self.null_ratio_max).square().mean()
 
-        # Temporal variation: keep adjacent video positions from flipping tokens.
-        tv_loss = self._compute_tv_loss(alignment, video_mask)
+        # Compute TV over temporal positions rather than token types. Adapters
+        # can assign the same position ID to CLS/PATCH tokens from one window.
+        if visual_position_ids is None:
+            visual_position_ids = video_mask.long().cumsum(dim=-1) - 1
+            visual_position_ids = visual_position_ids.masked_fill(
+                ~video_mask.bool(), -100
+            )
+        grouped_alignment, grouped_video_mask = group_alignment_by_position_ids(
+            alignment,
+            video_mask,
+            visual_position_ids,
+        )
+        tv_loss = self._compute_tv_loss(grouped_alignment, grouped_video_mask)
 
         total_loss = (
             self.beta_ot * ot_loss
@@ -385,6 +475,8 @@ class MinimalNullOTAlignment(nn.Module):
             # Detached by design: diagnostics or a training-only teacher, never
             # a validation/inference input.
             "alignment": alignment.detach(),  # [B, M, U+1]
+            "grouped_alignment": grouped_alignment.detach(),  # [B, G, U+1]
+            "grouped_video_mask": grouped_video_mask.detach(),  # [B, G]
         }
         return total_loss, info
 
