@@ -1,5 +1,6 @@
 import logging
 import math
+from collections.abc import Sequence
 
 import torch
 from torch import nn
@@ -21,9 +22,13 @@ class CRadioV4Backbone(nn.Module):
         self.id = config.get("id")
 
         if self.id is None:
-            raise ValueError("id must be provided in config for DinoV3Backbone")
+            raise ValueError("id must be provided in config for CRadioV4Backbone")
 
-        self.output_layer = config.get("output_layer", -1)
+        self.output_layers = self._normalize_output_layers(
+            config.get("output_layer", [-1, -2, -3, -4])
+        )
+        # Preserve the public attribute used by existing configuration/debug code.
+        self.output_layer = self.output_layers
         self.config = config
         self._input_values_validated = False
 
@@ -44,16 +49,71 @@ class CRadioV4Backbone(nn.Module):
         video: Packed frames with shape [F, C, H, W].
         """
         self._validate_inputs(x, t_lengths)
-        radio_output = self.visual_encoder(x)
-
-        summary = radio_output.summary
-        features = radio_output.features
+        radio_outputs = self._forward_intermediates(x)
+        summary = self._mean_fuse(
+            [output.summary for output in radio_outputs], "summary"
+        )
+        features = self._mean_fuse(
+            [output.features for output in radio_outputs], "features"
+        )
 
         return VisualBackboneOutput(
             visual_features=features,  # [B, T, C]
             pooled_visual_features=summary,  # [B, C]
             visual_length=t_lengths,
         )
+
+    @staticmethod
+    def _normalize_output_layers(output_layer: int | Sequence[int]) -> tuple[int, ...]:
+        """Normalize one or more intermediate block indices."""
+        if isinstance(output_layer, bool):
+            raise TypeError("output_layer must be an integer or a sequence of integers")
+        if isinstance(output_layer, int):
+            return (output_layer,)
+        if isinstance(output_layer, (str, bytes)) or not isinstance(
+            output_layer, Sequence
+        ):
+            raise TypeError("output_layer must be an integer or a sequence of integers")
+
+        layers = tuple(output_layer)
+        if not layers:
+            raise ValueError("output_layer must contain at least one layer index")
+        if any(isinstance(layer, bool) or not isinstance(layer, int) for layer in layers):
+            raise TypeError("every output_layer entry must be an integer")
+        if len(set(layers)) != len(layers):
+            raise ValueError("output_layer must not contain duplicate layer indices")
+        return layers
+
+    def _forward_intermediates(self, x: torch.Tensor):
+        radio_model = getattr(self.visual_encoder, "radio_model", self.visual_encoder)
+        forward_intermediates = getattr(radio_model, "forward_intermediates", None)
+        if forward_intermediates is None:
+            raise TypeError(
+                "C-RADIO encoder must expose forward_intermediates to fuse layers"
+            )
+        outputs = forward_intermediates(
+            x,
+            indices=list(self.output_layers),
+            return_prefix_tokens=True,
+            norm=True,
+            output_fmt="NLC",
+            intermediates_only=True,
+            aggregation="sparse",
+        )
+        if len(outputs) != len(self.output_layers):
+            raise RuntimeError(
+                "C-RADIO returned an unexpected number of intermediate layers: "
+                f"expected {len(self.output_layers)}, got {len(outputs)}"
+            )
+        return outputs
+
+    @staticmethod
+    def _mean_fuse(tensors: list[torch.Tensor], name: str) -> torch.Tensor:
+        reference_shape = tensors[0].shape
+        if any(tensor.shape != reference_shape for tensor in tensors[1:]):
+            shapes = [tuple(tensor.shape) for tensor in tensors]
+            raise RuntimeError(f"cannot fuse C-RADIO {name} tensors with shapes {shapes}")
+        return torch.stack(tensors, dim=0).mean(dim=0)
 
     def _validate_inputs(self, x: torch.Tensor, t_lengths: torch.Tensor | None) -> None:
         """Cheaply validate packed, unnormalized C-RADIO image inputs.
@@ -122,7 +182,7 @@ if __name__ == "__main__":
     #     "facebook/dinov3-with-registers-base"
     # )
     model = CRadioV4Backbone.from_pretrained_backbone(
-        config={"id": "nvidia/C-RADIOv4-SO400M", "output_layer": -1}
+        config={"id": "nvidia/C-RADIOv4-SO400M"}
     ).cuda()
 
     x = torch.rand(2, 3, 224, 224).cuda()
