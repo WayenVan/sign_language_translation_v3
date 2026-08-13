@@ -15,6 +15,10 @@ from transformers.modeling_utils import PreTrainedModel
 
 from csi_slt.modeling_slt.cross_modal_contrastive_loss import CrossModalContrastiveLoss
 from csi_slt.modeling_slt.minimal_null_ot_alignment import MinimalNullOTAlignment
+from csi_slt.modeling_slt.info_utils import (
+    InformationRequest,
+    build_information_output,
+)
 
 from peft import get_peft_model, LoraConfig
 from ..configuration_slt.configuration import SltConfig
@@ -24,7 +28,11 @@ from .output_utils import (
     VisualAdapterOutput,
     VisualBackboneOutput,
 )
-from .misc import mark_module_tree_as_initialized, packed_to_padded
+from .misc import (
+    mark_module_tree_as_initialized,
+    packed_position_ids_to_padded,
+    packed_to_padded,
+)
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
 
 logger = logging.get_logger(__name__)
@@ -577,10 +585,21 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
 
         visual_feats = visual_output.visual_features
+        visual_lengths = visual_output.visual_length
+        if visual_lengths is None:
+            raise ValueError("video_length is required for prepare_for_casual_lm")
+        visual_position_ids = visual_output.position_ids
+        if visual_position_ids is None:
+            visual_position_ids = torch.cat(
+                [
+                    torch.arange(length, device=visual_feats.device)
+                    for length in visual_lengths
+                ]
+            )
         visual_feats = self.visual_position_embedding_forward(
             visual_feats,
-            visual_output.visual_length,
-            visual_output.position_ids,
+            visual_lengths,
+            visual_position_ids,
         )  # [BT, D]
         # visual_feats = self.visual_output_norm(visual_feats)
 
@@ -591,11 +610,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_feats = visual_feats * self.visual_scale
 
         _, hidden_size = visual_feats.shape
-        visual_lengths = visual_output.visual_length
-
-        if visual_lengths is None:
-            raise ValueError("video_length is required for prepare_for_casual_lm")
-
         visual_feats_by_video = torch.split(
             visual_feats, visual_lengths.tolist(), dim=0
         )
@@ -645,7 +659,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
             contrastive_features=contrastive_visual_feats,  # [sum(Lv), D], before visual_scale
-            contrastive_lengths=visual_lengths,  # [B]
+            contrastive_visual_lengths=visual_lengths,  # [B]
+            packed_visual_position_ids=visual_position_ids,
         )
 
     def forward(
@@ -665,8 +680,30 @@ class SltModel(PreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.Tensor] = None,
         # ------------ NOTE: special kwars for experimental features ------------
         permute_video_tokens: Optional[bool] = False,
+        information_request: Optional[InformationRequest] = None,
         **llm_forward_kwargs: dict,
     ):
+        if information_request is None:
+            information_request = InformationRequest()
+        elif not isinstance(information_request, InformationRequest):
+            raise TypeError("information_request must be an InformationRequest")
+
+        if information_request.enabled:
+            logger.warning_once(
+                "InformationRequest is enabled for this model. Extracting "
+                "intermediate alignment, pooling, or LLM attention tensors may "
+                "increase computation and memory usage and reduce model throughput."
+            )
+
+        return_full_llm_attentions = bool(
+            llm_forward_kwargs.get(
+                "output_attentions",
+                getattr(self.llm.config, "output_attentions", False),
+            )
+        )
+        if information_request.llm_attentions:
+            llm_forward_kwargs["output_attentions"] = True
+
         # Without explicit lengths, pixel_values must represent one video.
         if pixel_values_length is None and pixel_values is not None:
             assert input_ids.shape[0] == 1, (
@@ -689,6 +726,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
+        prepare_output = None
         if inputs_embeds is None:
             if pixel_values is not None:
                 prepare_output = self.prepare_for_casual_lm(
@@ -786,6 +824,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
         contrastive_loss = None
         alignment_loss = None
         alignment_pooling_loss = None
+        alignment_info = None
+        packed_visual_attention = None
+        valid_pseudo = None
         if labels is not None:
             # Shift so that tokens before position n predict token n.
             shift_logits = outputs.logits[..., :-1, :].contiguous()
@@ -812,7 +853,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     packed_visual_attention,
                 ) = self._encode_visual_features_for_contrastive(
                     prepare_output.contrastive_features,
-                    prepare_output.contrastive_lengths,
+                    prepare_output.contrastive_visual_lengths,
                 )
                 if (
                     pseudo_gloss_input_ids is None
@@ -838,19 +879,26 @@ class SltModel(PreTrainedModel, GenerationMixin):
             ):
                 padded_visual_features, visual_mask = packed_to_padded(
                     local_visual_features,
-                    prepare_output.contrastive_lengths,
+                    prepare_output.contrastive_visual_lengths,
                 )
+                padded_visual_position_ids, position_mask = packed_position_ids_to_padded(
+                    prepare_output.packed_visual_position_ids,
+                    prepare_output.contrastive_visual_lengths,
+                )
+                if not torch.equal(position_mask, visual_mask):
+                    raise RuntimeError("visual feature and position masks diverged")
                 if valid_pseudo.any():
                     alignment_loss, alignment_info = self.local_alignment_loss_fct(
                         video_features=padded_visual_features[valid_pseudo],
                         pseudo_embeddings=local_text_features,
                         video_mask=visual_mask[valid_pseudo],
                         pseudo_mask=pseudo_gloss_attention_mask[valid_pseudo],
+                        visual_position_ids=padded_visual_position_ids[valid_pseudo],
                     )
                     if self.config.alignment_pooling_distill_weight > 0.0:
                         padded_visual_attention, attention_mask = packed_to_padded(
                             packed_visual_attention,
-                            prepare_output.contrastive_lengths,
+                            prepare_output.contrastive_visual_lengths,
                         )
                         if not torch.equal(attention_mask, visual_mask):
                             raise RuntimeError(
@@ -859,9 +907,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                         alignment_pooling_loss = (
                             self._alignment_pooling_distillation_loss(
                                 alignment=alignment_info["alignment"],
-                                student_attention=padded_visual_attention[
-                                    valid_pseudo
-                                ],
+                                student_attention=padded_visual_attention[valid_pseudo],
                                 visual_mask=visual_mask[valid_pseudo],
                             )
                         )
@@ -876,20 +922,44 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 main_loss
                 + self.config.contrastive_loss_weight * contrastive_loss
                 + self.config.alignment_loss_weight * alignment_loss
-                + self.config.alignment_pooling_distill_weight
-                * alignment_pooling_loss
+                + self.config.alignment_pooling_distill_weight * alignment_pooling_loss
             )
+
+        information = None
+        if information_request.enabled:
+            information = build_information_output(
+                request=information_request,
+                batch_size=input_ids.shape[0],
+                llm_attentions=outputs.attentions,
+                prepare_output=prepare_output,
+                alignment_info=alignment_info,
+                packed_visual_attention=packed_visual_attention,
+                valid_pseudo=valid_pseudo,
+            )
+
+        loss_info = None
+        if loss is not None:
+            loss_info = {
+                "main_loss": main_loss.detach(),
+                "contrastive_loss": contrastive_loss.detach(),
+                "alignment_loss": alignment_loss.detach(),
+                "alignment_pooling_loss": alignment_pooling_loss.detach(),
+            }
+            for name in ("transport_loss", "target_mass_kl", "tv_loss"):
+                loss_info[f"alignment/{name}"] = (
+                    alignment_info[name].detach()
+                    if alignment_info is not None
+                    else torch.zeros_like(loss.detach())
+                )
 
         return SltCausalLMOutputWithPast(
             loss=loss,
-            main_loss=main_loss,
-            contrastive_loss=contrastive_loss,
-            alignment_loss=alignment_loss,
-            alignment_pooling_loss=alignment_pooling_loss,
+            loss_info=loss_info,
+            information=information,
             logits=outputs.logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            attentions=outputs.attentions if return_full_llm_attentions else None,
         )
 
     def prepare_inputs_for_generation(

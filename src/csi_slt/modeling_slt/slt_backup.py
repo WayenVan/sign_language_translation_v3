@@ -521,7 +521,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
             contrastive_features=contrastive_visual_feats,  # [sum(Lv), D], before visual_scale
-            contrastive_lengths=visual_lengths,  # [B]
+            contrastive_visual_lengths=visual_lengths,  # [B]
         )
 
     def forward(
@@ -673,7 +673,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             if self.config.contrastive_loss_weight > 0.0:
                 visual_features = self._encode_visual_features_for_contrastive(
                     prepare_output.contrastive_features,
-                    prepare_output.contrastive_lengths,
+                    prepare_output.contrastive_visual_lengths,
                 )
                 text_features = self._encode_labels_for_contrastive(labels).detach()
                 contrastive_loss = self.contrastive_loss_fct(

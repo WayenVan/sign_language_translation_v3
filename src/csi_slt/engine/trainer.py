@@ -125,21 +125,20 @@ class SltTrainer(Seq2SeqTrainer):
             num_items_in_batch=num_items_in_batch,
         )
 
-        for name in (
-            "main_loss",
-            "contrastive_loss",
-            "alignment_loss",
-            "alignment_pooling_loss",
-        ):
-            value = getattr(outputs, name, None)
-            if value is None and isinstance(outputs, dict):
-                value = outputs.get(name)
-            if isinstance(value, torch.Tensor):
-                value = value.detach()
-                self._loss_component_totals[name] = (
-                    self._loss_component_totals.get(name, torch.zeros_like(value))
-                    + value
+        loss_info = getattr(outputs, "loss_info", None)
+        if loss_info is None and isinstance(outputs, dict):
+            loss_info = outputs.get("loss_info")
+        for name, value in (loss_info or {}).items():
+            if not isinstance(value, torch.Tensor) or value.numel() != 1:
+                raise TypeError(
+                    f"loss_info[{name!r}] must be a scalar tensor, got "
+                    f"{type(value).__name__}"
                 )
+            value = value.detach()
+            self._loss_component_totals[name] = (
+                self._loss_component_totals.get(name, torch.zeros_like(value))
+                + value
+            )
         self._loss_component_count += 1
 
         return (loss, outputs) if return_outputs else loss

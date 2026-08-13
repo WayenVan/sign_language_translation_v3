@@ -5,6 +5,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
 from typing import Optional
 
+from .info_utils import InformationOutput
+
 
 @dataclass
 class VisualBackboneOutput(ModelOutput):
@@ -38,14 +40,13 @@ class PrepareForCausalLMOutput(NamedTuple):
     inputs_embeds: torch.Tensor  # [B, L, D]
     visual_mask: torch.Tensor  # [B, L]
     contrastive_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
-    contrastive_lengths: Optional[torch.Tensor] = None  # [B]
+    contrastive_visual_lengths: Optional[torch.Tensor] = None  # [B]
+    packed_visual_position_ids: Optional[torch.Tensor] = None  # [sum(Lv)]
 
 
 @dataclass
 class SltCausalLMOutputWithPast(CausalLMOutputWithPast):
-    """Causal-LM outputs augmented with the individual training loss terms."""
+    """Causal-LM outputs augmented with detached logging information."""
 
-    main_loss: Optional[torch.Tensor] = None
-    contrastive_loss: Optional[torch.Tensor] = None
-    alignment_loss: Optional[torch.Tensor] = None
-    alignment_pooling_loss: Optional[torch.Tensor] = None
+    loss_info: Optional[dict[str, torch.Tensor]] = None
+    information: Optional[InformationOutput] = None
