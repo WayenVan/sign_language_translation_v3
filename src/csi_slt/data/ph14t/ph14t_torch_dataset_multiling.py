@@ -45,6 +45,25 @@ class Ph14TMultiLinglDataset(Dataset):
     def __len__(self):
         return len(self.hg_dataset)
 
+    def _text_item_from_info(self, data_info):
+        """Return metadata needed by text-only objectives such as D-SID."""
+        return dict(
+            id=data_info["name"],
+            # Samples sharing this dataset-provided name are semantically
+            # equivalent positives for the global contrastive objective.
+            semantic_ids=data_info["name"],
+            text=data_info["translation"],
+            lang=data_info["lang"],
+            pseudo_gloss=data_info[self.pseudo_gloss_column],
+        )
+
+    def get_text_item(self, idx):
+        """Read one sample without opening its video frames."""
+        ret = self._text_item_from_info(self.hg_dataset[idx])
+        if self.pipline:
+            ret = self.pipline(ret)
+        return ret
+
     def __getitem__(self, idx):
         data_info = self.hg_dataset[idx]
 
@@ -59,17 +78,11 @@ class Ph14TMultiLinglDataset(Dataset):
 
             video_frame.append(image)
 
-        ret = dict(
-            id=data_info["name"],
-            # Samples sharing this dataset-provided name are semantically
-            # equivalent positives for the global contrastive objective.
-            semantic_ids=data_info["name"],
+        ret = {
+            **self._text_item_from_info(data_info),
             # THWC uint8 in [0, 255]; SignVideoProcessor converts it to float32.
-            video=numpy.array(video_frame, dtype=numpy.uint8),
-            text=data_info["translation"],
-            lang=data_info["lang"],
-            pseudo_gloss=data_info[self.pseudo_gloss_column],
-        )
+            "video": numpy.array(video_frame, dtype=numpy.uint8),
+        }
 
         if self.pipline:
             ret = self.pipline(ret)
