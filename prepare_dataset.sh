@@ -49,6 +49,7 @@ prepare_dataset() {
     local LOCAL_ARCHIVE="$LOCAL_SCRATCH/$(basename "$SOURCE_ARCHIVE")"
     local EXTRACT_MARKER="$DATASET_PATH/.extract_complete"
     local COMPLETE_MARKER="$DATASET_PATH/.data_complete"
+    local RESIZED_FRAME_DIR="$DATASET_PATH/PHOENIX-2014-T/features/fullFrame-256x256px"
 
     # Set TQDM_DISABLE based on whether we have an interactive terminal
     if [[ -t 2 ]]; then
@@ -59,8 +60,8 @@ prepare_dataset() {
 
     mkdir -p "$LOCAL_SCRATCH"
 
-    if [[ -f "$COMPLETE_MARKER" ]]; then
-        echo "数据集已经完成预处理，跳过：$DATASET_PATH" >&2
+    if [[ -f "$COMPLETE_MARKER" && -d "$RESIZED_FRAME_DIR" ]]; then
+        echo "数据集图像已缩放为 256x256，跳过：$DATASET_PATH" >&2
 
     else
         if [[ -f "$EXTRACT_MARKER" ]]; then
@@ -96,15 +97,13 @@ prepare_dataset() {
         # 在解压后的目录上进行预处理
         echo "开始预处理..." >&2
 
-        # 之前的预处理结果可能不完整，先删除
-        rm -rf "$DATASET_PATH/ph14t-preprocessed"
-
-        python preprocess/dataset_preprocess-T.py \
-            --save_dir "$DATASET_PATH/ph14t-preprocessed" \
+        if ! python preprocess/dataset_preprocess-T.py \
             --dataset-root "$DATASET_PATH/PHOENIX-2014-T" \
-            -p \
             -m \
-            -w "$(nproc)" >&2
+            -w "$(nproc)" >&2; then
+            echo "错误：图像预处理失败：$DATASET_PATH" >&2
+            return 1
+        fi
 
         # 只有预处理成功后才创建标志
         touch "$COMPLETE_MARKER"

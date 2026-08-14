@@ -12,6 +12,4 @@ source "$SCRIPT_DIR"/.venv/bin/activate
 
 python3 "$SCRIPT_DIR"/preprocess/dataset_preprocess-T.py \
   --dataset-root "$DATA_ROOT" \
-  --save_dir "$SCRIPT_DIR/dataset/phoenix2014-T-preprocessed" \
-  -p \
   --num_workers "$NUM_WORKERS"

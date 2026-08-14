@@ -1,180 +1,134 @@
-import re
-import os
-import cv2
-import glob
-import pandas
 import argparse
-import numpy as np
-from tqdm import tqdm
+import os
 from functools import partial
 from multiprocessing import Pool
+from pathlib import Path
+
+import cv2
+from tqdm import tqdm
 
 
-def csv2dict(anno_path, dataset_type):
-    inputs_list = pandas.read_csv(anno_path)
-    inputs_list = inputs_list.to_dict()[
-        "name|video|start|end|speaker|orth|translation"
-    ].values()
-    info_dict = dict()
-    info_dict["prefix"] = anno_path.rsplit("/", 3)[0] + "/features/fullFrame-210x260px"
-    print(f"Generate information dict from {anno_path}")
-    for file_idx, file_info in tqdm(enumerate(inputs_list), total=len(inputs_list)):
-        name, video, start, end, speaker, orth, translation = file_info.split("|")
-        num_frames = len(
-            glob.glob(f"{info_dict['prefix']}/{dataset_type}/{name}/*.png")
-        )
-        info_dict[file_idx] = {
-            "fileid": name,
-            "folder": f"{dataset_type}/{name}/*.png",
-            "signer": speaker,
-            "label": orth,
-            "num_frames": num_frames,
-            "original_info": file_info,
-        }
-    return info_dict
+SPLITS = ("dev", "test", "train")
 
 
-def generate_gt_stm(info, save_path):
-    with open(save_path, "w") as f:
-        for k, v in info.items():
-            if not isinstance(k, int):
-                continue
-            f.writelines(
-                f"{v['fileid']} 1 {v['signer']} 0.0 1.79769e+308 {v['label']}\n"
-            )
+def parse_resolution(value):
+    """Convert a value such as ``256x256px`` to an OpenCV (width, height) tuple."""
+    normalized = value.lower().removesuffix("px")
+    try:
+        width, height = (int(size) for size in normalized.split("x"))
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            "resolution must use the WIDTHxHEIGHTpx format, for example 256x256px"
+        ) from None
+
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("resolution dimensions must be positive")
+    return width, height
 
 
-def sign_dict_update(total_dict, info):
-    for k, v in info.items():
-        if not isinstance(k, int):
-            continue
-        split_label = v["label"].split()
-        for gloss in split_label:
-            if gloss not in total_dict.keys():
-                total_dict[gloss] = 1
-            else:
-                total_dict[gloss] += 1
-    return total_dict
+def resize_sequence(sequence_dir, source_root, destination_root, dsize):
+    """Resize every PNG in one sequence while preserving its relative path."""
+    sequence_dir = Path(sequence_dir)
+    source_root = Path(source_root)
+    destination_root = Path(destination_root)
+
+    output_dir = destination_root / sequence_dir.relative_to(source_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for image_path in sorted(sequence_dir.glob("*.png")):
+        image = cv2.imread(str(image_path))
+        if image is None:
+            raise RuntimeError(f"failed to read image: {image_path}")
+
+        resized = cv2.resize(image, dsize, interpolation=cv2.INTER_CUBIC)
+        output_path = output_dir / image_path.name
+        if not cv2.imwrite(str(output_path), resized):
+            raise RuntimeError(f"failed to write image: {output_path}")
 
 
-def resize_img(img_path, dsize="210x260px"):
-    dsize = tuple(int(res) for res in re.findall("\d+", dsize))
-    img = cv2.imread(img_path)
-    img = cv2.resize(img, dsize, interpolation=cv2.INTER_CUBIC)
-    return img
+def find_sequences(source_root):
+    """Return sequence directories from the train/dev/test dataset splits."""
+    source_root = Path(source_root)
+    return [
+        sequence_dir
+        for split in SPLITS
+        for sequence_dir in sorted((source_root / split).glob("*"))
+        if sequence_dir.is_dir()
+    ]
 
 
-def resize_dataset(video_idx, dsize, info_dict):
-    info = info_dict[video_idx]
-    img_list = glob.glob(f"{info_dict['prefix']}/{info['folder']}")
-    for img_path in img_list:
-        rs_img = resize_img(img_path, dsize=dsize)
-        rs_img_path = img_path.replace("210x260px", dsize)
-        rs_img_dir = os.path.dirname(rs_img_path)
-        if not os.path.exists(rs_img_dir):
-            os.makedirs(rs_img_dir)
-            cv2.imwrite(rs_img_path, rs_img)
-        else:
-            cv2.imwrite(rs_img_path, rs_img)
-
-
-def run_mp_cmd(processes, process_func, process_args):
-    with Pool(processes) as p:
-        outputs = list(
-            tqdm(p.imap(process_func, process_args), total=len(process_args))
-        )
-    return outputs
-
-
-def run_cmd(func, args):
-    return func(args)
-
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(
-        description="Data process for Visual Alignment Constraint for Continuous Sign Language Recognition."
+        description="Resize PHOENIX-2014-T frame sequences."
     )
-    parser.add_argument(
-        "--save_dir",
-        type=str,
-        default="dataset/phoenix2014-T-preprocessed",
-        help="save path",
-    )
-    
     parser.add_argument(
         "--dataset-root",
-        type=str,
         default="dataset/PHOENIX-2014-T-release-v3/PHOENIX-2014-T",
-        help="path to the dataset",
+        help="path to the PHOENIX-2014-T dataset",
     )
     parser.add_argument(
-        "--annotation-prefix",
-        type=str,
-        default="annotations/manual/PHOENIX-2014-T.{}.corpus.csv",
-        help="annotation prefix",
+        "--input-res",
+        default="210x260px",
+        help="source frame directory suffix (default: 210x260px)",
     )
     parser.add_argument(
         "--output-res",
-        type=str,
         default="256x256px",
-        help="resize resolution for image sequence",
-    )
-    parser.add_argument(
-        "--process-image", "-p", action="store_true", help="resize image"
+        help="output resolution in WIDTHxHEIGHTpx format (default: 256x256px)",
     )
     parser.add_argument(
         "--multiprocessing",
         "-m",
         action="store_true",
-        help="whether adopts multiprocessing to accelate the preprocess",
+        help="resize sequences using multiple worker processes",
     )
     parser.add_argument(
+        "--num-workers",
         "--num_workers",
         "-w",
-        default=32,
-        help="number of workers for multiprocessing",
+        type=int,
+        default=os.cpu_count() or 1,
+        help="number of multiprocessing workers (default: available CPU count)",
     )
     args = parser.parse_args()
-    mode = ["dev", "test", "train"]
-    sign_dict = dict()
-    if not os.path.exists(f"{args.save_dir}"):
-        os.makedirs(f"{args.save_dir}")
-    save_prefix = os.path.basename(args.save_dir)
-    for md in mode:
-        # generate information dict
-        information = csv2dict(
-            f"{args.dataset_root}/{args.annotation_prefix.format(md)}", dataset_type=md
-        )
-        np.save(f"{args.save_dir}/{md}_info.npy", information)
-        # update the total gloss dict
-        sign_dict_update(sign_dict, information)
-        # generate groudtruth stm for evaluation
-        generate_gt_stm(
-            information, f"{args.save_dir}/{save_prefix}-groundtruth-{md}.stm"
-        )
-        # resize images
-        video_index = np.arange(len(information) - 1)
-        print(f"Resize image to {args.output_res}")
-        if args.process_image:
-            if args.multiprocessing:
-                run_mp_cmd(
-                    32,
-                    partial(
-                        resize_dataset, dsize=args.output_res, info_dict=information
-                    ),
-                    video_index,
-                )
-            else:
-                for idx in tqdm(video_index):
-                    run_cmd(
-                        partial(
-                            resize_dataset, dsize=args.output_res, info_dict=information
-                        ),
-                        idx,
-                    )
-                    # resize_dataset(idx, dsize=args.output_res, info_dict=information)
-    sign_dict = sorted(sign_dict.items(), key=lambda d: d[0])
-    save_dict = {}
-    for idx, (key, value) in enumerate(sign_dict):
-        save_dict[key] = [idx + 1, value]
-    np.save(f"{args.save_dir}/gloss_dict.npy", save_dict)
+
+    dsize = parse_resolution(args.output_res)
+    source_root = (
+        Path(args.dataset_root) / "features" / f"fullFrame-{args.input_res}"
+    )
+    destination_root = (
+        Path(args.dataset_root) / "features" / f"fullFrame-{args.output_res}"
+    )
+
+    if not source_root.is_dir():
+        parser.error(f"source frame directory does not exist: {source_root}")
+    if source_root.resolve() == destination_root.resolve():
+        parser.error("input and output resolutions must be different")
+    if args.num_workers <= 0:
+        parser.error("--num-workers must be positive")
+
+    sequences = find_sequences(source_root)
+    if not sequences:
+        parser.error(f"no frame sequences found under: {source_root}")
+
+    resize_func = partial(
+        resize_sequence,
+        source_root=source_root,
+        destination_root=destination_root,
+        dsize=dsize,
+    )
+    print(
+        f"Resize {len(sequences)} sequences from {source_root} "
+        f"to {destination_root}"
+    )
+
+    if args.multiprocessing:
+        with Pool(args.num_workers) as pool:
+            list(tqdm(pool.imap(resize_func, sequences), total=len(sequences)))
+    else:
+        for sequence_dir in tqdm(sequences):
+            resize_func(sequence_dir)
+
+
+if __name__ == "__main__":
+    main()
