@@ -1,4 +1,4 @@
-from ..experiment.git_state import restore_git_state
+from ..utils.git_state import restore_git_state
 import argparse
 
 

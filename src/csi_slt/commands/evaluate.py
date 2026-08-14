@@ -8,7 +8,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltConfig, SltModel
-from ..experiment.generation_config import merge_generation_config
+from ..utils.generation_config import merge_generation_config
 from transformers.trainer_utils import PredictionOutput
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
 from csi_slt.engine.metrics import SLTMetric

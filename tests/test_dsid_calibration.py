@@ -199,6 +199,7 @@ def test_calibration_runner_uses_eval_inference_and_restores_teacher_mode():
         [batch],
         DSIDTauCalibrator(),
         log_every=0,
+        show_progress=False,
     )
 
     assert result.sample_count == 1

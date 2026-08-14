@@ -1,7 +1,7 @@
 import pytest
 from transformers import GenerationConfig
 
-from csi_slt.experiment.generation_config import merge_generation_config
+from csi_slt.utils.generation_config import merge_generation_config
 
 
 def test_merge_generation_config_copies_base_and_applies_overrides():

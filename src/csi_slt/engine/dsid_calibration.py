@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 
 import torch
+from tqdm.auto import tqdm
 
 from csi_slt.modeling_slt.dsid import (
     DSIDTeacherStatistics,
@@ -208,6 +209,7 @@ def calibrate_dsid_tau(
     *,
     device: torch.device | str | None = None,
     log_every: int = 100,
+    show_progress: bool = True,
 ) -> DSIDCalibrationResult:
     """Run both teacher paths over a data loader and calibrate D-SID tau."""
     if log_every < 0:
@@ -225,7 +227,14 @@ def calibrate_dsid_tau(
     adapter_context = disable_adapter() if callable(disable_adapter) else nullcontext()
     try:
         with adapter_context:
-            for batch_index, batch in enumerate(dataloader, start=1):
+            progress = tqdm(
+                dataloader,
+                desc="Calibrating D-SID tau",
+                unit="batch",
+                dynamic_ncols=True,
+                disable=not show_progress,
+            )
+            for batch_index, batch in enumerate(progress, start=1):
                 missing = sorted(missing_fields.difference(batch))
                 if missing:
                     raise KeyError(

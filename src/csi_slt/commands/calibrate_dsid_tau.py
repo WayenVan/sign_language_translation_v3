@@ -87,9 +87,12 @@ def main(cfg: DictConfig) -> None:
 
     model_name = cfg.model.config.llm_model_name_or_path
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    # Reuse the configured processor, but intentionally do not call
-    # DataModule.setup(): calibration needs neither video decoding nor length
-    # preparation for bucketing.
+    # Calibration bypasses SltModel.forward() completely: there are no
+    # pixel_values, video decoding, visual backbone, or visual adapter. The
+    # text-only processor builds pseudo-gloss and empty-source inputs, which are
+    # forwarded directly through the frozen base LLM to obtain q_g and q_0.
+    # DataModule.setup() is intentionally skipped because calibration also does
+    # not need video lengths or length-bucket preparation.
     datamodule = DataModule(cfg.data, cfg.datamodule, tokenizer=tokenizer)
     source_dataset = instantiate(cfg.data.train.dataset)
     dataset_size = len(source_dataset)
@@ -132,6 +135,7 @@ def main(cfg: DictConfig) -> None:
         calibrator,
         device=cfg.calibration.get("device"),
         log_every=int(cfg.calibration.log_every),
+        show_progress=bool(cfg.calibration.show_progress),
     )
     output_path = _save_result(
         cfg,

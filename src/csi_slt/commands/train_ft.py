@@ -8,7 +8,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltModel
-from ..experiment.generation_config import merge_generation_config
+from ..utils.generation_config import merge_generation_config
 import re
 from accelerate import Accelerator
 
@@ -18,9 +18,7 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
-@hydra.main(
-    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/ft"
-)
+@hydra.main(version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/ft")
 def main(cfg: DictConfig):
     acc = Accelerator()
     # create model

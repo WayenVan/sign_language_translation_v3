@@ -11,7 +11,7 @@ def merge_generation_config(
     base: GenerationConfig,
     overrides: Mapping[str, Any],
 ) -> GenerationConfig:
-    """Copy a model generation config and apply validated experiment overrides."""
+    """Copy a model generation config and apply validated overrides."""
     merged = deepcopy(base)
     unused = merged.update(**overrides)
     if unused:

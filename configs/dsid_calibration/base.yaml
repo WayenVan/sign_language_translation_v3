@@ -34,5 +34,6 @@ calibration:
   min_tau: 1.0e-8
   min_gate_coverage: 0.0
   log_every: 100
+  show_progress: true
   fail_on_sanity_check: true
   output_path: outputs/dsid_calibration/dsid_tau.json

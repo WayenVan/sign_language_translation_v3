@@ -1,8 +1,7 @@
-import subprocess
-import os
 import datetime
+import os
+import subprocess
 import tarfile
-import argparse
 
 
 def run_git_cmd(args, capture_output=True):
