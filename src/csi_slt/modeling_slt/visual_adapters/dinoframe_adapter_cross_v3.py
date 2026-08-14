@@ -60,9 +60,7 @@ class DINOFrameAdapterCrossV2(nn.Module):
                     for size in spatial_grid_size
                 )
             ):
-                raise ValueError(
-                    "spatial_grid_size must contain two positive integers"
-                )
+                raise ValueError("spatial_grid_size must contain two positive integers")
             spatial_grid_size = tuple(spatial_grid_size)
 
         hidden_dim = hidden_dim or output_dim
@@ -121,9 +119,9 @@ class DINOFrameAdapterCrossV2(nn.Module):
         permute_video_tokens: bool = False,
         return_weights: bool = True,
     ) -> VisualAdapterOutput:
-        patch_features = visual_backbone_output.visual_features
-        cls_token = visual_backbone_output.pooled_visual_features
-        visual_length = visual_backbone_output.visual_length
+        patch_features = visual_backbone_output.visual_features  # [F, P, D_patch]
+        cls_token = visual_backbone_output.pooled_visual_features  # [F, D_cls]
+        visual_length = visual_backbone_output.visual_length  # [B]
 
         if visual_length is None:
             raise ValueError(
@@ -151,52 +149,45 @@ class DINOFrameAdapterCrossV2(nn.Module):
             dtype=temporal_delta.dtype
         )
 
-        # Motion-aware residual fusion proposed for V2.
-        temporal_residual = self.temporal_mlp(self.temporal_norm(temporal_delta))
-        # Mask again after the biased MLP so an all-zero input cannot
-        # produce a learned non-zero residual at a video's final frame.
-        temporal_residual = temporal_residual * has_next[:, None, None].to(
-            dtype=temporal_residual.dtype
-        )
-        fused_patches = (
-            patch_features + torch.sigmoid(self.temporal_gate) * temporal_residual
-        )
+        # TODO: 将temporal_delta 和 patch_features 在 F 维度进行boundray aware 的分组（window）
 
-        patch_weights = self.patch_score(fused_patches).squeeze(-1)
-        patch_weights = patch_weights.softmax(dim=1)
-        pooled_patches = torch.bmm(patch_weights.unsqueeze(1), fused_patches).squeeze(1)
+        # Keep this import below the TODO so everything above remains the V2
+        # frame-level path. Three neighbouring frames form one patch template;
+        # replicate padding is confined to each packed video's own boundary.
+        from csi_slt.modeling_slt.misc import packed_temporal_windows
 
-        # Map each token type into a common hidden space, apply the shared LLM
-        # projection, then interleave them frame by frame:
-        # [CLS_0, PATCH_0, CLS_1, PATCH_1, ...].
-        mapped_cls = (
-            self.output_projection(self.cls_mapper(cls_token))
-            + self.cls_type_embedding
-        )
-        mapped_fused_patches = (
-            self.output_projection(self.fused_patch_mapper(pooled_patches))
-            + self.fused_patch_type_embedding
-        )
+        # G = sum(visual_length // 2), with three frames in each window.
+        temporal_delta, grouped_visual_length = packed_temporal_windows(
+            temporal_delta, visual_length, window_size=3, stride=2
+        )  # [G, 3, P, D_patch], [B]
+        patch_features, patch_grouped_visual_length = packed_temporal_windows(
+            patch_features, visual_length, window_size=3, stride=2
+        )  # [G, 3, P, D_patch], [B]
+        cls_token, cls_grouped_visual_length = packed_temporal_windows(
+            cls_token, visual_length, window_size=3, stride=2
+        )  # [G, 3, D_cls], [B]
+        grouped_has_next, mask_grouped_visual_length = packed_temporal_windows(
+            has_next, visual_length, window_size=3, stride=2
+        )  # [G, 3], [B]
+        if not (
+            torch.equal(grouped_visual_length, patch_grouped_visual_length)
+            and torch.equal(grouped_visual_length, cls_grouped_visual_length)
+            and torch.equal(grouped_visual_length, mask_grouped_visual_length)
+        ):
+            raise RuntimeError("packed temporal group lengths diverged")
+
+        patches_per_frame = patch_features.shape[2]
+        temporal_delta = temporal_delta.flatten(1, 2)  # [G, 3P, D_patch]
+        patch_features = patch_features.flatten(1, 2)  # [G, 3P, D_patch]
+        grouped_has_next = (
+            grouped_has_next[..., None].expand(-1, -1, patches_per_frame).flatten(1, 2)
+        )  # [G, 3P]
 
         # if permute_video_tokens is True, randomly shuffle the order of frames within each video.
         if permute_video_tokens:
-            mapped_cls, mapped_fused_patches, patch_weights = (
-                self._permute_video_tokens(
-                    mapped_cls, mapped_fused_patches, patch_weights, visual_length
-                )
+            raise NotImplementedError(
+                "permute_video_tokens is not implemented for DINOFrameAdapterCrossV2"
             )
-
-        visual_features = torch.stack(
-            (mapped_cls, mapped_fused_patches), dim=1
-        ).flatten(0, 1)
-
-        # NOTE: Both tokens belonging to frame t share temporal position t.
-        position_ids = torch.cat(
-            [
-                torch.arange(length, device=visual_features.device).repeat_interleave(2)
-                for length in visual_length
-            ]
-        )
 
         return VisualAdapterOutput(
             visual_features=visual_features,
@@ -309,8 +300,7 @@ class DINOFrameAdapterCrossV2(nn.Module):
             )
         if cls_token.ndim != 2:
             raise ValueError(
-                "cls_token must have shape [F, D_cls], got "
-                f"{tuple(cls_token.shape)}"
+                f"cls_token must have shape [F, D_cls], got {tuple(cls_token.shape)}"
             )
         if visual_length.ndim != 1 or visual_length.numel() == 0:
             raise ValueError("visual_length must be a non-empty 1D tensor")

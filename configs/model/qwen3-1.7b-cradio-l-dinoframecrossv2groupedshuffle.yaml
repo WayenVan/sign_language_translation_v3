@@ -15,6 +15,7 @@ config:
     cls_input_dim: 2304
     output_dim: 2048
     temperature: 0.1
+    spatial_window_radius: 3
     temporal_gate_init: -2 # sigmoid
     temporal_window_size: 3
     temporal_window_stride: 2

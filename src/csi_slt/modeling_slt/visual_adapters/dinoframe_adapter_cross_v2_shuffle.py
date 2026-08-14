@@ -1,6 +1,7 @@
 """Temporal-compression wrapper for :class:`DINOFrameAdapterCrossV2`."""
 
 import torch
+from collections.abc import Sequence
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 
@@ -103,6 +104,8 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
         temporal_hidden_dim: int | None = None,
         temperature: float = 0.1,
         temporal_gate_init: float = -2.0,
+        spatial_window_radius: int | None = 3,
+        spatial_grid_size: Sequence[int] | None = None,
         temporal_scale_factor: int = 2,
         use_short_temporal_conv: bool = False,
         short_temporal_kernel_size: int = 3,
@@ -124,6 +127,8 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             temporal_hidden_dim=temporal_hidden_dim,
             temperature=temperature,
             temporal_gate_init=temporal_gate_init,
+            spatial_window_radius=spatial_window_radius,
+            spatial_grid_size=spatial_grid_size,
         )
         # CLS and pooled-patch tokens have different distributions, so the
         # compression branches intentionally do not share parameters.

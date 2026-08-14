@@ -15,4 +15,5 @@ config:
     cls_input_dim: 2304
     output_dim: 2048
     temperature: 0.1
+    spatial_window_radius: 3
     use_short_temporal_conv: false

@@ -1,7 +1,29 @@
 import pytest
 import torch
 
-from csi_slt.modeling_slt.misc import random_derangement
+from csi_slt.modeling_slt.misc import packed_temporal_windows, random_derangement
+
+
+def test_packed_temporal_windows_respect_sequence_boundaries():
+    features = torch.tensor([0.0, 1.0, 2.0, 3.0, 10.0, 11.0]).unsqueeze(-1)
+
+    windows, output_lengths = packed_temporal_windows(
+        features, torch.tensor([4, 2]), window_size=3, stride=2
+    )
+
+    assert output_lengths.tolist() == [2, 1]
+    assert windows.squeeze(-1).tolist() == [
+        [0.0, 0.0, 1.0],
+        [1.0, 2.0, 3.0],
+        [10.0, 10.0, 11.0],
+    ]
+
+
+def test_packed_temporal_windows_reject_non_divisible_lengths():
+    with pytest.raises(ValueError, match="divisible by stride"):
+        packed_temporal_windows(
+            torch.randn(5, 4), [3, 2], window_size=3, stride=2
+        )
 
 
 def test_random_derangement_has_no_fixed_points_within_each_video():

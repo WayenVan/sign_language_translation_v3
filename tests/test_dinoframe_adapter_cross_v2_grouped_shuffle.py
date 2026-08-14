@@ -30,7 +30,7 @@ def test_grouped_shuffle_supports_variable_lengths():
     lengths = torch.tensor([2, 4])
     total_frames = int(lengths.sum())
     backbone_output = VisualBackboneOutput(
-        visual_features=torch.randn(total_frames, 5, 8),
+        visual_features=torch.randn(total_frames, 4, 8),
         pooled_visual_features=torch.randn(total_frames, 10),
         visual_length=lengths,
     )
@@ -47,7 +47,7 @@ def test_grouped_shuffle_supports_variable_lengths():
     assert output.visual_length.tolist() == [2, 4]
     assert output.visual_features.shape == (6, 12)
     assert output.position_ids.tolist() == [0, 0, 0, 0, 1, 1]
-    assert output.extras["patch_weights"].shape == (total_frames, 5)
+    assert output.extras["patch_weights"].shape == (total_frames, 4)
 
 
 def test_grouped_shuffle_rejects_lengths_not_divisible_by_stride():

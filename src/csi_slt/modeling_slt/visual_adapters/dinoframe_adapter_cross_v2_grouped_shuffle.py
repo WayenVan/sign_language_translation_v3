@@ -41,10 +41,13 @@ across packed-video boundaries.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
+from csi_slt.modeling_slt.misc import packed_temporal_windows
 from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackboneOutput
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
     DINOFrameAdapterCrossV2,
@@ -96,36 +99,13 @@ class PackedTemporalWindowAdapter(nn.Module):
     def _make_windows(
         self, hidden_states: torch.Tensor, lengths: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build every video's windows with one vectorized gather."""
-        output_lengths = lengths // self.stride
-        total_frames = hidden_states.shape[0]
-        radius = self.window_size // 2
-        offsets = torch.arange(
-            -radius, radius + 1, device=hidden_states.device
+        """Build every video's windows with the shared packed-data utility."""
+        return packed_temporal_windows(
+            hidden_states,
+            lengths,
+            window_size=self.window_size,
+            stride=self.stride,
         )
-        frame_indices = torch.arange(total_frames, device=hidden_states.device)
-
-        # Map every packed frame to its video without materialising padded
-        # sequences. ``right=True`` assigns a boundary index to the next video.
-        video_ends = torch.cumsum(lengths, dim=0)
-        video_ids = torch.searchsorted(video_ends, frame_indices, right=True)
-        video_starts = video_ends - lengths
-        local_indices = frame_indices - video_starts[video_ids]
-
-        # Divisibility makes this mask select exactly T / stride centres per
-        # video. All window positions are then gathered in a single operation.
-        centre_mask = local_indices.remainder(self.stride).eq(0)
-        centre_video_ids = video_ids[centre_mask]
-        centre_local_indices = local_indices[centre_mask]
-        centre_lengths = lengths[centre_video_ids]
-        window_local_indices = centre_local_indices[:, None] + offsets[None, :]
-        window_local_indices = torch.minimum(
-            window_local_indices.clamp_min(0), centre_lengths[:, None] - 1
-        )
-        packed_window_indices = (
-            video_starts[centre_video_ids, None] + window_local_indices
-        )
-        return hidden_states[packed_window_indices], output_lengths
 
     def forward(
         self, hidden_states: torch.Tensor, lengths: torch.Tensor
@@ -175,6 +155,8 @@ class DINOFrameAdapterCrossV2GroupedShuffle(nn.Module):
         temporal_hidden_dim: int | None = None,
         temperature: float = 0.1,
         temporal_gate_init: float = -2.0,
+        spatial_window_radius: int | None = 3,
+        spatial_grid_size: Sequence[int] | None = None,
         temporal_window_size: int = 3,
         temporal_window_stride: int = 2,
         window_motion_gate_init: float = -2.0,
@@ -191,6 +173,8 @@ class DINOFrameAdapterCrossV2GroupedShuffle(nn.Module):
             temporal_hidden_dim=temporal_hidden_dim,
             temperature=temperature,
             temporal_gate_init=temporal_gate_init,
+            spatial_window_radius=spatial_window_radius,
+            spatial_grid_size=spatial_grid_size,
         )
 
         # Global CLS and motion-oriented pooled patches intentionally use

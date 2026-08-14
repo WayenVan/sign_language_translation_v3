@@ -1,5 +1,7 @@
 """DINOFrame Cross V2 adapter followed by a global semantic transformer."""
 
+from collections.abc import Sequence
+
 import torch
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
@@ -40,6 +42,8 @@ class DINOFrameAdapterCrossV2Global(nn.Module):
         temporal_hidden_dim: int | None = None,
         temperature: float = 0.1,
         temporal_gate_init: float = -2.0,
+        spatial_window_radius: int | None = 3,
+        spatial_grid_size: Sequence[int] | None = None,
         semantic_hidden_dim: int = 512,
         semantic_num_layers: int = 2,
         semantic_num_heads: int = 8,
@@ -74,6 +78,8 @@ class DINOFrameAdapterCrossV2Global(nn.Module):
             temporal_hidden_dim=temporal_hidden_dim,
             temperature=temperature,
             temporal_gate_init=temporal_gate_init,
+            spatial_window_radius=spatial_window_radius,
+            spatial_grid_size=spatial_grid_size,
         )
 
         self.input_projection = nn.Linear(output_dim, semantic_hidden_dim)
