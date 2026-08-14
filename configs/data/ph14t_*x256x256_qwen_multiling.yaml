@@ -1,0 +1,63 @@
+data_root: dataset/PHOENIX-2014-T-release-v3
+
+prompt_templates:
+  zh: jinjas/zh_prompt.md.j2
+  de: jinjas/de_prompt.md.j2
+  en: jinjas/en_prompt.md.j2
+
+assemble: True
+
+processor:
+  _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+  video_token_scale: 0.5
+  num_extra_video_tokens: 2
+  video_processor:
+    _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+    size:
+      height: 256
+      width: 256
+    padding_to_multiple_of: 4
+    image_mean: [0.485, 0.456, 0.406]
+    image_std: [0.229, 0.224, 0.225]
+    do_normalize: True
+    do_crop: False
+    do_resize: False
+    crop_size:
+      height: 224
+      width: 224
+    do_random_speed: True
+
+train:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    mode: train
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+    mode: train
+
+val:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    mode: validation
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+    mode: eval
+
+test:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    mode: test
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+    mode: test
+
+fraction_dataset: False
+train_fraction: 1.0
+val_fraction: 0.01
+test_fraction: 0.05

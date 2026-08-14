@@ -10,8 +10,8 @@ config:
   visual_backbone_type: c_radio_v4
   visual_backbone_config:
     id: nvidia/C-RADIOv4-SO400M
-    output_layer: [-1, -2, -3, -4]
-    layer_fusion_hidden_dim: 32
+    output_layer: [-1]
+    layer_fusion_hidden_dim: null
     freeze_visual_encoder: true
   visual_adapter_type: dinoframe_cross_v3
   visual_adapter_kwargs:
