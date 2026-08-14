@@ -31,12 +31,14 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v3 import (
     DINOFrameAdapterCrossV3,
 )
 from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import CRadioV4Backbone
+from csi_slt.modeling_slt.visual_backbones.siglip2_backbone import Siglip2Backbone
 
 VISUAL_BACKBONES: Dict[str, nn.Module] = {
     "dinov2": DinoV2Backbone,
     "dinov3": DinoV3Backbone,
     "pretrained": PretrainedBackbone,
     "c_radio_v4": CRadioV4Backbone,
+    "siglip2": Siglip2Backbone,
 }
 VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "token_sampler": TokenSampleAdapter,

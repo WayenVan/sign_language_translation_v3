@@ -562,21 +562,29 @@ class SltModel(PreTrainedModel, GenerationMixin):
         cls,
         adapter_extras: Optional[dict],
     ) -> Optional[torch.Tensor]:
-        """Return diversity loss only when both adapter branches expose weights."""
+        """Sum diversity loss over every attention branch exposed by an adapter."""
         if not adapter_extras:
             return None
-        temporal_weights = adapter_extras.get("temporal_attention_weights")
-        patch_weights = adapter_extras.get("patch_attention_weights")
-        if temporal_weights is None or patch_weights is None:
+        attention_weights = [
+            adapter_extras[key]
+            for key in (
+                "temporal_attention_weights",
+                "patch_attention_weights",
+            )
+            if adapter_extras.get(key) is not None
+        ]
+        if not attention_weights:
             return None
-        if not isinstance(temporal_weights, torch.Tensor) or not isinstance(
-            patch_weights, torch.Tensor
-        ):
+        if not all(isinstance(weights, torch.Tensor) for weights in attention_weights):
             raise TypeError("adapter attention weights must be torch.Tensor values")
 
-        return cls._compute_branch_attention_diversity_loss(
-            temporal_weights
-        ) + cls._compute_branch_attention_diversity_loss(patch_weights)
+        return sum(
+            (
+                cls._compute_branch_attention_diversity_loss(weights)
+                for weights in attention_weights
+            ),
+            start=attention_weights[0].new_zeros(()),
+        )
 
     @staticmethod
     def _compute_causal_lm_loss(
