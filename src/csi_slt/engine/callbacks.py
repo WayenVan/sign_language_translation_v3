@@ -1,5 +1,6 @@
 from transformers.trainer_callback import (
     CallbackHandler,
+    ExportableState,
     TrainerCallback,
 )
 import os
@@ -17,13 +18,49 @@ from .scheduler import DSIDScheduler
 logger = logging.get_logger(__name__)
 
 
-class DSIDWeightSchedulerCallback(TrainerCallback):
+class DSIDWeightSchedulerCallback(TrainerCallback, ExportableState):
     """Synchronize an engine-owned D-SID scheduler with Trainer global step."""
 
     def __init__(self, warmup_ratio: float = 0.1, decay_ratio: float = 0.3):
         self.warmup_ratio = float(warmup_ratio)
         self.decay_ratio = float(decay_ratio)
         self.scheduler: DSIDScheduler | None = None
+        # Transformers restores these JSON-serializable attributes before
+        # on_train_begin constructs the runtime scheduler.
+        self.scheduler_state: dict[str, int] | None = None
+        self.scheduler_parameters: dict[str, float | int] | None = None
+
+    def state(self) -> dict:
+        """Export the state needed for exact checkpoint continuation."""
+        scheduler_state = (
+            self.scheduler.state_dict()
+            if self.scheduler is not None
+            else self.scheduler_state
+        )
+        scheduler_parameters = (
+            self._scheduler_parameters(self.scheduler)
+            if self.scheduler is not None
+            else self.scheduler_parameters
+        )
+        return {
+            "args": {
+                "warmup_ratio": self.warmup_ratio,
+                "decay_ratio": self.decay_ratio,
+            },
+            "attributes": {
+                "scheduler_state": scheduler_state,
+                "scheduler_parameters": scheduler_parameters,
+            },
+        }
+
+    @staticmethod
+    def _scheduler_parameters(
+        scheduler: DSIDScheduler,
+    ) -> dict[str, float | int]:
+        return {
+            "max_weight": scheduler.max_weight,
+            "total_steps": scheduler.total_steps,
+        }
 
     @staticmethod
     def _unwrap_model(kwargs):
@@ -47,6 +84,29 @@ class DSIDWeightSchedulerCallback(TrainerCallback):
                 warmup_ratio=self.warmup_ratio,
                 decay_ratio=self.decay_ratio,
             )
+            if self.scheduler_state is not None:
+                current_parameters = self._scheduler_parameters(self.scheduler)
+                if self.scheduler_parameters != current_parameters:
+                    raise RuntimeError(
+                        "D-SID scheduler parameters changed while resuming: "
+                        f"checkpoint={self.scheduler_parameters}, "
+                        f"current={current_parameters}"
+                    )
+                checkpoint_step = int(self.scheduler_state["current_step"])
+                if checkpoint_step != state.global_step:
+                    raise RuntimeError(
+                        "D-SID scheduler checkpoint step does not match Trainer "
+                        f"global_step: {checkpoint_step} != {state.global_step}"
+                    )
+                self.scheduler.load_state_dict(self.scheduler_state)
+                logger.info(
+                    "Restored D-SID scheduler at step %d/%d with weight %.8f",
+                    self.scheduler.current_step,
+                    self.scheduler.total_steps,
+                    self.scheduler.current_weight,
+                )
+                self.scheduler_state = None
+                self.scheduler_parameters = None
         elif (
             self.scheduler.max_weight != max_weight
             or self.scheduler.total_steps != state.max_steps
@@ -60,6 +120,13 @@ class DSIDWeightSchedulerCallback(TrainerCallback):
         self._update_weight(state, kwargs, reset=True)
 
     def on_step_begin(self, args, state, control, **kwargs):
+        self._update_weight(state, kwargs)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        # Trainer increments global_step before this event. Synchronizing here
+        # ensures a checkpoint saved after the update exports the same step as
+        # TrainerState; on_step_begin will idempotently apply it to the next
+        # optimizer update.
         self._update_weight(state, kwargs)
 
 

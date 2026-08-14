@@ -2,7 +2,7 @@ config:
   hidden_size: 2048
   video_soft_token_id: 151656
   video_token_scale: 1.0
-  dsid_loss_weight: 0.0
+  dsid_loss_weight: 1.0
   dsid_js_tau: 0.6919847726821899
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: c_radio_v4
