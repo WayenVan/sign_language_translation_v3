@@ -8,7 +8,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 from ..modeling_slt.slt import SltModel
-from ..misc.utils import merge_generation_config
+from ..experiment.generation_config import merge_generation_config
 import re
 from accelerate import Accelerator
 
