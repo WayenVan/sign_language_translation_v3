@@ -1,4 +1,5 @@
 from copy import deepcopy
+from contextlib import contextmanager, nullcontext
 from typing import Callable, Optional
 
 import torch
@@ -13,11 +14,13 @@ from transformers.masking_utils import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
-from csi_slt.modeling_slt.cross_modal_contrastive_loss import CrossModalContrastiveLoss
-from csi_slt.modeling_slt.minimal_null_ot_alignment import MinimalNullOTAlignment
 from csi_slt.modeling_slt.info_utils import (
     InformationRequest,
     build_information_output,
+)
+from csi_slt.modeling_slt.dsid import (
+    DSIDLossOutput,
+    compute_dsid_loss,
 )
 
 from peft import get_peft_model, LoraConfig
@@ -30,8 +33,6 @@ from .output_utils import (
 )
 from .misc import (
     mark_module_tree_as_initialized,
-    packed_position_ids_to_padded,
-    packed_to_padded,
 )
 from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
 
@@ -172,38 +173,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
-        # Learn one attention score per visual token for video-level pooling.
-        self.visual_global_attention = nn.Linear(self.config.hidden_size, 1, bias=False)
-        # 全局可学习标量，初始不改变特征
+        # Global learnable scale, initialized as an identity transform.
         self.visual_scale = nn.Parameter(torch.tensor(1.0))
         # The adapter projection and learned visual positions can have a
         # different scale from the frozen LLM's token embeddings. Normalize the
         # completed visual token (projection + position) immediately before it
         # is merged into the LLM input sequence.
         # self.visual_output_norm = nn.RMSNorm(self.config.hidden_size, eps=1e-6)
-        # Keep one registered instance so its learnable temperature is included
-        # in model parameters, checkpoints, and the optimizer.
-        self.contrastive_loss_fct = CrossModalContrastiveLoss(
-            gather_with_grad=True,
-            text_queue_size=config.contrastive_text_queue_size,
-        )
-        self.local_alignment_loss_fct = MinimalNullOTAlignment(
-            video_dim=config.hidden_size,
-            text_dim=config.hidden_size,
-            eps=config.alignment_eps,
-            n_iters=config.alignment_n_iters,
-            target_relaxation=config.alignment_target_relaxation,
-            null_mass_prior=config.alignment_null_mass_prior,
-            null_ratio_max=config.alignment_null_ratio_max,
-            null_temperature=config.alignment_null_temperature,
-            beta_ot=config.alignment_beta_ot,
-            beta_null=config.alignment_beta_null,
-            beta_tv=config.alignment_beta_tv,
-        )
-
         self.config.num_extra_tokens = 2  # Start and end video tokens.
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
+        # An engine-owned scheduler updates this runtime coefficient during
+        # training. Keep the configured maximum as the default for direct use.
+        self._current_dsid_loss_weight = self.config.dsid_loss_weight
 
         self.post_init()
 
@@ -434,143 +416,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         return visual_adapter_output
 
-    def _encode_pseudo_gloss_for_contrastive(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode pseudo-gloss tokens for the contrastive text branch.
-
-        The global representation is the masked mean of the word embeddings.
-        The unpooled word embeddings are also returned for the later local-
-        alignment path.
-
-        Args:
-            input_ids: Pseudo-gloss token ids with shape ``[B, T]``.
-            attention_mask: Pseudo-gloss attention mask with shape ``[B, T]``.
-
-        Returns:
-            A pair ``(global_features, local_features)`` with shapes ``[B, D]``
-            and ``[B, T, D]`` respectively.
-        """
-        if input_ids.ndim != 2:
-            raise ValueError(f"input_ids must have shape [B, T], got {input_ids.shape}")
-        if attention_mask.shape != input_ids.shape:
-            raise ValueError(
-                "attention_mask must have the same shape as input_ids, got "
-                f"{attention_mask.shape} and {input_ids.shape}"
-            )
-
-        valid_mask = attention_mask.bool()
-        if torch.any(valid_mask.sum(dim=-1) == 0):
-            raise ValueError("every pseudo-gloss sequence must contain a valid token")
-
-        local_features = self.llm.get_input_embeddings()(input_ids)
-        weights = valid_mask.unsqueeze(-1).to(dtype=local_features.dtype)
-        global_features = (local_features * weights).sum(dim=1) / weights.sum(dim=1)
-        return global_features, local_features
-
-    def _encode_visual_features_for_contrastive(
-        self,
-        visual_features: torch.Tensor,
-        visual_lengths: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return global and local features from the current visual tokens.
-
-        The local representation is the packed visual feature tensor itself.
-        The global representation uses learned attention weights normalized
-        independently within each video.
-        """
-        if visual_features.ndim != 2:
-            raise ValueError(
-                "visual_features must have shape [sum(lengths), D], got "
-                f"{tuple(visual_features.shape)}"
-            )
-        if visual_lengths.ndim != 1 or visual_lengths.numel() == 0:
-            raise ValueError("visual_lengths must be a non-empty 1D tensor")
-        if visual_lengths.is_floating_point() or visual_lengths.is_complex():
-            raise TypeError(
-                f"visual_lengths must use an integer dtype, got {visual_lengths.dtype}"
-            )
-
-        lengths = visual_lengths.to(device=visual_features.device, dtype=torch.long)
-        if bool((lengths <= 0).any()):
-            raise ValueError("all visual lengths must be positive")
-        if int(lengths.sum().item()) != visual_features.shape[0]:
-            raise ValueError(
-                "visual_lengths.sum() must equal the packed visual token count"
-            )
-
-        feature_sequences = torch.split(visual_features, lengths.tolist(), dim=0)
-        global_features = []
-        packed_attention_weights = []
-        for sequence in feature_sequences:
-            attention_logits = self.visual_global_attention(sequence).squeeze(-1)
-            attention_weights_float = torch.softmax(attention_logits.float(), dim=0)
-            packed_attention_weights.append(attention_weights_float)
-            attention_weights = attention_weights_float.to(dtype=sequence.dtype)
-            global_features.append(
-                (sequence * attention_weights.unsqueeze(-1)).sum(dim=0)
-            )
-
-        global_features = torch.stack(global_features, dim=0)
-        return (
-            global_features,
-            visual_features,
-            torch.cat(packed_attention_weights, dim=0),
-        )
-
-    @staticmethod
-    def _alignment_pooling_distillation_loss(
-        alignment: torch.Tensor,
-        student_attention: torch.Tensor,
-        visual_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """Distil non-NULL OT relevance into visual-only global attention.
-
-        ``alignment`` has shape ``[B, M, U+1]`` with NULL in column zero.
-        The teacher is the fraction of each valid row's transport assigned to
-        real pseudo-gloss targets, normalized across visual positions. It is
-        detached so this auxiliary loss only updates the visual attention path.
-        """
-        if alignment.ndim != 3 or alignment.shape[-1] < 2:
-            raise ValueError("alignment must have shape [B, M, U+1] with U >= 1")
-        if student_attention.ndim != 2:
-            raise ValueError("student_attention must have shape [B, M]")
-        if visual_mask.ndim != 2:
-            raise ValueError("visual_mask must have shape [B, M]")
-        if alignment.shape[:2] != student_attention.shape:
-            raise ValueError("alignment and student_attention dimensions must match")
-        if student_attention.shape != visual_mask.shape:
-            raise ValueError("student_attention and visual_mask shapes must match")
-
-        valid = visual_mask.bool()
-        if bool((valid.sum(dim=-1) == 0).any()):
-            raise ValueError("every sample must contain a valid visual position")
-
-        with torch.no_grad():
-            plan = alignment.detach().float()
-            row_mass = plan.sum(dim=-1)
-            real_mass = plan[:, :, 1:].sum(dim=-1)
-            relevance = (real_mass / row_mass.clamp_min(1e-12)) * valid
-            relevance_sum = relevance.sum(dim=-1, keepdim=True)
-            uniform = valid.float() / valid.sum(dim=-1, keepdim=True)
-            teacher_attention = torch.where(
-                relevance_sum > 1e-12,
-                relevance / relevance_sum.clamp_min(1e-12),
-                uniform,
-            )
-
-        student = student_attention.float().masked_fill(~valid, 0.0)
-        student = student / student.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-        # Writing KL explicitly avoids evaluating log(0) at padded positions.
-        teacher_terms = teacher_attention.clamp_min(1e-12)
-        student_terms = student.clamp_min(1e-12)
-        per_position_kl = teacher_attention * (
-            teacher_terms.log() - student_terms.log()
-        )
-        return (per_position_kl * valid).sum(dim=-1).mean()
-
     def prepare_for_casual_lm(
         self,
         text_input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <start_of_image>, ...]
@@ -603,10 +448,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )  # [BT, D]
         # visual_feats = self.visual_output_norm(visual_feats)
 
-        # NOTE: before injuecting into the llm
-        contrastive_visual_feats = visual_feats
-
-        # NOTE: scale hte feature
+        # Scale adapted visual features before injecting them into the LLM.
         visual_feats = visual_feats * self.visual_scale
 
         _, hidden_size = visual_feats.shape
@@ -658,9 +500,143 @@ class SltModel(PreTrainedModel, GenerationMixin):
             input_ids=text_input_ids,  # [B, L]
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
-            contrastive_features=contrastive_visual_feats,  # [sum(Lv), D], before visual_scale
-            contrastive_visual_lengths=visual_lengths,  # [B]
+            visual_lengths=visual_lengths,  # [B]
             packed_visual_position_ids=visual_position_ids,
+        )
+
+    @staticmethod
+    def _compute_causal_lm_loss(
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute mean next-token cross entropy over non-ignored labels."""
+        if logits.ndim != 3:
+            raise ValueError(
+                f"logits must have shape [B, L, V], got {tuple(logits.shape)}"
+            )
+        if labels.shape != logits.shape[:2]:
+            raise ValueError(
+                f"labels shape {tuple(labels.shape)} must match logits batch and "
+                f"sequence dimensions {tuple(logits.shape[:2])}"
+            )
+        if logits.size(1) < 2:
+            raise ValueError("causal language-model loss requires sequence length >= 2")
+
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        return nn.functional.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=-100,
+        )
+
+    def set_dsid_loss_weight(self, weight: float) -> float:
+        """Set the current externally scheduled D-SID coefficient."""
+        weight = float(weight)
+        if not 0.0 <= weight <= self.config.dsid_loss_weight:
+            raise ValueError(
+                "scheduled D-SID weight must be between zero and "
+                f"dsid_loss_weight ({self.config.dsid_loss_weight}), got {weight}"
+            )
+        self._current_dsid_loss_weight = weight
+        return self._current_dsid_loss_weight
+
+    @contextmanager
+    def _frozen_text_teacher_context(self):
+        """Run the shared base LLM in eval mode, without gradients or LoRA."""
+        was_training = self.llm.training
+        disable_adapter = nullcontext()
+        if self.config.llm_lora:
+            if not hasattr(self.llm, "disable_adapter"):
+                raise RuntimeError(
+                    "D-SID requires a PEFT model exposing disable_adapter() so "
+                    "the text teacher remains LoRA-off"
+                )
+            disable_adapter = self.llm.disable_adapter()
+
+        self.llm.eval()
+        try:
+            with torch.no_grad(), disable_adapter:
+                yield
+        finally:
+            self.llm.train(was_training)
+
+    def _compute_dsid_training_loss(
+        self,
+        student_logits: torch.Tensor,
+        student_labels: torch.Tensor,
+        *,
+        pseudo_gloss_teacher_input_ids: Optional[torch.Tensor],
+        pseudo_gloss_teacher_attention_mask: Optional[torch.Tensor],
+        pseudo_gloss_teacher_position_ids: Optional[torch.Tensor],
+        pseudo_gloss_teacher_labels: Optional[torch.Tensor],
+        empty_source_teacher_input_ids: Optional[torch.Tensor],
+        empty_source_teacher_attention_mask: Optional[torch.Tensor],
+        empty_source_teacher_position_ids: Optional[torch.Tensor],
+        empty_source_teacher_labels: Optional[torch.Tensor],
+    ) -> DSIDLossOutput:
+        """Run both frozen text paths and compute target-aligned D-SID."""
+        trainable_llm_parameters = [
+            name
+            for name, parameter in self.llm.named_parameters()
+            if parameter.requires_grad
+        ]
+        if trainable_llm_parameters:
+            preview = ", ".join(trainable_llm_parameters[:3])
+            raise RuntimeError(
+                "D-SID adapter-only gradient routing requires every student LLM "
+                f"parameter to be frozen; found trainable parameters: {preview}"
+            )
+
+        teacher_inputs = {
+            "pseudo_gloss_teacher_input_ids": pseudo_gloss_teacher_input_ids,
+            "pseudo_gloss_teacher_attention_mask": (
+                pseudo_gloss_teacher_attention_mask
+            ),
+            "pseudo_gloss_teacher_position_ids": pseudo_gloss_teacher_position_ids,
+            "pseudo_gloss_teacher_labels": pseudo_gloss_teacher_labels,
+            "empty_source_teacher_input_ids": empty_source_teacher_input_ids,
+            "empty_source_teacher_attention_mask": (
+                empty_source_teacher_attention_mask
+            ),
+            "empty_source_teacher_position_ids": empty_source_teacher_position_ids,
+            "empty_source_teacher_labels": empty_source_teacher_labels,
+        }
+        missing = [name for name, value in teacher_inputs.items() if value is None]
+        if missing:
+            raise ValueError(
+                "D-SID is enabled during training, but the batch is missing: "
+                + ", ".join(missing)
+            )
+
+        with self._frozen_text_teacher_context():
+            gloss_outputs = self.llm(
+                input_ids=pseudo_gloss_teacher_input_ids,
+                attention_mask=pseudo_gloss_teacher_attention_mask,
+                position_ids=pseudo_gloss_teacher_position_ids,
+                use_cache=False,
+                output_attentions=False,
+                output_hidden_states=False,
+                return_dict=True,
+            )
+            empty_outputs = self.llm(
+                input_ids=empty_source_teacher_input_ids,
+                attention_mask=empty_source_teacher_attention_mask,
+                position_ids=empty_source_teacher_position_ids,
+                use_cache=False,
+                output_attentions=False,
+                output_hidden_states=False,
+                return_dict=True,
+            )
+
+        return compute_dsid_loss(
+            student_logits,
+            student_labels,
+            gloss_outputs.logits,
+            pseudo_gloss_teacher_labels,
+            empty_outputs.logits,
+            empty_source_teacher_labels,
+            js_tau=self.config.dsid_js_tau,
         )
 
     def forward(
@@ -674,9 +650,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
         token_type_ids: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,  # [B, L]
         labels: Optional[torch.Tensor] = None,  # [B, L]
-        pseudo_gloss_input_ids: Optional[torch.Tensor] = None,  # [B, L]
-        pseudo_gloss_attention_mask: Optional[torch.Tensor] = None,  # [B, L]
-        semantic_ids: Optional[torch.Tensor] = None,  # [B]
+        # Accepted temporarily so existing processor batches remain compatible
+        # after removal of the old contrastive/alignment objectives.
+        pseudo_gloss_input_ids: Optional[torch.Tensor] = None,
+        pseudo_gloss_attention_mask: Optional[torch.Tensor] = None,
+        semantic_ids: Optional[torch.Tensor] = None,
+        pseudo_gloss_teacher_input_ids: Optional[torch.Tensor] = None,
+        pseudo_gloss_teacher_attention_mask: Optional[torch.Tensor] = None,
+        pseudo_gloss_teacher_position_ids: Optional[torch.Tensor] = None,
+        pseudo_gloss_teacher_labels: Optional[torch.Tensor] = None,
+        empty_source_teacher_input_ids: Optional[torch.Tensor] = None,
+        empty_source_teacher_attention_mask: Optional[torch.Tensor] = None,
+        empty_source_teacher_position_ids: Optional[torch.Tensor] = None,
+        empty_source_teacher_labels: Optional[torch.Tensor] = None,
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
         # ------------ NOTE: special kwars for experimental features ------------
@@ -691,8 +677,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         if information_request.enabled:
             logger.warning_once(
-                "InformationRequest is enabled for this model. Extracting "
-                "intermediate alignment, pooling, or LLM attention tensors may "
+                "InformationRequest is enabled for this model. Extracting LLM "
+                "attention tensors may "
                 "increase computation and memory usage and reduce model throughput."
             )
 
@@ -820,116 +806,31 @@ class SltModel(PreTrainedModel, GenerationMixin):
             **llm_forward_kwargs,
         )
 
-        loss = None
-        main_loss = None
-        contrastive_loss = None
-        alignment_loss = None
-        alignment_pooling_loss = None
-        alignment_info = None
-        packed_visual_attention = None
-        valid_pseudo = None
-        if labels is not None:
-            # Shift so that tokens before position n predict token n.
-            shift_logits = outputs.logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            main_loss_fct = nn.CrossEntropyLoss()
-            main_loss = main_loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+        ce_loss = (
+            self._compute_causal_lm_loss(outputs.logits, labels)
+            if labels is not None
+            else None
+        )
+        loss = ce_loss
+        dsid_output = None
+        if ce_loss is not None and self.training and self.config.dsid_loss_weight > 0.0:
+            dsid_output = self._compute_dsid_training_loss(
+                outputs.logits,
+                labels,
+                pseudo_gloss_teacher_input_ids=pseudo_gloss_teacher_input_ids,
+                pseudo_gloss_teacher_attention_mask=(
+                    pseudo_gloss_teacher_attention_mask
+                ),
+                pseudo_gloss_teacher_position_ids=pseudo_gloss_teacher_position_ids,
+                pseudo_gloss_teacher_labels=pseudo_gloss_teacher_labels,
+                empty_source_teacher_input_ids=empty_source_teacher_input_ids,
+                empty_source_teacher_attention_mask=(
+                    empty_source_teacher_attention_mask
+                ),
+                empty_source_teacher_position_ids=empty_source_teacher_position_ids,
+                empty_source_teacher_labels=empty_source_teacher_labels,
             )
-
-            # Keep this as a tensor so it can be logged consistently even when
-            # either auxiliary objective is disabled.
-            contrastive_loss = torch.zeros_like(main_loss)
-            alignment_loss = torch.zeros_like(main_loss)
-            alignment_pooling_loss = torch.zeros_like(main_loss)
-            auxiliary_loss_enabled = (
-                self.config.contrastive_loss_weight > 0.0
-                or self.config.alignment_loss_weight > 0.0
-                or self.config.alignment_pooling_distill_weight > 0.0
-            )
-            if auxiliary_loss_enabled:
-                (
-                    global_visual_features,
-                    local_visual_features,
-                    packed_visual_attention,
-                ) = self._encode_visual_features_for_contrastive(
-                    prepare_output.contrastive_features,
-                    prepare_output.contrastive_visual_lengths,
-                )
-                if (
-                    pseudo_gloss_input_ids is None
-                    or pseudo_gloss_attention_mask is None
-                ):
-                    raise ValueError(
-                        "pseudo_gloss_input_ids and pseudo_gloss_attention_mask "
-                        "are required when contrastive loss is enabled"
-                    )
-                # Empty pseudo-glosses carry no auxiliary supervision.  Keep
-                # their translation CE, but exclude them from both auxiliaries.
-                valid_pseudo = pseudo_gloss_attention_mask.bool().any(dim=-1)
-                global_text_features, local_text_features = (
-                    self._encode_pseudo_gloss_for_contrastive(
-                        pseudo_gloss_input_ids[valid_pseudo],
-                        pseudo_gloss_attention_mask[valid_pseudo],
-                    )
-                )
-
-            if (
-                self.config.alignment_loss_weight > 0.0
-                or self.config.alignment_pooling_distill_weight > 0.0
-            ):
-                padded_visual_features, visual_mask = packed_to_padded(
-                    local_visual_features,
-                    prepare_output.contrastive_visual_lengths,
-                )
-                padded_visual_position_ids, position_mask = packed_position_ids_to_padded(
-                    prepare_output.packed_visual_position_ids,
-                    prepare_output.contrastive_visual_lengths,
-                )
-                if not torch.equal(position_mask, visual_mask):
-                    raise RuntimeError("visual feature and position masks diverged")
-                if valid_pseudo.any():
-                    alignment_loss, alignment_info = self.local_alignment_loss_fct(
-                        video_features=padded_visual_features[valid_pseudo],
-                        pseudo_embeddings=local_text_features,
-                        video_mask=visual_mask[valid_pseudo],
-                        pseudo_mask=pseudo_gloss_attention_mask[valid_pseudo],
-                        visual_position_ids=padded_visual_position_ids[valid_pseudo],
-                    )
-                    if self.config.alignment_pooling_distill_weight > 0.0:
-                        padded_visual_attention, attention_mask = packed_to_padded(
-                            packed_visual_attention,
-                            prepare_output.contrastive_visual_lengths,
-                        )
-                        if not torch.equal(attention_mask, visual_mask):
-                            raise RuntimeError(
-                                "visual feature and attention masks diverged"
-                            )
-                        alignment_pooling_loss = (
-                            self._alignment_pooling_distillation_loss(
-                                alignment=alignment_info["alignment"],
-                                student_attention=padded_visual_attention[valid_pseudo],
-                                visual_mask=visual_mask[valid_pseudo],
-                            )
-                        )
-
-            if self.config.contrastive_loss_weight > 0.0:
-                contrastive_loss = self.contrastive_loss_fct(
-                    visual_features=global_visual_features[valid_pseudo],
-                    text_features=global_text_features.detach(),
-                    semantic_ids=(
-                        semantic_ids[valid_pseudo]
-                        if semantic_ids is not None
-                        else None
-                    ),
-                )
-
-            loss = (
-                main_loss
-                + self.config.contrastive_loss_weight * contrastive_loss
-                + self.config.alignment_loss_weight * alignment_loss
-                + self.config.alignment_pooling_distill_weight * alignment_pooling_loss
-            )
+            loss = ce_loss + self._current_dsid_loss_weight * dsid_output.loss
 
         information = None
         if information_request.enabled:
@@ -938,25 +839,40 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 batch_size=input_ids.shape[0],
                 llm_attentions=outputs.attentions,
                 prepare_output=prepare_output,
-                alignment_info=alignment_info,
-                packed_visual_attention=packed_visual_attention,
-                valid_pseudo=valid_pseudo,
             )
 
-        loss_info = None
-        if loss is not None:
-            loss_info = {
-                "main_loss": main_loss.detach(),
-                "contrastive_loss": contrastive_loss.detach(),
-                "alignment_loss": alignment_loss.detach(),
-                "alignment_pooling_loss": alignment_pooling_loss.detach(),
+        loss_info = (
+            {
+                # Final objective used for backward: CE + lambda * D-SID.
+                "main_loss": loss.detach(),
             }
-            for name in ("transport_loss", "target_mass_kl", "tv_loss"):
-                loss_info[f"alignment/{name}"] = (
-                    alignment_info[name].detach()
-                    if alignment_info is not None
-                    else torch.zeros_like(loss.detach())
-                )
+            if loss is not None
+            else None
+        )
+        if dsid_output is not None:
+            weighted_dsid_loss = self._current_dsid_loss_weight * dsid_output.loss
+            loss_info.update(
+                {
+                    # Video student's teacher-forcing translation CE.
+                    "ce_loss": ce_loss.detach(),
+                    # Raw D-SID before applying the scheduled coefficient.
+                    "dsid_loss": dsid_output.loss.detach(),
+                    # D-SID contribution actually added to the total loss.
+                    "dsid_weighted_loss": weighted_dsid_loss.detach(),
+                    # Current externally scheduled D-SID coefficient (lambda).
+                    "dsid_loss_weight": loss.new_tensor(self._current_dsid_loss_weight),
+                    # Mean JS(q_g, q_0) over all valid target positions.
+                    "dsid_mean_js": dsid_output.mean_js.detach(),
+                    # Fraction where q_g gives the gold token more probability.
+                    "dsid_gate_coverage": dsid_output.gate_coverage.detach(),
+                    # Mean direction-gated JS weight, including zero positions.
+                    "dsid_mean_weight": dsid_output.mean_weight.detach(),
+                    # Unweighted mean KL(q_g || p_v) over valid targets.
+                    "dsid_mean_kl": dsid_output.mean_kl.detach(),
+                    # Mean NLL(q_0) - NLL(q_g); positive means gloss helps.
+                    "dsid_teacher_nll_gain": dsid_output.teacher_nll_gain.detach(),
+                }
+            )
 
         return SltCausalLMOutputWithPast(
             loss=loss,

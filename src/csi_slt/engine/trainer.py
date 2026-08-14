@@ -1,30 +1,24 @@
 from transformers.trainer_seq2seq import Seq2SeqTrainer
 from .callbacks import (
     SltTrainerCallbackHandler,
-    SaveBestMetricCallback,
     ModelInfoCallback,
     LogHydraConfigCallback,
     SaveGitInfoCallback,
-    SaveBaseModelInPEFT,
     SaveHydraConfigCallback,
     ETACallback,
+    DSIDWeightSchedulerCallback,
 )
 from torch import nn
 import torch
 from torch.distributed.fsdp import FullyShardedDataParallel
 from typing import Any, Optional, Union
 import contextlib
-from transformers.modeling_utils import unwrap_model
+from omegaconf import OmegaConf
 
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.integrations.fsdp import is_fsdp_managed_module
 from transformers.trainer_utils import seed_worker
-from transformers.trainer import _is_peft_model
 from transformers.utils import is_datasets_available
-from transformers.trainer_utils import PredictionOutput
-
-import json
-import os
 
 
 import datasets
@@ -34,7 +28,6 @@ from transformers.utils import logging
 from typing import Callable, Literal, Tuple
 from functools import partial
 
-from ..constants import LANGUAGE_MAP
 from csi_slt.data.sampler import (
     GlobalLengthBucketSampler,
     get_dataset_lengths,
@@ -57,8 +50,8 @@ class SltTrainer(Seq2SeqTrainer):
 
         # ``SltModel.forward`` accepts arbitrary LLM kwargs, which makes
         # Transformers infer that it consumes ``num_items_in_batch``.  Its
-        # language-model CE and auxiliary objectives are already mean-reduced,
-        # however, and do not use that value.  Keep the standard DDP averaging
+        # language-model CE and D-SID losses are already mean-reduced and do
+        # not use that value. Keep the standard DDP averaging
         # path; otherwise Trainer multiplies the complete loss by world size
         # when ``average_tokens_across_devices=True``.
         self.model_accepts_loss_kwargs = False
@@ -84,6 +77,19 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
         self.add_callback(ETACallback())
+        dsid_scheduler_kwargs = {}
+        if hydra_config is not None:
+            dsid_scheduler_config = OmegaConf.select(
+                hydra_config,
+                "engine.dsid_scheduler",
+                default=None,
+            )
+            if dsid_scheduler_config is not None:
+                dsid_scheduler_kwargs = OmegaConf.to_container(
+                    dsid_scheduler_config,
+                    resolve=True,
+                )
+        self.add_callback(DSIDWeightSchedulerCallback(**dsid_scheduler_kwargs))
 
         # if _is_peft_model(unwrap_model(self.model)):
         #     self.add_callback(SaveBaseModelInPEFT())
@@ -104,7 +110,7 @@ class SltTrainer(Seq2SeqTrainer):
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
-            logger.warn(
+            logger.warning(
                 "Overriding predict_with_generate to True for Customized Prediction Step"
             )
         self.args.predict_with_generate = True
@@ -141,15 +147,14 @@ class SltTrainer(Seq2SeqTrainer):
                 )
             value = value.detach()
             self._loss_component_totals[name] = (
-                self._loss_component_totals.get(name, torch.zeros_like(value))
-                + value
+                self._loss_component_totals.get(name, torch.zeros_like(value)) + value
             )
         self._loss_component_count += 1
 
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        """Add loss components and alignment epsilon to training logs."""
+        """Add detached loss components to training logs."""
         if "loss" in logs and self._loss_component_count:
             count = torch.tensor(
                 self._loss_component_count, device=self.args.device, dtype=torch.float
@@ -160,12 +165,6 @@ class SltTrainer(Seq2SeqTrainer):
                 logs[name] = global_total / global_count
             self._loss_component_totals.clear()
             self._loss_component_count = 0
-
-        if "loss" in logs:
-            model = self.accelerator.unwrap_model(self.model)
-            alignment_module = getattr(model, "local_alignment_loss_fct", None)
-            if alignment_module is not None:
-                logs["alignment_epsilon"] = float(alignment_module.eps)
 
         super().log(logs, start_time=start_time)
 
@@ -304,10 +303,7 @@ class SltTrainer(Seq2SeqTrainer):
             )
 
             # Pad decoder-only outputs to prompt length plus the generation budget.
-            if (
-                target_length is not None
-                and generated_tokens.shape[-1] < target_length
-            ):
+            if target_length is not None and generated_tokens.shape[-1] < target_length:
                 generated_tokens = self._pad_tensors_to_max_len(
                     generated_tokens, target_length
                 )
@@ -335,9 +331,7 @@ class SltTrainer(Seq2SeqTrainer):
             if has_labels:
                 labels = inputs["labels"]
                 if target_length is not None and labels.shape[-1] < target_length:
-                    labels = self._pad_tensors_to_max_len(
-                        labels, target_length
-                    )
+                    labels = self._pad_tensors_to_max_len(labels, target_length)
             else:
                 labels = None
 
@@ -355,7 +349,8 @@ class SltTrainer(Seq2SeqTrainer):
                 device=generated_tokens.device,
             )
         except Exception as e:
-            import traceback, sys
+            import traceback
+            import sys
 
             traceback.print_exc(file=sys.stderr)
             raise e

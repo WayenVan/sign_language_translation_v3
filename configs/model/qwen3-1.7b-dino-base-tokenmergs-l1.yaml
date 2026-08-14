@@ -1,15 +1,14 @@
-type: auto
-
 config:
   hidden_size: 2048
   video_soft_token_id: 151656
   video_token_scale: 0.125
+  dsid_loss_weight: 0.0
+  dsid_js_tau: null
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: dinov2
-  visual_backbone_kwargs:
+  visual_backbone_config:
     id: facebook/dinov2-with-registers-base
     output_layer: -2
-    enable_lora: False
   visual_adapter_type: temporal_merge
   visual_adapter_kwargs:
     hidden_size: 768
@@ -22,15 +21,3 @@ config:
     use_temporal_shuffle: True
     mlp_depth_spatial: 2
     drop_out: 0.1
-  contrastive_loss_weight: 0.25
-  alignment_loss_weight: 1.0
-  alignment_pooling_distill_weight: 0.5
-  alignment_eps: 0.12
-  alignment_n_iters: 10
-  alignment_target_relaxation: 0.5
-  alignment_null_mass_prior: 0.2
-  alignment_null_ratio_max: 0.2
-  alignment_null_temperature: 0.1
-  alignment_beta_ot: 1.0
-  alignment_beta_null: 0.1
-  alignment_beta_tv: 2.0

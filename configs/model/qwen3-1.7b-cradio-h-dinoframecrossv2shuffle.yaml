@@ -1,9 +1,9 @@
-type: auto
-
 config:
   hidden_size: 2048
   video_soft_token_id: 151656
   video_token_scale: 1.0
+  dsid_loss_weight: 0.0
+  dsid_js_tau: null
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: c_radio_v4
   visual_backbone_config:
@@ -16,16 +16,3 @@ config:
     output_dim: 2048
     temperature: 0.1
     temporal_gate_init: -2 #sigmoid
-  contrastive_loss_weight: 0.25
-  contrastive_text_queue_size: 1024
-  alignment_loss_weight: 1.0
-  alignment_pooling_distill_weight: 0.5
-  alignment_eps: 0.12
-  alignment_n_iters: 10
-  alignment_target_relaxation: 0.5
-  alignment_null_mass_prior: 0.2
-  alignment_null_ratio_max: 0.2
-  alignment_null_temperature: 0.1
-  alignment_beta_ot: 1.0
-  alignment_beta_null: 0.1
-  alignment_beta_tv: 2.0

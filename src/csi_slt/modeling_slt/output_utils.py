@@ -39,8 +39,7 @@ class PrepareForCausalLMOutput(NamedTuple):
     input_ids: torch.Tensor  # [B, L]
     inputs_embeds: torch.Tensor  # [B, L, D]
     visual_mask: torch.Tensor  # [B, L]
-    contrastive_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
-    contrastive_visual_lengths: Optional[torch.Tensor] = None  # [B]
+    visual_lengths: Optional[torch.Tensor] = None  # [B]
     packed_visual_position_ids: Optional[torch.Tensor] = None  # [sum(Lv)]
 
 

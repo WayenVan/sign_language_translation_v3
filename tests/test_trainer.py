@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 import torch
 from torch import nn
+from omegaconf import OmegaConf
 from transformers import GenerationConfig, Seq2SeqTrainingArguments
 
+from csi_slt.engine.callbacks import DSIDWeightSchedulerCallback
 from csi_slt.engine.trainer import SltTrainer
 
 
@@ -41,6 +43,29 @@ def test_trainer_does_not_claim_model_handles_num_items_in_batch(tmp_path):
 
     assert loss.item() == 8.0
     assert "num_items_in_batch" not in model.last_kwargs
+
+
+def test_trainer_builds_dsid_scheduler_callback_from_engine_config(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+    )
+    hydra_config = OmegaConf.create(
+        {"engine": {"dsid_scheduler": {"warmup_ratio": 0.2, "decay_ratio": 0.4}}}
+    )
+    trainer = SltTrainer(
+        model=_MeanReducedModelWithKwargs(),
+        args=args,
+        hydra_config=hydra_config,
+    )
+
+    callback = next(
+        callback
+        for callback in trainer.callback_handler.callbacks
+        if isinstance(callback, DSIDWeightSchedulerCallback)
+    )
+    assert callback.warmup_ratio == 0.2
+    assert callback.decay_ratio == 0.4
 
 
 def test_compute_loss_does_not_forward_generation_fields(tmp_path):

@@ -19,6 +19,9 @@ hydra:
   output_subdir: null
 
 engine:
+  dsid_scheduler:
+    warmup_ratio: 0.1
+    decay_ratio: 0.3
   training_args:
     do_train: true
     do_predict: true
@@ -54,11 +57,6 @@ engine:
     # length_penalty: 1.0
   metrics:
     xcomet_every_n_evaluations: -1
-
-  alignment_epsilon_scheduler:
-    eps_max: 0.12
-    eps_min: 0.03
-    anneal_ratio: 0.8
 
   llm_dtype: auto
   visual_backbone_dtype: auto

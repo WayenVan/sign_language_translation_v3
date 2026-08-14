@@ -1,6 +1,5 @@
 from transformers.trainer_callback import (
     CallbackHandler,
-    ExportableState,
     TrainerCallback,
 )
 import os
@@ -9,88 +8,59 @@ from transformers import logging
 from omegaconf import OmegaConf
 import time
 from accelerate import Accelerator
-from ..misc.git_utils import save_git_state
+from ..experiment.git_state import save_git_state
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer import _is_peft_model
-from csi_slt.modeling_slt.minimal_null_ot_alignment import CosineEpsilonScheduler
+from .scheduler import DSIDScheduler
 
 
 logger = logging.get_logger(__name__)
 
 
-class AlignmentEpsilonSchedulerCallback(TrainerCallback, ExportableState):
-    """Own and checkpoint the local-alignment epsilon scheduler.
+class DSIDWeightSchedulerCallback(TrainerCallback):
+    """Synchronize an engine-owned D-SID scheduler with Trainer global step."""
 
-    The scheduler advances after each optimizer update, so epsilon remains fixed
-    across all micro-batches in a gradient-accumulation step. Its state is saved
-    in ``TrainerState.stateful_callbacks`` and restored with the checkpoint.
-    """
-
-    def __init__(
-        self,
-        eps_max: float = 0.12,
-        eps_min: float = 0.03,
-        anneal_ratio: float = 0.8,
-    ):
-        self.eps_max = float(eps_max)
-        self.eps_min = float(eps_min)
-        self.anneal_ratio = float(anneal_ratio)
-        self.scheduler = None
-        self.scheduler_state = None
-
-    def state(self) -> dict:
-        scheduler_state = (
-            self.scheduler.state_dict()
-            if self.scheduler is not None
-            else self.scheduler_state
-        )
-        return {
-            "args": {
-                "eps_max": self.eps_max,
-                "eps_min": self.eps_min,
-                "anneal_ratio": self.anneal_ratio,
-            },
-            "attributes": {"scheduler_state": scheduler_state},
-        }
+    def __init__(self, warmup_ratio: float = 0.1, decay_ratio: float = 0.3):
+        self.warmup_ratio = float(warmup_ratio)
+        self.decay_ratio = float(decay_ratio)
+        self.scheduler: DSIDScheduler | None = None
 
     @staticmethod
-    def _unwrap_training_model(kwargs):
+    def _unwrap_model(kwargs):
         trainer = kwargs.get("trainer")
-        if trainer is not None:
-            return trainer.accelerator.unwrap_model(trainer.model)
-        return unwrap_model(kwargs["model"])
+        return (
+            trainer.accelerator.unwrap_model(trainer.model)
+            if trainer is not None
+            else unwrap_model(kwargs["model"])
+        )
+
+    def _update_weight(self, state, kwargs, *, reset: bool = False) -> None:
+        model = self._unwrap_model(kwargs)
+        if not hasattr(model, "set_dsid_loss_weight"):
+            return
+
+        max_weight = float(model.config.dsid_loss_weight)
+        if reset or self.scheduler is None:
+            self.scheduler = DSIDScheduler(
+                max_weight=max_weight,
+                total_steps=state.max_steps,
+                warmup_ratio=self.warmup_ratio,
+                decay_ratio=self.decay_ratio,
+            )
+        elif (
+            self.scheduler.max_weight != max_weight
+            or self.scheduler.total_steps != state.max_steps
+        ):
+            raise RuntimeError("D-SID scheduler arguments changed after training began")
+
+        weight = self.scheduler.step(state.global_step)
+        model.set_dsid_loss_weight(weight)
 
     def on_train_begin(self, args, state, control, **kwargs):
-        model = self._unwrap_training_model(kwargs)
-        config = model.config
-        if config.alignment_loss_weight <= 0:
-            return
-        if not hasattr(model, "local_alignment_loss_fct"):
-            raise AttributeError(
-                "alignment scheduling is enabled, but the model has no "
-                "local_alignment_loss_fct"
-            )
+        self._update_weight(state, kwargs, reset=True)
 
-        self.scheduler = CosineEpsilonScheduler(
-            alignment_module=model.local_alignment_loss_fct,
-            total_steps=state.max_steps,
-            eps_max=self.eps_max,
-            eps_min=self.eps_min,
-            anneal_ratio=self.anneal_ratio,
-        )
-        if self.scheduler_state is not None:
-            self.scheduler.load_state_dict(self.scheduler_state)
-        epsilon = model.local_alignment_loss_fct.eps
-        logger.info(
-            "Initialized alignment epsilon scheduler at step %d/%d: %.6f",
-            self.scheduler.current_step,
-            state.max_steps,
-            epsilon,
-        )
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if self.scheduler is not None:
-            self.scheduler.step()
+    def on_step_begin(self, args, state, control, **kwargs):
+        self._update_weight(state, kwargs)
 
 
 class SltTrainerCallbackHandler(CallbackHandler):
@@ -271,9 +241,7 @@ class ModelInfoCallback(TrainerCallback):
             parameters = list(trainer.model.parameters())
             total = sum(parameter.numel() for parameter in parameters)
             trainable = sum(
-                parameter.numel()
-                for parameter in parameters
-                if parameter.requires_grad
+                parameter.numel() for parameter in parameters if parameter.requires_grad
             )
             frozen = total - trainable
             trainable_ratio = 100.0 * trainable / total if total else 0.0
@@ -284,7 +252,9 @@ class ModelInfoCallback(TrainerCallback):
                 f"Trainable: {trainable:,} ({trainable_ratio:.2f}%) | "
                 f"Frozen: {frozen:,}"
             )
-            print(f"\nModel parameter information\n{self._format_table(rows)}\n{summary}\n")
+            print(
+                f"\nModel parameter information\n{self._format_table(rows)}\n{summary}\n"
+            )
 
 
 class LogHydraConfigCallback(TrainerCallback):

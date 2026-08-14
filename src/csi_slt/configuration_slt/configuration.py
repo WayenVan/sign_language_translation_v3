@@ -47,20 +47,8 @@ class SltConfig(PretrainedConfig):
         visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
-        contrastive_dim: int = 512,
-        contrastive_loss_weight: float = 0.25,
-        contrastive_text_queue_size: int = 0,
-        alignment_loss_weight: float = 1.0,
-        alignment_eps: float = 0.12,
-        alignment_n_iters: int = 10,
-        alignment_target_relaxation: float = 0.5,
-        alignment_null_mass_prior: float = 0.2,
-        alignment_null_ratio_max: float = 0.2,
-        alignment_null_temperature: float = 0.1,
-        alignment_beta_ot: float = 1.0,
-        alignment_beta_null: float = 0.1,
-        alignment_beta_tv: float = 2.0,
-        alignment_pooling_distill_weight: float = 0.5,
+        dsid_loss_weight: float = 0.0,
+        dsid_js_tau: Optional[float] = None,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -110,35 +98,40 @@ class SltConfig(PretrainedConfig):
                 adapter constructor. Its output width must match ``hidden_size``
                 and its temporal downsampling must agree with
                 ``video_token_scale``.
-            contrastive_dim: Output width of the trainable visual and textual
-                projection heads used by global contrastive learning.
-            contrastive_loss_weight: Weight applied to the global video-text
-                contrastive objective before it is added to the language-model
-                loss.
-            contrastive_text_queue_size: Number of detached historical text
-                features used as additional video-to-text negatives. Zero
-                disables the queue.
-            alignment_loss_weight: Weight of local visual/pseudo-gloss OT
-                alignment in the total training loss. Zero disables it.
-            alignment_eps: Initial entropy coefficient for semi-unbalanced
-                Sinkhorn OT. Training may update it through a scheduler.
-            alignment_n_iters: Number of Sinkhorn scaling iterations.
-            alignment_target_relaxation: KL strength for the relaxed target
-                marginal.
-            alignment_null_mass_prior: Prior transport mass assigned to NULL.
-            alignment_null_ratio_max: Maximum preferred local NULL ratio.
-            alignment_null_temperature: Temperature for the NULL preference
-                softmax.
-            alignment_beta_ot: Internal weight of the OT objective.
-            alignment_beta_null: Internal weight of the NULL regularizer.
-            alignment_beta_tv: Internal weight of the temporal-variation loss
-                on the row-normalized real-token plan.
-            alignment_pooling_distill_weight: Weight of the KL loss that uses
-                detached non-NULL OT mass to supervise visual-only global
-                attention. Zero disables attention distillation.
+            dsid_loss_weight: Maximum coefficient applied to the D-SID loss.
+                A value of zero disables both text-teacher forward passes.
+                When enabled, all student LLM parameters must remain frozen so
+                this objective updates only the visual conditioning interface.
+            dsid_js_tau: Fixed JS-divergence normalization threshold. It must be
+                calibrated from training-set target positions and supplied when
+                ``dsid_loss_weight`` is positive.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
+        # Retired objective keys and old model-owned scheduling keys may still
+        # exist in checkpoints. Ignore them instead of reintroducing inactive
+        # attributes that appear to affect the current model.
+        for retired_key in (
+            "contrastive_dim",
+            "contrastive_loss_weight",
+            "contrastive_text_queue_size",
+            "alignment_loss_weight",
+            "alignment_eps",
+            "alignment_n_iters",
+            "alignment_target_relaxation",
+            "alignment_null_mass_prior",
+            "alignment_null_ratio_max",
+            "alignment_null_temperature",
+            "alignment_beta_ot",
+            "alignment_beta_null",
+            "alignment_beta_tv",
+            "alignment_pooling_distill_weight",
+            # Scheduling is now owned by ``engine.dsid_scheduler``.
+            "dsid_warmup_ratio",
+            "dsid_decay_ratio",
+        ):
+            kwargs.pop(retired_key, None)
+
         super().__init__(**kwargs)
 
         self.video_soft_token_id = video_soft_token_id
@@ -154,48 +147,25 @@ class SltConfig(PretrainedConfig):
         self.visual_adapter_kwargs = (
             visual_adapter_kwargs if visual_adapter_kwargs is not None else {}
         )
-        if contrastive_dim <= 0:
-            raise ValueError("contrastive_dim must be positive")
-        self.contrastive_dim = contrastive_dim
-        self.contrastive_loss_weight = contrastive_loss_weight
-        if contrastive_text_queue_size < 0:
-            raise ValueError("contrastive_text_queue_size must be non-negative")
-        self.contrastive_text_queue_size = contrastive_text_queue_size
-        if alignment_loss_weight < 0:
-            raise ValueError("alignment_loss_weight must be non-negative")
-        if alignment_eps <= 0:
-            raise ValueError("alignment_eps must be positive")
-        if alignment_n_iters <= 0:
-            raise ValueError("alignment_n_iters must be positive")
-        if alignment_target_relaxation <= 0:
-            raise ValueError("alignment_target_relaxation must be positive")
-        if not 0 < alignment_null_mass_prior < 1:
-            raise ValueError("alignment_null_mass_prior must lie in (0, 1)")
-        if not 0 <= alignment_null_ratio_max <= 1:
-            raise ValueError("alignment_null_ratio_max must lie in [0, 1]")
-        if alignment_null_temperature <= 0:
-            raise ValueError("alignment_null_temperature must be positive")
-        if alignment_beta_ot < 0 or alignment_beta_null < 0 or alignment_beta_tv < 0:
-            raise ValueError("alignment beta weights must be non-negative")
-        if alignment_pooling_distill_weight < 0:
-            raise ValueError("alignment_pooling_distill_weight must be non-negative")
-        if alignment_pooling_distill_weight > 0 and alignment_loss_weight <= 0:
+        if isinstance(dsid_loss_weight, bool) or not isinstance(
+            dsid_loss_weight, (int, float)
+        ):
+            raise TypeError("dsid_loss_weight must be a real number")
+        if dsid_loss_weight < 0.0:
+            raise ValueError("dsid_loss_weight must be non-negative")
+        if dsid_js_tau is not None:
+            if isinstance(dsid_js_tau, bool) or not isinstance(
+                dsid_js_tau, (int, float)
+            ):
+                raise TypeError("dsid_js_tau must be a real number or None")
+            if dsid_js_tau < 1e-8:
+                raise ValueError("dsid_js_tau must be at least 1e-8")
+        if dsid_loss_weight > 0.0 and dsid_js_tau is None:
             raise ValueError(
-                "alignment_loss_weight must be positive when alignment pooling "
-                "distillation is enabled"
+                "dsid_js_tau must be provided when dsid_loss_weight is positive"
             )
-        self.alignment_loss_weight = alignment_loss_weight
-        self.alignment_eps = alignment_eps
-        self.alignment_n_iters = alignment_n_iters
-        self.alignment_target_relaxation = alignment_target_relaxation
-        self.alignment_null_mass_prior = alignment_null_mass_prior
-        self.alignment_null_ratio_max = alignment_null_ratio_max
-        self.alignment_null_temperature = alignment_null_temperature
-        self.alignment_beta_ot = alignment_beta_ot
-        self.alignment_beta_null = alignment_beta_null
-        self.alignment_beta_tv = alignment_beta_tv
-        self.alignment_pooling_distill_weight = alignment_pooling_distill_weight
-
+        self.dsid_loss_weight = float(dsid_loss_weight)
+        self.dsid_js_tau = float(dsid_js_tau) if dsid_js_tau is not None else None
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.
         if llm_config is None:
