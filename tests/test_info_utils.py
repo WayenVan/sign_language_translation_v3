@@ -27,6 +27,10 @@ def test_information_request_reports_enabled_selection():
     assert request.enabled is True
 
 
+def test_visual_backbone_extras_enable_information_request():
+    assert InformationRequest(visual_backbone_extras=True).enabled is True
+
+
 @pytest.mark.parametrize(
     ("kwargs", "exception"),
     [
@@ -36,6 +40,7 @@ def test_information_request_reports_enabled_selection():
         ({"llm_layers": ()}, ValueError),
         ({"llm_layers": (True,)}, TypeError),
         ({"llm_attentions": 1}, TypeError),
+        ({"visual_backbone_extras": 1}, TypeError),
     ],
 )
 def test_information_request_validates_selection(kwargs, exception):
@@ -74,6 +79,21 @@ def test_build_information_output_selects_samples_and_attention_layers():
     assert information.visual_position_ids.tolist() == [[0, 1, 2]]
     assert len(information.llm_attentions) == 1
     assert information.llm_attentions[0].shape == (1, 5, 5)
+
+
+def test_build_information_output_detaches_visual_backbone_extras():
+    source = torch.tensor([1.0], requires_grad=True)
+    information = build_information_output(
+        request=InformationRequest(visual_backbone_extras=True),
+        batch_size=1,
+        llm_attentions=None,
+        prepare_output=None,
+        visual_backbone_extras={"nested": {"weights": source * 2}},
+    )
+
+    weights = information.visual_backbone_extras["nested"]["weights"]
+    assert weights.requires_grad is False
+    assert weights.device == source.device
 
 
 def test_information_output_detach_to_cpu_preserves_structure_and_dtype():

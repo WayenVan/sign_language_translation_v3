@@ -24,6 +24,7 @@ class InformationRequest:
 
     Args:
         llm_attentions: Return selected language-model attention maps.
+        visual_backbone_extras: Return the visual backbone's auxiliary output.
         sample_indices: Batch entries retained in the information output.
         llm_layers: LLM layer indices retained when ``llm_attentions`` is true.
             Negative indices follow normal Python indexing semantics.
@@ -31,6 +32,7 @@ class InformationRequest:
     """
 
     llm_attentions: bool = False
+    visual_backbone_extras: bool = False
     sample_indices: tuple[int, ...] = (0,)
     llm_layers: tuple[int, ...] = (-1,)
     reduce_heads: bool = True
@@ -38,6 +40,7 @@ class InformationRequest:
     def __post_init__(self) -> None:
         for name in (
             "llm_attentions",
+            "visual_backbone_extras",
             "reduce_heads",
         ):
             if not isinstance(getattr(self, name), bool):
@@ -77,7 +80,7 @@ class InformationRequest:
     @property
     def enabled(self) -> bool:
         """Whether the caller requested any intermediate information."""
-        return self.llm_attentions
+        return self.llm_attentions or self.visual_backbone_extras
 
 
 @dataclass
@@ -94,6 +97,7 @@ class InformationOutput:
 
     visual_lengths: Optional[torch.Tensor] = None
     visual_position_ids: Optional[torch.Tensor] = None
+    visual_backbone_extras: Optional[dict[str, Any]] = None
 
     def detach_to_cpu(self) -> InformationOutput:
         """Return a detached CPU copy suitable for storage or visualization.
@@ -107,6 +111,7 @@ class InformationOutput:
             llm_visual_mask=_detach_to_cpu(self.llm_visual_mask),
             visual_lengths=_detach_to_cpu(self.visual_lengths),
             visual_position_ids=_detach_to_cpu(self.visual_position_ids),
+            visual_backbone_extras=_detach_to_cpu(self.visual_backbone_extras),
         )
 
 
@@ -129,6 +134,7 @@ def build_information_output(
     batch_size: int,
     llm_attentions: Optional[tuple[torch.Tensor, ...]],
     prepare_output: Optional[PrepareForCausalLMOutput],
+    visual_backbone_extras: Optional[dict[str, Any]] = None,
 ) -> InformationOutput:
     """Select and detach requested intermediate forward information."""
     device = (
@@ -146,6 +152,11 @@ def build_information_output(
         )
 
     information = InformationOutput()
+
+    if request.visual_backbone_extras:
+        information.visual_backbone_extras = _detach_value(
+            visual_backbone_extras
+        )
 
     if prepare_output is not None:
         information.llm_visual_mask = prepare_output.visual_mask.index_select(
@@ -195,3 +206,16 @@ def build_information_output(
         information.llm_attentions = tuple(selected_attentions)
 
     return information
+
+
+def _detach_value(value: Any) -> Any:
+    """Recursively detach tensors without moving them off their device."""
+    if isinstance(value, torch.Tensor):
+        return value.detach()
+    if isinstance(value, dict):
+        return {key: _detach_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_detach_value(item) for item in value)
+    if isinstance(value, list):
+        return [_detach_value(item) for item in value]
+    return value

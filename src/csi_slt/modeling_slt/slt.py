@@ -394,6 +394,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         video: torch.Tensor,
         video_length: torch.Tensor,
         permute_video_tokens: bool = False,
+        return_visual_backbone_extras: bool = False,
     ) -> VisualAdapterOutput:
         """Encode video frames and adapt them to the language-model space.
 
@@ -411,6 +412,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_backbone_output, permute_video_tokens=permute_video_tokens
         )  # [BT,  D]
 
+        if return_visual_backbone_extras:
+            return visual_adapter_output, visual_backbone_output.extras
         return visual_adapter_output
 
     def prepare_for_casual_lm(
@@ -420,12 +423,21 @@ class SltModel(PreTrainedModel, GenerationMixin):
         video_length: torch.Tensor,  # [B], length of each video in the batch
         permute_video_tokens: Optional[bool] = False,
         return_visual_adapter_extras: bool = False,
+        return_visual_backbone_extras: bool = False,
     ):
         batch_size = video_length.shape[0]
 
-        visual_output = self.get_visual_feats(
-            video, video_length, permute_video_tokens=permute_video_tokens
+        visual_result = self.get_visual_feats(
+            video,
+            video_length,
+            permute_video_tokens=permute_video_tokens,
+            return_visual_backbone_extras=return_visual_backbone_extras,
         )
+        if return_visual_backbone_extras:
+            visual_output, visual_backbone_extras = visual_result
+        else:
+            visual_output = visual_result
+            visual_backbone_extras = None
 
         visual_feats = visual_output.visual_features
         visual_lengths = visual_output.visual_length
@@ -501,8 +513,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_lengths=visual_lengths,  # [B]
             packed_visual_position_ids=visual_position_ids,
         )
+        if return_visual_adapter_extras and return_visual_backbone_extras:
+            return prepare_output, visual_output.extras, visual_backbone_extras
         if return_visual_adapter_extras:
             return prepare_output, visual_output.extras
+        if return_visual_backbone_extras:
+            return prepare_output, visual_backbone_extras
         return prepare_output
 
     @staticmethod
@@ -773,15 +789,27 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         prepare_output = None
         visual_adapter_extras = None
+        visual_backbone_extras = None
         if inputs_embeds is None:
             if pixel_values is not None:
-                prepare_output, visual_adapter_extras = self.prepare_for_casual_lm(
+                visual_prepare_result = self.prepare_for_casual_lm(
                     input_ids,
                     pixel_values,
                     pixel_values_length,
                     permute_video_tokens=permute_video_tokens,
                     return_visual_adapter_extras=True,
+                    return_visual_backbone_extras=(
+                        information_request.visual_backbone_extras
+                    ),
                 )
+                if information_request.visual_backbone_extras:
+                    (
+                        prepare_output,
+                        visual_adapter_extras,
+                        visual_backbone_extras,
+                    ) = visual_prepare_result
+                else:
+                    prepare_output, visual_adapter_extras = visual_prepare_result
                 inputs_embeds = prepare_output.inputs_embeds
             else:
                 assert input_ids.shape[1] == 1, (
@@ -917,6 +945,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 batch_size=input_ids.shape[0],
                 llm_attentions=outputs.attentions,
                 prepare_output=prepare_output,
+                visual_backbone_extras=visual_backbone_extras,
             )
 
         loss_info = (
