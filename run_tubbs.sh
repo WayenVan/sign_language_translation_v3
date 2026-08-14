@@ -17,8 +17,8 @@ else
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-dsid-0814-224x224 \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv3 \
+  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv3-0814-224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
@@ -30,7 +30,7 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.llm_dtype=bfloat16 \
   engine.visual_backbone_dtype=float32 \
   data=ph14t_*x224x224_qwen_multiling \
-  data.processor.video_token_scale=1.0 \
+  data.processor.video_token_scale=2.0 \
   data.processor.num_extra_video_tokens=2 \
   data.processor.video_processor.padding_to_multiple_of=4 \
   data.processor.video_processor.do_resize=False \
