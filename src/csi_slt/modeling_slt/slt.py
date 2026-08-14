@@ -140,9 +140,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         self._configure_generation()
 
-        # freeze the visual backbone and language model parameters by default; only the
-        for param in self.visual_backbone.parameters():
-            param.requires_grad = False
+        # Visual-backbone freezing is owned by each backbone implementation so
+        # trainable fusion/adaptation parameters are not frozen accidentally.
         for param in self.llm.parameters():
             param.requires_grad = False
 
@@ -289,8 +288,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         for p in model.llm.parameters():
             p.requires_grad = False
-        for p in model.visual_backbone.parameters():
-            p.requires_grad = False
 
         if model.config.llm_lora:
             raise ValueError(
@@ -422,6 +419,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         video: torch.Tensor,  # [BT, C, H, W]
         video_length: torch.Tensor,  # [B], length of each video in the batch
         permute_video_tokens: Optional[bool] = False,
+        return_visual_adapter_extras: bool = False,
     ):
         batch_size = video_length.shape[0]
 
@@ -496,13 +494,73 @@ class SltModel(PreTrainedModel, GenerationMixin):
             text_embeds,  # [B, L, D]
         )
 
-        return PrepareForCausalLMOutput(
+        prepare_output = PrepareForCausalLMOutput(
             input_ids=text_input_ids,  # [B, L]
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
             visual_lengths=visual_lengths,  # [B]
             packed_visual_position_ids=visual_position_ids,
         )
+        if return_visual_adapter_extras:
+            return prepare_output, visual_output.extras
+        return prepare_output
+
+    @staticmethod
+    def _compute_branch_attention_diversity_loss(
+        attention_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """Penalize overlap between queries within one attention branch.
+
+        Args:
+            attention_weights: Per-head probabilities shaped ``[G, H, N, S]``.
+        """
+        if attention_weights.ndim != 4:
+            raise ValueError(
+                "attention_weights must have shape [G, H, N, S], got "
+                f"{tuple(attention_weights.shape)}"
+            )
+        if attention_weights.shape[0] == 0 or attention_weights.shape[-1] == 0:
+            raise ValueError("attention batch and source dimensions must be non-empty")
+
+        num_queries = attention_weights.shape[2]
+        if num_queries < 2:
+            return attention_weights.sum() * 0.0
+
+        # [G, H, N, S] -> [G, N, S], then normalize each query distribution.
+        mean_attention = attention_weights.mean(dim=1)
+        normalized_attention = nn.functional.normalize(
+            mean_attention, p=2, dim=-1, eps=1e-12
+        )
+        query_similarity = torch.bmm(
+            normalized_attention, normalized_attention.transpose(1, 2)
+        )  # [G, N, N]
+        diagonal = query_similarity.diagonal(dim1=1, dim2=2).sum()
+        off_diagonal = query_similarity.sum() - diagonal
+        denominator = (
+            attention_weights.shape[0] * num_queries * (num_queries - 1)
+        )
+        return off_diagonal / denominator
+
+    @classmethod
+    def _compute_adapter_attention_diversity_loss(
+        cls,
+        adapter_extras: Optional[dict],
+    ) -> Optional[torch.Tensor]:
+        """Return diversity loss only when both adapter branches expose weights."""
+        if not adapter_extras:
+            return None
+        temporal_weights = adapter_extras.get("temporal_attention_weights")
+        patch_weights = adapter_extras.get("patch_attention_weights")
+        if temporal_weights is None or patch_weights is None:
+            return None
+        if not isinstance(temporal_weights, torch.Tensor) or not isinstance(
+            patch_weights, torch.Tensor
+        ):
+            raise TypeError("adapter attention weights must be torch.Tensor values")
+
+        return cls._compute_branch_attention_diversity_loss(
+            temporal_weights
+        ) + cls._compute_branch_attention_diversity_loss(patch_weights)
 
     @staticmethod
     def _compute_causal_lm_loss(
@@ -714,13 +772,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
         prepare_output = None
+        visual_adapter_extras = None
         if inputs_embeds is None:
             if pixel_values is not None:
-                prepare_output = self.prepare_for_casual_lm(
+                prepare_output, visual_adapter_extras = self.prepare_for_casual_lm(
                     input_ids,
                     pixel_values,
                     pixel_values_length,
                     permute_video_tokens=permute_video_tokens,
+                    return_visual_adapter_extras=True,
                 )
                 inputs_embeds = prepare_output.inputs_embeds
             else:
@@ -832,6 +892,24 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
             loss = ce_loss + self._current_dsid_loss_weight * dsid_output.loss
 
+        attention_diversity_loss = None
+        if (
+            loss is not None
+            and self.training
+            and self.config.attention_diversity_loss_weight > 0.0
+        ):
+            attention_diversity_loss = (
+                self._compute_adapter_attention_diversity_loss(
+                    visual_adapter_extras
+                )
+            )
+            if attention_diversity_loss is not None:
+                loss = (
+                    loss
+                    + self.config.attention_diversity_loss_weight
+                    * attention_diversity_loss
+                )
+
         information = None
         if information_request.enabled:
             information = build_information_output(
@@ -843,7 +921,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         loss_info = (
             {
-                # Final objective used for backward: CE + lambda * D-SID.
+                # Final objective: CE + scheduled D-SID + attention diversity.
                 "main_loss": loss.detach(),
             }
             if loss is not None
@@ -871,6 +949,22 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     "dsid_mean_kl": dsid_output.mean_kl.detach(),
                     # Mean NLL(q_0) - NLL(q_g); positive means gloss helps.
                     "dsid_teacher_nll_gain": dsid_output.teacher_nll_gain.detach(),
+                }
+            )
+        if attention_diversity_loss is not None:
+            weighted_attention_diversity_loss = (
+                self.config.attention_diversity_loss_weight
+                * attention_diversity_loss
+            )
+            loss_info.update(
+                {
+                    "attention_diversity_loss": attention_diversity_loss.detach(),
+                    "attention_diversity_weighted_loss": (
+                        weighted_attention_diversity_loss.detach()
+                    ),
+                    "attention_diversity_loss_weight": loss.new_tensor(
+                        self.config.attention_diversity_loss_weight
+                    ),
                 }
             )
 

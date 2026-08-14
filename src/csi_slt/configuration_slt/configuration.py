@@ -49,6 +49,7 @@ class SltConfig(PretrainedConfig):
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
         dsid_loss_weight: float = 0.0,
         dsid_js_tau: Optional[float] = None,
+        attention_diversity_loss_weight: float = 0.001,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -105,6 +106,10 @@ class SltConfig(PretrainedConfig):
             dsid_js_tau: Fixed JS-divergence normalization threshold. It must be
                 calibrated from training-set target positions and supplied when
                 ``dsid_loss_weight`` is positive.
+            attention_diversity_loss_weight: Coefficient applied to the sum of
+                static- and motion-branch query attention diversity losses.
+                It is active only when the visual adapter returns both sets of
+                attention weights. A value of zero disables its contribution.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -166,6 +171,15 @@ class SltConfig(PretrainedConfig):
             )
         self.dsid_loss_weight = float(dsid_loss_weight)
         self.dsid_js_tau = float(dsid_js_tau) if dsid_js_tau is not None else None
+        if isinstance(attention_diversity_loss_weight, bool) or not isinstance(
+            attention_diversity_loss_weight, (int, float)
+        ):
+            raise TypeError("attention_diversity_loss_weight must be a real number")
+        if attention_diversity_loss_weight < 0.0:
+            raise ValueError("attention_diversity_loss_weight must be non-negative")
+        self.attention_diversity_loss_weight = float(
+            attention_diversity_loss_weight
+        )
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.
         if llm_config is None:

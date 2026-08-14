@@ -26,6 +26,21 @@ def test_packed_temporal_windows_reject_non_divisible_lengths():
         )
 
 
+def test_packed_temporal_windows_support_half_centred_even_windows():
+    features = torch.tensor([0.0, 1.0, 2.0, 3.0, 10.0, 11.0]).unsqueeze(-1)
+
+    windows, output_lengths = packed_temporal_windows(
+        features, [4, 2], window_size=2, stride=2
+    )
+
+    assert output_lengths.tolist() == [2, 1]
+    assert windows.squeeze(-1).tolist() == [
+        [0.0, 1.0],
+        [2.0, 3.0],
+        [10.0, 11.0],
+    ]
+
+
 def test_random_derangement_has_no_fixed_points_within_each_video():
     lengths = [2, 3, 8]
 

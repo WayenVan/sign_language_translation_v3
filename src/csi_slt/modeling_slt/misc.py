@@ -8,18 +8,18 @@ def packed_temporal_windows(
     window_size: int,
     stride: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Group packed sequences into boundary-aware centred temporal windows.
+    """Group packed sequences into boundary-aware temporal windows.
 
-    Window centres are the local positions ``0, stride, 2 * stride, ...`` in
-    each sequence. Positions outside that sequence are clamped to its first or
-    last element, providing replicate padding without ever crossing a packed
-    sequence boundary. Every input length must be divisible by ``stride`` so
-    each sequence emits exactly ``length / stride`` windows.
+    Window anchors are local positions ``0, stride, 2 * stride, ...``. Odd
+    windows are centred on the anchor; even windows are centred halfway between
+    their two middle frames. For example, sizes 2, 3, and 4 use offsets
+    ``[0, 1]``, ``[-1, 0, 1]``, and ``[-1, 0, 1, 2]``. Positions outside a
+    sequence are replicate-padded without crossing packed boundaries.
 
     Args:
         packed_features: Features shaped ``[sum(lengths), ...]``.
         lengths: Length of each packed sequence, shaped ``[B]``.
-        window_size: Odd number of elements in each centred window.
+        window_size: Positive number of elements in each window.
         stride: Distance between consecutive window centres.
 
     Returns:
@@ -32,8 +32,8 @@ def packed_temporal_windows(
         raise ValueError("packed_features must have shape [sum(lengths), ...]")
     if isinstance(window_size, bool) or not isinstance(window_size, int):
         raise TypeError("window_size must be an integer")
-    if window_size < 1 or window_size % 2 == 0:
-        raise ValueError("window_size must be a positive odd integer")
+    if window_size < 1:
+        raise ValueError("window_size must be positive")
     if isinstance(stride, bool) or not isinstance(stride, int):
         raise TypeError("stride must be an integer")
     if stride <= 0:
@@ -64,8 +64,10 @@ def packed_temporal_windows(
 
     output_lengths = lengths_tensor // stride
     total_frames = packed_features.shape[0]
-    radius = window_size // 2
-    offsets = torch.arange(-radius, radius + 1, device=packed_features.device)
+    left_radius = (window_size - 1) // 2
+    offsets = (
+        torch.arange(window_size, device=packed_features.device) - left_radius
+    )
     frame_indices = torch.arange(total_frames, device=packed_features.device)
 
     video_ends = torch.cumsum(lengths_tensor, dim=0)

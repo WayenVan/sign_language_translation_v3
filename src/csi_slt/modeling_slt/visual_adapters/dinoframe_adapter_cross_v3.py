@@ -1,4 +1,32 @@
-"""DINOv2 frame adapter with residual next-frame motion fusion."""
+"""DINO frame adapter with static-motion query fusion.
+
+Default data flow (``window_size=3``, ``stride=2``, ``num_queries=4``)::
+
+    packed frames:       x0   x1   x2   x3   ...       temporal length T
+                         |         |
+    window centres:      0         2        ...
+                         |         |
+                         v         v
+    boundary-aware:  [x0,x0,x1] [x1,x2,x3] ...        T / 2 windows
+                       |  |  |
+             +---------+  |  +---------+
+             |            |            |
+             v            v            v
+       static patches   motion delta   three CLS
+             |            |            |
+             |     shared learned Q    |
+             v            v            v
+       static CrossAttn  motion CrossAttn  CLS MLP
+             |            |          + centre-CLS residual
+             +------ query-wise gated fusion ------+
+                                |
+                                v
+                     4 fused tokens / window
+
+The temporal axis is compressed by ``stride`` (2x by default): ``T -> T/2``
+window positions. Token count is not reduced relative to CrossV2: four tokens
+per window give ``4 * T/2 = 2T`` tokens, matching two tokens per input frame.
+"""
 
 import math
 from collections.abc import Sequence
@@ -7,37 +35,36 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from csi_slt.modeling_slt.misc import packed_temporal_windows
 from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackboneOutput
-from csi_slt.modeling_slt.misc import random_derangement
+from csi_slt.modeling_slt.visual_adapters.query_cross_attention import (
+    LearnedQueryBank,
+    QueryCrossAttention,
+)
 
 
-class DINOFrameAdapterCrossV2(nn.Module):
-    """Convert packed DINOv2 features into two tokens per frame.
+class DINOFrameAdapterCrossV3(nn.Module):
+    """Summarize three-frame patch templates with two learned-query branches.
 
-    For each current frame, patches from the next frame are first aligned with
-    the current patches using cosine-similarity aggregation. The aligned
-    temporal difference is then fused through a residual MLP:
-
-        fused_t = x_t + gate * MLP(LN(aligned(x_{t+1}) - x_t))
-
-    Frames are packed along dimension 0 and ``visual_length`` defines the video
-    boundaries. The last frame of every video has no next frame, so its
-    temporal residual is explicitly set to zero. Each frame produces two
-    interleaved LLM tokens: ``[mapped_cls_t, mapped_fused_patch_t]``. The
-    global summary and spatial patch features may have different input widths;
-    each token type therefore has its own input mapper before a shared output
-    projection into the LLM embedding space.
+    Current-to-next-frame differences form the motion source, while original
+    patch features form the appearance source. Both branches share one learned
+    query bank but keep independent cross-attention parameters. A direct CLS
+    window fusion conditions their query-wise gated fusion.
     """
 
     def __init__(
         self,
         input_dim: int,
         output_dim: int,
-        hidden_dim: int | None = None,
         cls_input_dim: int | None = None,
-        temporal_hidden_dim: int | None = None,
+        num_queries: int = 4,
+        query_hidden_dim: int | None = None,
+        num_attention_heads: int = 4,
+        query_ffn_hidden_dim: int | None = None,
+        attention_dropout: float = 0.0,
+        temporal_window_size: int = 3,
+        temporal_window_stride: int = 2,
         temperature: float = 0.1,
-        temporal_gate_init: float = -2.0,  # will be passed through sigmoid to get initial gate value , sigmoid(-2) ~= 0.12
         spatial_window_radius: int | None = 3,
         spatial_grid_size: Sequence[int] | None = None,
     ) -> None:
@@ -45,6 +72,14 @@ class DINOFrameAdapterCrossV2(nn.Module):
 
         if temperature <= 0:
             raise ValueError(f"temperature must be positive, got {temperature}")
+        if isinstance(temporal_window_size, bool) or not isinstance(
+            temporal_window_size, int
+        ):
+            raise TypeError("temporal_window_size must be an integer")
+        if temporal_window_size <= 0:
+            raise ValueError("temporal_window_size must be positive")
+        if temporal_window_stride <= 0:
+            raise ValueError("temporal_window_stride must be positive")
         if spatial_window_radius is not None and (
             isinstance(spatial_window_radius, bool)
             or not isinstance(spatial_window_radius, int)
@@ -63,55 +98,73 @@ class DINOFrameAdapterCrossV2(nn.Module):
                 raise ValueError("spatial_grid_size must contain two positive integers")
             spatial_grid_size = tuple(spatial_grid_size)
 
-        hidden_dim = hidden_dim or output_dim
-        if cls_input_dim is None:
-            cls_input_dim = input_dim
-        temporal_hidden_dim = temporal_hidden_dim or input_dim
+        query_hidden_dim = query_hidden_dim or output_dim
+        cls_input_dim = cls_input_dim or input_dim
+        fusion_ffn_hidden_dim = query_ffn_hidden_dim or query_hidden_dim * 4
         self.input_dim = input_dim
         self.cls_input_dim = cls_input_dim
+        self.num_queries = num_queries
+        self.temporal_window_size = temporal_window_size
+        self.temporal_window_stride = temporal_window_stride
         self.temperature = temperature
         self.spatial_window_radius = spatial_window_radius
         self.spatial_grid_size = spatial_grid_size
 
-        # NOTE: V2 learns an explicit residual transformation of the aligned
-        # next-frame difference instead of concatenating two frame features.
-        self.temporal_norm = nn.LayerNorm(input_dim)
-        self.temporal_mlp = nn.Sequential(
-            nn.Linear(input_dim, temporal_hidden_dim),
+        # Shared relative frame positions align static and motion tokens from
+        # the same ordered window slots, including half-centred even windows.
+        self.frame_position_embedding = nn.Parameter(
+            torch.empty(1, temporal_window_size, 1, input_dim)
+        )  # [1, W, 1, D_patch]
+        nn.init.normal_(self.frame_position_embedding, std=0.02)
+
+        # One semantic query bank reads both sources through independent
+        # attention branches, aligning static and motion slot k.
+        self.query_bank = LearnedQueryBank(num_queries, query_hidden_dim)
+        self.temporal_cross_attention = QueryCrossAttention(
+            source_dim=input_dim,
+            hidden_size=query_hidden_dim,
+            num_heads=num_attention_heads,
+            output_dim=query_hidden_dim,
+            ffn_hidden_size=query_ffn_hidden_dim,
+            dropout=attention_dropout,
+        )
+        self.patch_cross_attention = QueryCrossAttention(
+            source_dim=input_dim,
+            hidden_size=query_hidden_dim,
+            num_heads=num_attention_heads,
+            output_dim=query_hidden_dim,
+            ffn_hidden_size=query_ffn_hidden_dim,
+            dropout=attention_dropout,
+        )
+
+        # Map each CLS independently, fuse the complete window, then add the
+        # mapped centre CLS as an explicit residual.
+        self.cls_frame_norm = nn.LayerNorm(cls_input_dim)
+        self.cls_frame_projection = nn.Linear(cls_input_dim, query_hidden_dim)
+        cls_window_dim = temporal_window_size * query_hidden_dim
+        self.cls_window_norm = nn.LayerNorm(cls_window_dim)
+        self.cls_window_mlp = nn.Sequential(
+            nn.Linear(cls_window_dim, fusion_ffn_hidden_dim),
             nn.GELU(),
-            nn.Linear(temporal_hidden_dim, input_dim),
+            nn.Linear(fusion_ffn_hidden_dim, query_hidden_dim),
         )
 
-        # NOTE: Start with a small temporal contribution (sigmoid(-2) ~= 0.12)
-        # so that early training remains close to the original DINO features.
-        self.temporal_gate = nn.Parameter(torch.tensor(float(temporal_gate_init)))
-
-        # NOTE: Fused patches remain D-dimensional in V2, rather than becoming
-        # 2D-dimensional through concatenation.
-        self.patch_score = nn.Sequential(
-            nn.LayerNorm(input_dim),
-            nn.Linear(input_dim, 1, bias=False),
-        )
-
-        # NOTE: CLS summaries and spatial features may come from different
-        # feature spaces and may not have the same width. Map them independently
-        # into a common hidden space, then share only the final LLM projection.
-        self.cls_mapper = nn.Sequential(
-            nn.LayerNorm(cls_input_dim),
-            nn.Linear(cls_input_dim, hidden_dim),
+        self.gate_norm = nn.LayerNorm(query_hidden_dim * 3)
+        self.motion_gate = nn.Sequential(
+            nn.Linear(query_hidden_dim * 3, query_hidden_dim),
             nn.GELU(),
+            nn.Linear(query_hidden_dim, query_hidden_dim),
         )
-        self.fused_patch_mapper = nn.Sequential(
-            nn.LayerNorm(input_dim),
-            nn.Linear(input_dim, hidden_dim),
+        self.cls_condition_projection = nn.Linear(query_hidden_dim, query_hidden_dim)
+        self.fusion_norm = nn.LayerNorm(query_hidden_dim)
+        self.fusion_ffn = nn.Sequential(
+            nn.Linear(query_hidden_dim, fusion_ffn_hidden_dim),
             nn.GELU(),
+            nn.Dropout(attention_dropout),
+            nn.Linear(fusion_ffn_hidden_dim, query_hidden_dim),
+            nn.Dropout(attention_dropout),
         )
-        self.output_projection = nn.Linear(hidden_dim, output_dim)
-
-        # NOTE: Token-type embeddings let the LLM distinguish global CLS tokens
-        # from local motion-aware patch tokens despite the shared mapper.
-        self.cls_type_embedding = nn.Parameter(torch.zeros(1, output_dim))
-        self.fused_patch_type_embedding = nn.Parameter(torch.zeros(1, output_dim))
+        self.output_projection = nn.Linear(query_hidden_dim, output_dim)
 
     def forward(
         self,
@@ -125,12 +178,12 @@ class DINOFrameAdapterCrossV2(nn.Module):
 
         if visual_length is None:
             raise ValueError(
-                "visual_length must be provided for DINOFrameAdapterCrossV2"
+                "visual_length must be provided for DINOFrameAdapterCrossV3"
             )
         if patch_features is None or cls_token is None:
             raise ValueError(
                 "patch_features and cls_token must be provided for "
-                "DINOFrameAdapterCrossV2"
+                "DINOFrameAdapterCrossV3"
             )
 
         self._validate_inputs(patch_features, cls_token, visual_length)
@@ -149,26 +202,33 @@ class DINOFrameAdapterCrossV2(nn.Module):
             dtype=temporal_delta.dtype
         )
 
-        # TODO: 将temporal_delta 和 patch_features 在 F 维度进行boundray aware 的分组（window）
-
-        # Keep this import below the TODO so everything above remains the V2
-        # frame-level path. Three neighbouring frames form one patch template;
-        # replicate padding is confined to each packed video's own boundary.
-        from csi_slt.modeling_slt.misc import packed_temporal_windows
-
-        # G = sum(visual_length // 2), with three frames in each window.
+        window_size = self.temporal_window_size
+        window_stride = self.temporal_window_stride
+        # G = sum(visual_length // stride).
         temporal_delta, grouped_visual_length = packed_temporal_windows(
-            temporal_delta, visual_length, window_size=3, stride=2
-        )  # [G, 3, P, D_patch], [B]
+            temporal_delta,
+            visual_length,
+            window_size=window_size,
+            stride=window_stride,
+        )  # [G, W, P, D_patch], [B]
         patch_features, patch_grouped_visual_length = packed_temporal_windows(
-            patch_features, visual_length, window_size=3, stride=2
-        )  # [G, 3, P, D_patch], [B]
-        cls_token, cls_grouped_visual_length = packed_temporal_windows(
-            cls_token, visual_length, window_size=3, stride=2
-        )  # [G, 3, D_cls], [B]
+            patch_features,
+            visual_length,
+            window_size=window_size,
+            stride=window_stride,
+        )  # [G, W, P, D_patch], [B]
+        cls_windows, cls_grouped_visual_length = packed_temporal_windows(
+            cls_token,
+            visual_length,
+            window_size=window_size,
+            stride=window_stride,
+        )  # [G, W, D_cls], [B]
         grouped_has_next, mask_grouped_visual_length = packed_temporal_windows(
-            has_next, visual_length, window_size=3, stride=2
-        )  # [G, 3], [B]
+            has_next,
+            visual_length,
+            window_size=window_size,
+            stride=window_stride,
+        )  # [G, W], [B]
         if not (
             torch.equal(grouped_visual_length, patch_grouped_visual_length)
             and torch.equal(grouped_visual_length, cls_grouped_visual_length)
@@ -176,31 +236,105 @@ class DINOFrameAdapterCrossV2(nn.Module):
         ):
             raise RuntimeError("packed temporal group lengths diverged")
 
+        # Encode each patch's relative frame slot before merging W and P. The
+        # same embedding is shared by static and motion branches so their query
+        # slots use aligned temporal semantics.
+        patch_features = patch_features + self.frame_position_embedding
+        temporal_delta = temporal_delta + self.frame_position_embedding
+
         patches_per_frame = patch_features.shape[2]
-        temporal_delta = temporal_delta.flatten(1, 2)  # [G, 3P, D_patch]
-        patch_features = patch_features.flatten(1, 2)  # [G, 3P, D_patch]
+        temporal_delta = temporal_delta.flatten(1, 2)  # [G, WP, D_patch]
+        patch_features = patch_features.flatten(1, 2)  # [G, WP, D_patch]
         grouped_has_next = (
             grouped_has_next[..., None].expand(-1, -1, patches_per_frame).flatten(1, 2)
-        )  # [G, 3P]
+        )  # [G, WP]
+
+        group_count = temporal_delta.shape[0]
+        shared_queries = self.query_bank(group_count)  # [G, N, H]
+        temporal_attention = self.temporal_cross_attention(
+            queries=shared_queries,
+            source=temporal_delta,
+            source_valid_mask=grouped_has_next,
+            return_attention=return_weights,
+        )  # query_features: [G, N, H]
+        patch_attention = self.patch_cross_attention(
+            queries=shared_queries,
+            source=patch_features,
+            return_attention=return_weights,
+        )  # query_features: [G, N, H]
+
+        mapped_cls = self.cls_frame_projection(
+            self.cls_frame_norm(cls_windows)
+        )  # [G, W, H]
+        middle = window_size // 2
+        if window_size % 2 == 1:
+            centre_cls = mapped_cls[:, middle]  # [G, H]
+        else:
+            # An even window is centred between its two middle frames, so its
+            # CLS residual treats both sides symmetrically.
+            centre_cls = (
+                mapped_cls[:, middle - 1] + mapped_cls[:, middle]
+            ) * 0.5  # [G, H]
+        cls_context = centre_cls + self.cls_window_mlp(
+            self.cls_window_norm(mapped_cls.flatten(1))
+        )  # [G, H], with the centre-frame residual
+
+        expanded_cls = cls_context[:, None, :].expand(-1, self.num_queries, -1)
+        static_queries = patch_attention.query_features
+        motion_queries = temporal_attention.query_features
+        gate_input = torch.cat((static_queries, motion_queries, expanded_cls), dim=-1)
+        motion_gate = torch.sigmoid(
+            self.motion_gate(self.gate_norm(gate_input))
+        )  # [G, N, H]
+        # Both cross-attention branches contain the same learned-query identity
+        # residual. Static is the base path, so inject only the motion branch's
+        # learned update instead of counting the shared queries twice.
+        motion_residual = motion_queries - shared_queries
+        fused_queries = (
+            static_queries
+            + motion_gate * motion_residual
+            + self.cls_condition_projection(cls_context)[:, None, :]
+        )
+        fused_queries = fused_queries + self.fusion_ffn(self.fusion_norm(fused_queries))
+        fused_queries = self.output_projection(fused_queries)  # [G, N, D_out]
 
         # if permute_video_tokens is True, randomly shuffle the order of frames within each video.
         if permute_video_tokens:
             raise NotImplementedError(
-                "permute_video_tokens is not implemented for DINOFrameAdapterCrossV2"
+                "permute_video_tokens is not implemented for DINOFrameAdapterCrossV3"
             )
+
+        # Temporal compression is T -> T / stride (2x by default). Each window
+        # emits N query tokens, so total tokens are N * T / stride; with N=4
+        # and stride=2 this is 2T, matching CrossV2's token budget.
+        tokens_per_group = self.num_queries
+        visual_features = fused_queries.flatten(0, 1)  # [G * N, D_out]
+        visual_length = grouped_visual_length * tokens_per_group  # [B]
+        position_ids = torch.cat(
+            [
+                torch.arange(length, device=visual_features.device).repeat_interleave(
+                    tokens_per_group
+                )
+                for length in grouped_visual_length
+            ]
+        )  # [G * N]
+        extras = None
+        if return_weights:
+            extras = {
+                "temporal_attention_weights": temporal_attention.attention_weights,
+                "patch_attention_weights": patch_attention.attention_weights,
+                "temporal_source_valid_mask": grouped_has_next,
+                "motion_gate": motion_gate,
+                "motion_residual": motion_residual,
+                "cls_context": cls_context,
+            }
 
         return VisualAdapterOutput(
             visual_features=visual_features,
-            # NOTE: V2 emits two visual tokens per input frame.
-            visual_length=visual_length * 2,
+            visual_length=visual_length,
             position_ids=position_ids,
-            extras={"patch_weights": patch_weights} if return_weights else None,
+            extras=extras,
         )
-
-    @staticmethod
-    def _permute_video_tokens(cls, fused_patch, patch_weights, visual_length):
-        permutation = random_derangement(visual_length, device=cls.device)
-        return (cls[permutation], fused_patch[permutation], patch_weights[permutation])
 
     def similarity_aggregate(
         self,
@@ -340,16 +474,17 @@ if __name__ == "__main__":
         visual_length=visual_length,
     )
 
-    adapter = DINOFrameAdapterCrossV2(
+    adapter = DINOFrameAdapterCrossV3(
         input_dim=D_PATCH,
         cls_input_dim=D_CLS,
         output_dim=512,
     ).cuda()
     adapter.eval()
     with torch.no_grad():
-        output = adapter(
-            visual_backbone_output, permute_video_tokens=True, return_weights=True
-        )
+        output = adapter(visual_backbone_output, return_weights=True)
         print("Output shape:", output.visual_features.shape)
-        print("Patch weights shape:", output.extras["patch_weights"].shape)
+        print(
+            "Temporal attention shape:",
+            output.extras["temporal_attention_weights"].shape,
+        )
         print("Visual length:", output.visual_length)

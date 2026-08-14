@@ -33,7 +33,7 @@ class _FakeEncoder(nn.Module):
         self.config = SimpleNamespace()
 
 
-def test_default_layers_are_mean_fused_without_changing_feature_width():
+def test_default_layers_start_as_uniform_attention_fusion():
     encoder = _FakeEncoder()
     backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=encoder)
     lengths = torch.tensor([1, 1])
@@ -59,6 +59,28 @@ def test_default_layers_are_mean_fused_without_changing_feature_width():
     )
     assert output.visual_length is lengths
     assert encoder.radio_model.weight.requires_grad is False
+    assert backbone.summary_layer_fusion.layer_bias.requires_grad is True
+    assert backbone.feature_layer_fusion.layer_bias.requires_grad is True
+    torch.testing.assert_close(
+        output.extras["summary_layer_weights"], torch.full((2, 4), 0.25)
+    )
+    torch.testing.assert_close(
+        output.extras["feature_layer_weights"], torch.full((2, 4, 2), 0.25)
+    )
+    (output.visual_features.sum() + output.pooled_visual_features.sum()).backward()
+    assert backbone.summary_layer_fusion.score_mlp[-1].weight.grad.abs().sum() > 0
+    assert backbone.feature_layer_fusion.score_mlp[-1].weight.grad.abs().sum() > 0
+
+
+def test_frozen_encoder_stays_in_eval_while_fusion_trains():
+    encoder = _FakeEncoder()
+    backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=encoder)
+
+    backbone.train()
+
+    assert backbone.training is True
+    assert backbone.summary_layer_fusion.training is True
+    assert encoder.training is False
 
 
 def test_single_output_layer_remains_supported():
@@ -69,9 +91,24 @@ def test_single_output_layer_remains_supported():
     output = backbone(torch.rand(1, 3, 2, 2))
 
     assert backbone.output_layers == (-2,)
+    assert backbone.summary_layer_fusion is None
+    assert backbone.feature_layer_fusion is None
+    assert output.extras is None
     torch.testing.assert_close(
         output.visual_features, torch.full((1, 2, 3), -2.0)
     )
+
+
+def test_encoder_can_be_unfrozen_by_backbone_config():
+    encoder = _FakeEncoder()
+    backbone = CRadioV4Backbone(
+        {"id": "fake", "freeze_visual_encoder": False},
+        c_radio_v4=encoder,
+    )
+
+    assert encoder.radio_model.weight.requires_grad is True
+    backbone.train()
+    assert encoder.training is True
 
 
 @pytest.mark.parametrize("output_layer", [[], [-1, -1], [-1, "-2"], True])

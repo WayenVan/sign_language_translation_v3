@@ -1,0 +1,29 @@
+config:
+  hidden_size: 2048
+  video_soft_token_id: 151656
+  # V3 emits 4 query tokens per stride-2 window: 4 / 2 = 2 tokens per frame.
+  video_token_scale: 2.0
+  dsid_loss_weight: 0.0
+  dsid_js_tau: 0.6919847726821899
+  attention_diversity_loss_weight: 0.001
+  llm_model_name_or_path: Qwen/Qwen3-1.7B
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: [-1, -2, -3, -4]
+    layer_fusion_hidden_dim: 32
+    freeze_visual_encoder: true
+  visual_adapter_type: dinoframe_cross_v3
+  visual_adapter_kwargs:
+    input_dim: 1152
+    cls_input_dim: 2304
+    output_dim: 2048
+    num_queries: 4
+    query_hidden_dim: 1024
+    num_attention_heads: 4
+    query_ffn_hidden_dim: 4096
+    attention_dropout: 0.0
+    temporal_window_size: 2
+    temporal_window_stride: 2
+    temperature: 0.1
+    spatial_window_radius: 3
