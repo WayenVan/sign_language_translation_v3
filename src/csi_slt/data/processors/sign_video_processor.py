@@ -58,10 +58,10 @@ class SignVideoProcessor(BaseVideoProcessor):
             v2.RandomApply(
                 [
                     v2.ColorJitter(
-                        brightness=0.2,
-                        contrast=0.2,
-                        saturation=0.2,
-                        hue=0.5,
+                        brightness=0.15,
+                        contrast=0.15,
+                        saturation=0.15,
+                        hue=0.01,
                     )
                 ],
                 p=0.75,
