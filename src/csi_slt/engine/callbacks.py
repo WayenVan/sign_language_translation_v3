@@ -5,6 +5,7 @@ from transformers.trainer_callback import (
 )
 import os
 import shutil
+from pathlib import Path
 from transformers import logging
 from omegaconf import OmegaConf
 import time
@@ -13,9 +14,76 @@ from ..utils.git_state import save_git_state
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer import _is_peft_model
 from .scheduler import DSIDScheduler
+from .information_visualization import render_llm_attention
 
 
 logger = logging.get_logger(__name__)
+
+
+class EvalInformationVisualizationCallback(TrainerCallback, ExportableState):
+    """Periodically render information from the first evaluation samples."""
+
+    def __init__(self, every_n_evaluations: int = -1, num_samples: int = 4):
+        if isinstance(every_n_evaluations, bool) or not isinstance(
+            every_n_evaluations, int
+        ):
+            raise TypeError("every_n_evaluations must be an integer")
+        if isinstance(num_samples, bool) or not isinstance(num_samples, int):
+            raise TypeError("num_samples must be an integer")
+        if every_n_evaluations == 0 or every_n_evaluations < -1:
+            raise ValueError("every_n_evaluations must be -1 or a positive integer")
+        if num_samples <= 0:
+            raise ValueError("num_samples must be a positive integer")
+
+        self.every_n_evaluations = every_n_evaluations
+        self.num_samples = num_samples
+        self.evaluation_count = 0
+
+    def state(self) -> dict:
+        """Export the evaluation cadence for checkpoint continuation."""
+        return {
+            "args": {
+                "every_n_evaluations": self.every_n_evaluations,
+                "num_samples": self.num_samples,
+            },
+            "attributes": {"evaluation_count": self.evaluation_count},
+        }
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        self.evaluation_count += 1
+        if self.every_n_evaluations == -1:
+            return
+        if self.evaluation_count % self.every_n_evaluations != 0:
+            return
+
+        trainer = kwargs.get("trainer")
+        if trainer is None:
+            raise RuntimeError(
+                "EvalInformationVisualizationCallback requires the trainer"
+            )
+
+        records = trainer.collect_eval_information(self.num_samples)
+        if not trainer.accelerator.is_main_process:
+            return
+
+        output_dir = Path(args.output_dir) / f"eval_info_step{state.global_step}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for record in records:
+            sample_index = record["sample_index"]
+            attention = record["information"].llm_attentions[0][0]
+            visual_mask = record["information"].llm_visual_mask[0]
+            valid_mask = record["attention_mask"].bool()
+            render_llm_attention(
+                attention[valid_mask][:, valid_mask],
+                visual_mask[valid_mask],
+                output_dir / f"sample{sample_index:03d}_layer-1_llm_attention.png",
+            )
+
+        logger.info(
+            "Saved %d evaluation information visualizations to %s",
+            len(records),
+            output_dir,
+        )
 
 
 class DSIDWeightSchedulerCallback(TrainerCallback, ExportableState):

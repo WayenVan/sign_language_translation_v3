@@ -1,8 +1,14 @@
 from types import SimpleNamespace
+from pathlib import Path
 
+import torch
 from torch import nn
 
-from csi_slt.engine.callbacks import ModelInfoCallback
+from csi_slt.engine.callbacks import (
+    EvalInformationVisualizationCallback,
+    ModelInfoCallback,
+)
+from csi_slt.modeling_slt.info_utils import InformationOutput
 
 
 class ExampleModel(nn.Module):
@@ -34,3 +40,43 @@ def test_model_info_callback_prints_aligned_module_classes(capsys):
 
     table_lines = [line for line in output.splitlines() if line.startswith(("+", "|"))]
     assert len({len(line) for line in table_lines}) == 1
+
+
+def test_eval_information_callback_uses_evaluation_cadence_and_flat_paths(
+    tmp_path, monkeypatch
+):
+    information = InformationOutput(
+        llm_attentions=(torch.ones(1, 3, 3),),
+        llm_visual_mask=torch.tensor([[False, True, False]]),
+    )
+    trainer = SimpleNamespace(
+        accelerator=SimpleNamespace(is_main_process=True),
+        collect_eval_information=lambda count: [
+            {
+                "sample_index": 0,
+                "attention_mask": torch.ones(3, dtype=torch.long),
+                "information": information,
+            }
+        ],
+    )
+    rendered_paths = []
+    monkeypatch.setattr(
+        "csi_slt.engine.callbacks.render_llm_attention",
+        lambda attention, visual_mask, output_path: rendered_paths.append(output_path),
+    )
+    callback = EvalInformationVisualizationCallback(
+        every_n_evaluations=2,
+        num_samples=1,
+    )
+    args = SimpleNamespace(output_dir=str(tmp_path))
+    state = SimpleNamespace(global_step=120)
+
+    callback.on_evaluate(args, state, None, trainer=trainer)
+    assert rendered_paths == []
+
+    callback.on_evaluate(args, state, None, trainer=trainer)
+    assert rendered_paths == [
+        Path(tmp_path) / "eval_info_step120" / "sample000_layer-1_llm_attention.png"
+    ]
+    assert rendered_paths[0].parent.is_dir()
+    assert callback.state()["attributes"]["evaluation_count"] == 2

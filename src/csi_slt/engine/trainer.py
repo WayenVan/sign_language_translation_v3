@@ -7,6 +7,7 @@ from .callbacks import (
     SaveHydraConfigCallback,
     ETACallback,
     DSIDWeightSchedulerCallback,
+    EvalInformationVisualizationCallback,
 )
 from torch import nn
 import torch
@@ -27,11 +28,13 @@ from torch.utils.data import DataLoader
 from transformers.utils import logging
 from typing import Callable, Literal, Tuple
 from functools import partial
+import inspect
 
 from csi_slt.data.sampler import (
     GlobalLengthBucketSampler,
     get_dataset_lengths,
 )
+from csi_slt.modeling_slt.info_utils import InformationRequest
 
 logger = logging.get_logger(__name__)
 
@@ -90,6 +93,21 @@ class SltTrainer(Seq2SeqTrainer):
                     resolve=True,
                 )
         self.add_callback(DSIDWeightSchedulerCallback(**dsid_scheduler_kwargs))
+        eval_information_kwargs = {}
+        if hydra_config is not None:
+            eval_information_config = OmegaConf.select(
+                hydra_config,
+                "engine.eval_information",
+                default=None,
+            )
+            if eval_information_config is not None:
+                eval_information_kwargs = OmegaConf.to_container(
+                    eval_information_config,
+                    resolve=True,
+                )
+        self.add_callback(
+            EvalInformationVisualizationCallback(**eval_information_kwargs)
+        )
 
         # if _is_peft_model(unwrap_model(self.model)):
         #     self.add_callback(SaveBaseModelInPEFT())
@@ -115,6 +133,78 @@ class SltTrainer(Seq2SeqTrainer):
             )
         self.args.predict_with_generate = True
         self.hydra_config = hydra_config
+
+    @torch.no_grad()
+    def collect_eval_information(self, num_samples: int) -> list[dict[str, Any]]:
+        """Collect last-layer LLM attention for the first evaluation samples."""
+        if self.eval_dataset is None:
+            raise ValueError("evaluation information requires an eval_dataset")
+        if isinstance(self.eval_dataset, dict):
+            raise TypeError(
+                "evaluation information does not yet support a dictionary of datasets"
+            )
+
+        sample_count = min(num_samples, len(self.eval_dataset))
+        samples = [self.eval_dataset[index] for index in range(sample_count)]
+        batch_size = max(1, min(self.args.eval_batch_size, sample_count))
+
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        forward_parameters = set(inspect.signature(unwrapped_model.forward).parameters)
+        was_training = self.model.training
+        self.model.eval()
+        records = []
+        try:
+            for offset in range(0, sample_count, batch_size):
+                raw_batch = self.eval_data_collator(
+                    samples[offset : offset + batch_size]
+                )
+                model_inputs = {
+                    name: value
+                    for name, value in raw_batch.items()
+                    if name in forward_parameters and name != "information_request"
+                }
+                model_inputs = self._prepare_inputs(model_inputs)
+                current_batch_size = len(samples[offset : offset + batch_size])
+                model_inputs["information_request"] = InformationRequest(
+                    llm_attentions=True,
+                    sample_indices=tuple(range(current_batch_size)),
+                    llm_layers=(-1,),
+                    reduce_heads=True,
+                )
+                outputs = self.model(**model_inputs)
+                information = outputs.information.detach_to_cpu()
+                attention_mask = model_inputs["attention_mask"].detach().cpu()
+
+                for batch_index in range(current_batch_size):
+                    records.append(
+                        {
+                            "sample_index": offset + batch_index,
+                            "attention_mask": attention_mask[batch_index],
+                            "information": type(information)(
+                                llm_attentions=tuple(
+                                    layer[batch_index : batch_index + 1]
+                                    for layer in information.llm_attentions
+                                ),
+                                llm_visual_mask=information.llm_visual_mask[
+                                    batch_index : batch_index + 1
+                                ],
+                                visual_lengths=information.visual_lengths[
+                                    batch_index : batch_index + 1
+                                ],
+                                visual_position_ids=(
+                                    information.visual_position_ids[
+                                        batch_index : batch_index + 1
+                                    ]
+                                    if information.visual_position_ids is not None
+                                    else None
+                                ),
+                            ),
+                        }
+                    )
+        finally:
+            self.model.train(was_training)
+
+        return records
 
     def compute_loss(
         self,
