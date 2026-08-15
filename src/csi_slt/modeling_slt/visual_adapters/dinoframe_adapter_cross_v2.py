@@ -38,7 +38,7 @@ class DINOFrameAdapterCrossV2(nn.Module):
         temporal_hidden_dim: int | None = None,
         temperature: float = 0.1,
         temporal_gate_init: float = -2.0,  # will be passed through sigmoid to get initial gate value , sigmoid(-2) ~= 0.12
-        spatial_window_radius: int | None = 3,
+        spatial_window_radius: int | None = None,
         spatial_grid_size: Sequence[int] | None = None,
     ) -> None:
         super().__init__()
@@ -216,7 +216,12 @@ class DINOFrameAdapterCrossV2(nn.Module):
         base: Tensor,
         shifted: Tensor,
     ) -> Tensor:
-        """Align next-frame patches to current-frame patches."""
+        """Align next-frame patches to current-frame patches.
+
+        By default, every current-frame patch can match every next-frame
+        patch. A local matching window is applied only when
+        ``spatial_window_radius`` is explicitly configured.
+        """
         base_norm = F.normalize(base, dim=-1)
         shifted_norm = F.normalize(shifted, dim=-1)
         similarity = torch.einsum("bnd,btd->bnt", base_norm, shifted_norm)

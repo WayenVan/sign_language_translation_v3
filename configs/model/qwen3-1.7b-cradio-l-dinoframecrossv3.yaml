@@ -23,8 +23,8 @@ config:
     num_attention_heads: 4
     query_ffn_hidden_dim: 4096
     attention_dropout: 0.0
-    temporal_window_size: 2
-    temporal_window_stride: 2
+    temporal_window_size: 4
+    temporal_window_stride: 4
     temporal_hidden_dim: 1152
     temporal_gate_init: -2.0
     temperature: 0.1

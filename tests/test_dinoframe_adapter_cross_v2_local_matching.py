@@ -6,6 +6,19 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2 import (
 )
 
 
+def test_default_radius_disables_the_cross_frame_spatial_window():
+    adapter = DINOFrameAdapterCrossV2(input_dim=2, output_dim=2, temperature=1.0)
+    base = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
+    shifted = torch.tensor([[[0.0, 1.0], [1.0, 0.0]]])
+
+    aligned = adapter.similarity_aggregate(base, shifted)
+    similarity = torch.einsum("bnd,btd->bnt", base, shifted)
+    expected = torch.einsum("bnt,btd->bnd", similarity.softmax(dim=-1), shifted)
+
+    assert adapter.spatial_window_radius is None
+    torch.testing.assert_close(aligned, expected)
+
+
 def test_radius_zero_matches_only_the_same_patch_position():
     adapter = DINOFrameAdapterCrossV2(
         input_dim=2,
