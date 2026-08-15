@@ -10,6 +10,7 @@ from csi_slt.engine.callbacks import (
     EvalInformationVisualizationCallback,
 )
 from csi_slt.engine.trainer import SltTrainer
+from csi_slt.engine.training_args import SltTrainingArguments
 
 
 class _MeanReducedModelWithKwargs(nn.Module):
@@ -148,6 +149,19 @@ class _GenerationModel(nn.Module):
         return torch.cat((input_ids, new_token), dim=-1)
 
 
+class _TeacherForcingGenerationModel(_GenerationModel):
+    def __init__(self):
+        super().__init__()
+        self.teacher_forcing_kwargs = None
+
+    def forward(self, input_ids=None, **kwargs):
+        self.teacher_forcing_kwargs = {
+            "input_ids": input_ids,
+            **kwargs,
+        }
+        return {"loss": self.weight * 0 + 2.5, "logits": torch.empty(0)}
+
+
 def test_prediction_step_uses_prompt_only_generation_fields(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),
@@ -194,9 +208,48 @@ def test_prediction_step_uses_prompt_only_generation_fields(tmp_path):
         }
     )
     generated_tokens, generated_lengths, prompt_lengths = predictions
-    assert generated_tokens.shape == (1, 5)
-    assert generated_lengths.tolist() == [5]
+    assert generated_tokens.shape == (1, 4)
+    assert generated_lengths.tolist() == [4]
     assert prompt_lengths.tolist() == [3]
     output_labels, output_lang_ids = label_output
     assert torch.equal(output_labels.cpu(), labels)
     assert torch.equal(output_lang_ids.cpu(), lang_ids)
+
+
+def test_prediction_step_optionally_computes_teacher_forcing_loss(tmp_path):
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+        predict_with_generate=True,
+        predict_with_teacher_forcing=True,
+        auto_output_dir=False,
+    )
+    model = _TeacherForcingGenerationModel()
+    trainer = SltTrainer(model=model, args=args)
+    trainer._is_predicting = True
+    full_input_ids = torch.tensor([[3, 4, 5, 6]])
+    prompt_input_ids = torch.tensor([[3, 4, 5]])
+
+    loss, _, _ = trainer.prediction_step(
+        model,
+        {
+            "input_ids": full_input_ids,
+            "attention_mask": torch.ones_like(full_input_ids),
+            "position_ids": torch.arange(4).unsqueeze(0),
+            "token_type_ids": torch.zeros_like(full_input_ids),
+            "labels": torch.tensor([[-100, -100, -100, 6]]),
+            "pixel_values": torch.zeros(2, 3, 1, 1),
+            "pixel_values_length": torch.tensor([2]),
+            "generation_input_ids": prompt_input_ids,
+            "generation_attention_mask": torch.ones_like(prompt_input_ids),
+            "generation_token_type_ids": torch.zeros_like(prompt_input_ids),
+        },
+        prediction_loss_only=False,
+    )
+
+    assert loss.item() == 2.5
+    assert torch.equal(model.teacher_forcing_kwargs["input_ids"], full_input_ids)
+    assert torch.equal(
+        model.teacher_forcing_kwargs["labels"],
+        torch.tensor([[-100, -100, -100, 6]]),
+    )

@@ -133,6 +133,7 @@ class SltTrainer(Seq2SeqTrainer):
             )
         self.args.predict_with_generate = True
         self.hydra_config = hydra_config
+        self._is_predicting = False
 
     @torch.no_grad()
     def collect_eval_information(self, num_samples: int) -> list[dict[str, Any]]:
@@ -258,6 +259,69 @@ class SltTrainer(Seq2SeqTrainer):
 
         super().log(logs, start_time=start_time)
 
+    def _prepare_generation_kwargs(self, gen_kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Resolve evaluation-loop generation kwargs and distributed defaults."""
+        if not gen_kwargs and hasattr(self, "_gen_kwargs"):
+            gen_kwargs = self._gen_kwargs.copy()
+        else:
+            gen_kwargs = gen_kwargs.copy()
+
+        for name in ("num_beams", "max_length", "max_new_tokens"):
+            if gen_kwargs.get(name, ...) is None:
+                gen_kwargs.pop(name)
+
+        default_synced_gpus = is_deepspeed_zero3_enabled() or is_fsdp_managed_module(
+            self.model
+        )
+        gen_kwargs.setdefault("synced_gpus", default_synced_gpus)
+        return gen_kwargs
+
+    @staticmethod
+    def _build_generation_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+        """Select prompt-only and shared video fields from an evaluation batch."""
+        generation_field_map = {
+            "generation_input_ids": "input_ids",
+            "generation_attention_mask": "attention_mask",
+            "generation_token_type_ids": "token_type_ids",
+        }
+        required_fields = (*generation_field_map, "pixel_values", "pixel_values_length")
+        missing_fields = [name for name in required_fields if name not in inputs]
+        if missing_fields:
+            raise ValueError(
+                "Evaluation batches are missing required generation fields: "
+                + ", ".join(missing_fields)
+            )
+
+        generation_inputs = {
+            model_name: inputs[batch_name]
+            for batch_name, model_name in generation_field_map.items()
+        }
+        generation_inputs.update(
+            pixel_values=inputs["pixel_values"],
+            pixel_values_length=inputs["pixel_values_length"],
+        )
+        return generation_inputs
+
+    @staticmethod
+    def _build_teacher_forcing_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+        """Select the complete reference sequence used to compute prediction loss."""
+        required_fields = (
+            "input_ids",
+            "attention_mask",
+            "token_type_ids",
+            "position_ids",
+            "pixel_values",
+            "pixel_values_length",
+            "labels",
+        )
+        missing_fields = [name for name in required_fields if name not in inputs]
+        if missing_fields:
+            raise ValueError(
+                "Evaluation batches are missing required teacher-forcing fields: "
+                + ", ".join(missing_fields)
+            )
+        return {name: inputs[name] for name in required_fields}
+
     def prediction_step(
         self,
         model: nn.Module,
@@ -295,159 +359,73 @@ class SltTrainer(Seq2SeqTrainer):
             labels (each being optional).
         """
 
-        try:
-            if not self.args.predict_with_generate or prediction_loss_only:
-                raise NotImplementedError(
-                    "Only `predict_with_generate=True` is implemented in `SltTrainer` for now."
-                )
-                # WARN: this should not happen during evaluation
-                return super().prediction_step(
-                    model,
-                    inputs,
-                    prediction_loss_only=prediction_loss_only,
-                    ignore_keys=ignore_keys,
-                )
-
-            has_labels = "labels" in inputs
-            inputs = self._prepare_inputs(inputs)
-
-            # Priority (handled in generate):
-            # non-`None` gen_kwargs > model.generation_config > default GenerationConfig()
-            if len(gen_kwargs) == 0 and hasattr(self, "_gen_kwargs"):
-                gen_kwargs = self._gen_kwargs.copy()
-            if "num_beams" in gen_kwargs and gen_kwargs["num_beams"] is None:
-                gen_kwargs.pop("num_beams")
-            if "max_length" in gen_kwargs and gen_kwargs["max_length"] is None:
-                gen_kwargs.pop("max_length")
-
-            default_synced_gpus = (
-                is_deepspeed_zero3_enabled() or is_fsdp_managed_module(self.model)
-            )
-            gen_kwargs["synced_gpus"] = gen_kwargs.get(
-                "synced_gpus", default_synced_gpus
+        if not self.args.predict_with_generate or prediction_loss_only:
+            raise NotImplementedError(
+                "Only `predict_with_generate=True` is implemented in SltTrainer."
             )
 
-            generation_field_map = {
-                "generation_input_ids": "input_ids",
-                "generation_attention_mask": "attention_mask",
-                "generation_token_type_ids": "token_type_ids",
-            }
-            missing_generation_fields = [
-                name for name in generation_field_map if name not in inputs
-            ]
-            if missing_generation_fields:
-                raise ValueError(
-                    "Evaluation batches must provide prompt-only generation "
-                    "fields; missing: " + ", ".join(missing_generation_fields)
+        inputs = self._prepare_inputs(inputs)
+        gen_kwargs = self._prepare_generation_kwargs(gen_kwargs)
+        generation_inputs = self._build_generation_inputs(inputs)
+        lang_ids = inputs.get("lang_ids")
+
+        summon_full_params_context = (
+            FullyShardedDataParallel.summon_full_params(self.model)
+            if isinstance(self.model, FullyShardedDataParallel)
+            else contextlib.nullcontext()
+        )
+        with summon_full_params_context:
+            generated_tokens = self.model.generate(**generation_inputs, **gen_kwargs)
+
+        loss = None
+        if self._is_predicting and getattr(
+            self.args, "predict_with_teacher_forcing", False
+        ):
+            teacher_forcing_inputs = self._build_teacher_forcing_inputs(inputs)
+            with torch.no_grad():
+                with self.compute_loss_context_manager():
+                    outputs = model(**teacher_forcing_inputs)
+            if self.label_smoother is not None:
+                loss = (
+                    self.label_smoother(outputs, teacher_forcing_inputs["labels"])
+                    .detach()
+                    .mean()
                 )
-
-            generation_inputs = {
-                model_name: inputs[batch_name]
-                for batch_name, model_name in generation_field_map.items()
-            }
-            for shared_name in ("pixel_values", "pixel_values_length"):
-                if shared_name not in inputs:
-                    raise ValueError(
-                        f"Evaluation batch is missing required {shared_name!r}"
-                    )
-                generation_inputs[shared_name] = inputs[shared_name]
-
-            summon_full_params_context = (
-                FullyShardedDataParallel.summon_full_params(self.model)
-                if isinstance(self.model, FullyShardedDataParallel)
-                else contextlib.nullcontext()
-            )
-
-            # NOTE: language_ids will be save per batch
-            lang_ids = inputs.get("lang_ids")
-
-            with summon_full_params_context:
-                generated_tokens = self.model.generate(
-                    **generation_inputs, **gen_kwargs
-                )
-
-            # Temporary hack to ensure the generation config is not initialized for each iteration of the evaluation loop
-            # TODO: remove this hack when the legacy code that initializes generation_config from a model config is
-            # removed in https://github.com/huggingface/transformers/blob/98d88b23f54e5a23e741833f1e973fdf600cc2c5/src/transformers/generation/utils.py#L1183
-            if self.model.generation_config._from_model_config:
-                self.model.generation_config._from_model_config = False
-
-            # Retrieves GenerationConfig from model.generation_config
-            gen_config = self.model.generation_config
-            default_gen_config = gen_config._get_default_generation_params()
-            gen_config.update(**default_gen_config, defaults_only=True)
-
-            prompt_length_value = generation_inputs["input_ids"].shape[1]
-            max_new_tokens = gen_kwargs.get("max_new_tokens")
-            if max_new_tokens is None:
-                max_new_tokens = gen_config.max_new_tokens
-
-            max_length = gen_kwargs.get("max_length")
-            if max_length is None:
-                max_length = gen_config.max_length
-
-            target_length = (
-                prompt_length_value + max_new_tokens
-                if max_new_tokens is not None
-                else max_length
-            )
-
-            # Pad decoder-only outputs to prompt length plus the generation budget.
-            if target_length is not None and generated_tokens.shape[-1] < target_length:
-                generated_tokens = self._pad_tensors_to_max_len(
-                    generated_tokens, target_length
-                )
-
-                # with torch.no_grad():
-                #     if has_labels:
-                #         with self.compute_loss_context_manager():
-                #             outputs = model(**inputs)
-                #         if self.label_smoother is not None:
-                #             loss = (
-                #                 self.label_smoother(outputs, inputs["labels"]).detach().mean()
-                #             )
-                #         else:
-                #             loss = (
-                #                 (outputs["loss"] if isinstance(outputs, dict) else outputs[0])
-                #                 .detach()
-                #                 .mean()
-                #             )
-                #     else:
-            loss = None  # WARN: we do not compute loss during evaluation, so it always be None
-
-            if self.args.prediction_loss_only:
-                return loss, None, None
-
-            if has_labels:
-                labels = inputs["labels"]
-                if target_length is not None and labels.shape[-1] < target_length:
-                    labels = self._pad_tensors_to_max_len(labels, target_length)
             else:
-                labels = None
+                loss_value = (
+                    outputs.get("loss")
+                    if isinstance(outputs, dict)
+                    else getattr(outputs, "loss", None)
+                )
+                if loss_value is None:
+                    raise RuntimeError(
+                        "The teacher-forcing forward pass did not return a loss"
+                    )
+                loss = loss_value.detach().mean()
 
-            B = generated_tokens.shape[0]
-            generated_batch_size = torch.full(
-                (B,),
-                generated_tokens.shape[1],
-                dtype=torch.long,
-                device=generated_tokens.device,
-            )
-            prompt_length = torch.full(
-                (B,),
-                prompt_length_value,
-                dtype=torch.long,
-                device=generated_tokens.device,
-            )
-        except Exception as e:
-            import traceback
-            import sys
+        # Avoid rebuilding GenerationConfig from the model config for every batch.
+        if self.model.generation_config._from_model_config:
+            self.model.generation_config._from_model_config = False
 
-            traceback.print_exc(file=sys.stderr)
-            raise e
+        labels = inputs.get("labels")
+        batch_size = generated_tokens.shape[0]
+        prompt_length_value = generation_inputs["input_ids"].shape[1]
+        generated_sequence_lengths = torch.full(
+            (batch_size,),
+            generated_tokens.shape[1],
+            dtype=torch.long,
+            device=generated_tokens.device,
+        )
+        prompt_lengths = torch.full(
+            (batch_size,),
+            prompt_length_value,
+            dtype=torch.long,
+            device=generated_tokens.device,
+        )
 
         return (
             loss,
-            (generated_tokens, generated_batch_size, prompt_length),
+            (generated_tokens, generated_sequence_lengths, prompt_lengths),
             (labels, lang_ids if lang_ids is not None else None),
         )
 
@@ -631,4 +609,8 @@ class SltTrainer(Seq2SeqTrainer):
     def predict(self, test_dataset: Dataset, test_collator=None, **gen_kwargs):
         if test_collator is not None:
             self.test_data_collator = test_collator
-        return super().predict(test_dataset=test_dataset, **gen_kwargs)
+        self._is_predicting = True
+        try:
+            return super().predict(test_dataset=test_dataset, **gen_kwargs)
+        finally:
+            self._is_predicting = False

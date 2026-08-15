@@ -14,6 +14,13 @@ logger = logging.get_logger(__name__)
 
 @dataclass
 class SltTrainingArguments(Seq2SeqTrainingArguments):
+    predict_with_teacher_forcing: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether predict performs an additional reference "
+            "teacher-forcing forward pass to compute loss."
+        },
+    )
     auto_output_dir: bool = field(
         default=True,
         metadata={
@@ -28,6 +35,7 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
             " The final output directory will be `<auto_output_root>/<model_name>`."
         },
     )
+
     @staticmethod
     def __init_output_base_name():
         now = datetime.now()
