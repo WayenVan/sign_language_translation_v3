@@ -2,8 +2,8 @@ import hydra
 
 from omegaconf import DictConfig, OmegaConf
 import os
-from ..engine.trainer import SltTrainer
-from ..engine.training_args import SltTrainingArguments
+from ..engine.sft.trainer import SltTrainer
+from ..engine.sft.training_args import SltTrainingArguments
 from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
@@ -13,7 +13,7 @@ from peft import (
     LoraConfig,
     TaskType,
 )
-from csi_slt.engine.metrics import SLTMetric
+from csi_slt.engine.sft.metrics import SLTMetric
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))

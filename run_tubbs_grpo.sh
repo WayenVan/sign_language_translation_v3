@@ -1,0 +1,39 @@
+#! /bin/bash
+
+export PYTHONPATH=./src:$PYTHONPATH
+export CUDA_VISIBLE_DEVICES=0,1
+
+export WANDB_PROJECT=sign_language_translation_v3.0-rlhf
+
+source .venv/bin/activate
+
+# 如果第一个参数是 "debug"，则设置 REPORT_TO=none
+if [[ "${1:-}" == "debug" ]]; then
+  echo "Debug mode: Disabling reporting to WandB."
+  REPORT_TO=none
+else
+  export WANDB_PROJECT=sign_language_translation_v3.0-rlhf
+  REPORT_TO=wandb
+fi
+
+accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train_grpo \
+  --config-name train/grpo \
+  model.checkpoint_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv3-0815-224x224/checkpoint-24000 \
+  engine.training_args.output_dir=outputs/first_demo_grpo \
+  engine.training_args.dataloader_num_workers=12 \
+  engine.training_args.logging_steps=5 \
+  engine.training_args.report_to="$REPORT_TO" \
+  data=ph14t_*x224x224_qwen_multiling \
+  data.processor.video_token_scale=1.0 \
+  data.processor.num_extra_video_tokens=2 \
+  data.processor.video_processor.padding_to_multiple_of=4 \
+  data.processor.video_processor.do_resize=False \
+  data.processor.video_processor.do_normalize=False
+# model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
+# accelerate launch --num_processes=2 --mixed_precision=fp16 \
+# engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train_ft_peft \
+# engine.training_args.dataloader_num_workers=10 # accelerate launch --num_processes=2 --mixed_precision=bf16 \
+# model.config.visual_adapter_kwargs.num_layers=4 \
+# model.config.video_token_scale=0.25 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
+# model=qwen3-8b-dino-b-dinoframecrossv2shuffle \
+#   engine.training_args.output_dir=outputs/qwen3-8b-dinoframev2-shuffle-cross-0730

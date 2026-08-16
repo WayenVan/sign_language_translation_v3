@@ -1,0 +1,78 @@
+# @package _global_
+
+defaults:
+  - /data: ph14t_*x224x224_qwen_multiling
+  - /datamodule: standard
+  - /peft: none
+  - override /hydra/hydra_logging: none
+  - override /hydra/job_logging: none
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  sweep:
+    dir: .
+  output_subdir: null
+
+seed: 42
+
+model:
+  # GRPO starts from a supervised SLT checkpoint rather than freshly
+  # initialized pretrained components. Override this path for each experiment.
+  checkpoint_dir: outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv3-0815-224x224/checkpoint-24000
+
+engine:
+  # With peft=lora, a fresh policy adapter is added to model.checkpoint_dir.
+  model_dtype: auto
+  resume_from_checkpoint: null
+
+  training_args:
+    do_train: true
+    max_steps: 4500
+    per_device_train_batch_size: 2
+    per_device_eval_batch_size: 2
+    gradient_accumulation_steps: 2
+
+    # One prompt produces two sampled translations. The generation batch must
+    # be divisible by num_generations on every distributed launch topology.
+    num_generations: 2
+    num_generations_eval: 2
+    steps_per_generation: 1
+    num_iterations: 1
+
+    max_completion_length: 64
+    generation_kwargs:
+      do_sample: true
+      top_p: 0.95
+      top_k: 50
+      temperature: 0.9
+
+    learning_rate: 5.0e-6
+    lr_scheduler_type: cosine
+    warmup_steps: 30
+
+    eval_strategy: steps
+    eval_steps: 750
+    save_strategy: steps
+    save_steps: 750
+    save_total_limit: 1
+    load_best_model_at_end: true
+    metric_for_best_model: eval_reward
+    greater_is_better: true
+
+    logging_steps: 15
+    report_to: wandb
+    output_dir: outputs/grpo
+    remove_unused_columns: false
+    dataloader_num_workers: 6
+    dataloader_persistent_workers: true
+    dataloader_drop_last: true
+    ddp_find_unused_parameters: true
+
+    # Required by the current multimodal SLT integration.
+    use_vllm: false
+    use_liger_kernel: false
+    beta: 0.0
+    disable_dropout: true
+    slt_disable_auxiliary_losses: true

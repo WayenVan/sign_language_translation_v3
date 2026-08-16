@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 from transformers.trainer_callback import ExportableState
 
-from csi_slt.engine.callbacks import DSIDWeightSchedulerCallback
-from csi_slt.engine.scheduler import DSIDScheduler
+from csi_slt.engine.sft.callbacks import DSIDWeightSchedulerCallback
+from csi_slt.engine.sft.scheduler import DSIDScheduler
 
 
 @pytest.mark.parametrize(

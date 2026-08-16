@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from torch import nn
 
-from csi_slt.engine.callbacks import (
+from csi_slt.engine.sft.callbacks import (
     EvalInformationVisualizationCallback,
     ModelInfoCallback,
 )
@@ -61,7 +61,7 @@ def test_eval_information_callback_uses_evaluation_cadence_and_flat_paths(
     )
     rendered_paths = []
     monkeypatch.setattr(
-        "csi_slt.engine.callbacks.render_llm_attention",
+        "csi_slt.engine.sft.callbacks.render_llm_attention",
         lambda attention, visual_mask, output_path: rendered_paths.append(output_path),
     )
     callback = EvalInformationVisualizationCallback(

@@ -7,7 +7,7 @@ import numpy as np
 from accelerate import Accelerator
 from accelerate.utils import gather_object
 
-from csi_slt.engine.metrics import MetricContext
+from .metrics import MetricContext
 
 
 class XCometLiteMetric:

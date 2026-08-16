@@ -5,12 +5,12 @@ from torch import nn
 from omegaconf import OmegaConf
 from transformers import GenerationConfig, Seq2SeqTrainingArguments
 
-from csi_slt.engine.callbacks import (
+from csi_slt.engine.sft.callbacks import (
     DSIDWeightSchedulerCallback,
     EvalInformationVisualizationCallback,
 )
-from csi_slt.engine.trainer import SltTrainer
-from csi_slt.engine.training_args import SltTrainingArguments
+from csi_slt.engine.sft.trainer import SltTrainer
+from csi_slt.engine.sft.training_args import SltTrainingArguments
 
 
 class _MeanReducedModelWithKwargs(nn.Module):

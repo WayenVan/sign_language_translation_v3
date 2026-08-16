@@ -16,7 +16,7 @@ from transformers import AutoTokenizer
 from csi_slt.data.collators import DSIDCalibrationCollator
 from csi_slt.data.datamodule import DataModule
 from csi_slt.data.dsid_calibration import DSIDCalibrationDataset
-from csi_slt.engine.dsid_calibration import (
+from csi_slt.engine.sft.dsid_calibration import (
     DSIDTauCalibrator,
     calibrate_dsid_tau,
 )

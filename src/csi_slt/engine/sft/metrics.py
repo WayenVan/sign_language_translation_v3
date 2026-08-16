@@ -11,7 +11,7 @@ import evaluate
 import numpy as np
 from sacrebleu.metrics import BLEU
 
-from ..constants import LANGUAGE_MAP
+from ...constants import LANGUAGE_MAP
 
 
 class PredictionOutput(Protocol):

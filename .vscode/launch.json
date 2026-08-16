@@ -34,6 +34,37 @@
       ]
     },
     {
+      "name": "train_grpo",
+      "type": "python",
+      "request": "launch",
+      "module": "accelerate.commands.launch",
+      "console": "integratedTerminal",
+      "env": {
+        "PYTHONPATH": "./src:${env:PYTHONPATH}",
+        "CUDA_VISIBLE_DEVICES": "0",
+        "WANDB_PROJECT": "debugs"
+      },
+      "justMyCode": false,
+      "args": [
+        "--num_processes=1",
+        "--mixed_precision=bf16",
+        "-m",
+        "csi_slt.commands.train_grpo",
+        "datamodule=shared_subset",
+        "engine.training_args.max_steps=100",
+        "engine.training_args.report_to=none",
+        "engine.training_args.output_dir=outputs/debug_grpo",
+        "engine.training_args.dataloader_num_workers=0",
+        "engine.training_args.eval_strategy=no",
+        "engine.training_args.save_strategy=no",
+        "engine.training_args.load_best_model_at_end=false",
+        "engine.training_args.dataloader_persistent_workers=false",
+        "data.processor.video_token_scale=1.0",
+        "data.processor.video_processor.padding_to_multiple_of=4",
+        "data.processor.video_processor.do_normalize=False"
+      ]
+    },
+    {
       "name": "preprocess",
       "type": "python",
       "request": "launch",

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 from transformers import AutoTokenizer
 
-from csi_slt.engine.metrics import SLTMetric
+from csi_slt.engine.sft.metrics import SLTMetric
 from csi_slt.constants import LANGUAGE_MAP
 
 

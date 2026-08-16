@@ -10,7 +10,7 @@ from transformers import logging
 from omegaconf import OmegaConf
 import time
 from accelerate import Accelerator
-from ..utils.git_state import save_git_state
+from ...utils.git_state import save_git_state
 from transformers.modeling_utils import unwrap_model
 from transformers.trainer import _is_peft_model
 from .scheduler import DSIDScheduler
