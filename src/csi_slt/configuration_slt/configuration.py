@@ -47,8 +47,6 @@ class SltConfig(PretrainedConfig):
         visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
-        dsid_loss_weight: float = 0.0,
-        dsid_js_tau: Optional[float] = None,
         attention_diversity_loss_weight: float = 0.000,
         **kwargs: Any,
     ):
@@ -99,13 +97,6 @@ class SltConfig(PretrainedConfig):
                 adapter constructor. Its output width must match ``hidden_size``
                 and its temporal downsampling must agree with
                 ``video_token_scale``.
-            dsid_loss_weight: Maximum coefficient applied to the D-SID loss.
-                A value of zero disables both text-teacher forward passes.
-                When enabled, all student LLM parameters must remain frozen so
-                this objective updates only the visual conditioning interface.
-            dsid_js_tau: Fixed JS-divergence normalization threshold. It must be
-                calibrated from training-set target positions and supplied when
-                ``dsid_loss_weight`` is positive.
             attention_diversity_loss_weight: Coefficient applied to the sum of
                 static- and motion-branch query attention diversity losses.
                 It is active only when the visual adapter returns both sets of
@@ -131,9 +122,6 @@ class SltConfig(PretrainedConfig):
             "alignment_beta_null",
             "alignment_beta_tv",
             "alignment_pooling_distill_weight",
-            # Scheduling is now owned by ``engine.dsid_scheduler``.
-            "dsid_warmup_ratio",
-            "dsid_decay_ratio",
         ):
             kwargs.pop(retired_key, None)
 
@@ -152,25 +140,6 @@ class SltConfig(PretrainedConfig):
         self.visual_adapter_kwargs = (
             visual_adapter_kwargs if visual_adapter_kwargs is not None else {}
         )
-        if isinstance(dsid_loss_weight, bool) or not isinstance(
-            dsid_loss_weight, (int, float)
-        ):
-            raise TypeError("dsid_loss_weight must be a real number")
-        if dsid_loss_weight < 0.0:
-            raise ValueError("dsid_loss_weight must be non-negative")
-        if dsid_js_tau is not None:
-            if isinstance(dsid_js_tau, bool) or not isinstance(
-                dsid_js_tau, (int, float)
-            ):
-                raise TypeError("dsid_js_tau must be a real number or None")
-            if dsid_js_tau < 1e-8:
-                raise ValueError("dsid_js_tau must be at least 1e-8")
-        if dsid_loss_weight > 0.0 and dsid_js_tau is None:
-            raise ValueError(
-                "dsid_js_tau must be provided when dsid_loss_weight is positive"
-            )
-        self.dsid_loss_weight = float(dsid_loss_weight)
-        self.dsid_js_tau = float(dsid_js_tau) if dsid_js_tau is not None else None
         if isinstance(attention_diversity_loss_weight, bool) or not isinstance(
             attention_diversity_loss_weight, (int, float)
         ):

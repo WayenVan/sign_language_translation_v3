@@ -522,76 +522,6 @@ class SignTranslationProcessor(ProcessorMixin):
                     f"{expected_token_counts.tolist()}."
                 )
 
-    def _validate_teacher_path(
-        self,
-        path_name: str,
-        path: _TextPathFeatures,
-        expected_source_ids: Sequence[Sequence[int]],
-    ) -> None:
-        """Validate a text-only teacher path and its source content."""
-        self._validate_source_content(path_name, path, expected_source_ids)
-        if bool(path.token_type_ids.any()) or bool(path.prompt_token_type_ids.any()):
-            raise ValueError(f"{path_name} must not mark any token as video.")
-
-    @staticmethod
-    def _validate_corresponding_paths(
-        paths: Mapping[str, _TextPathFeatures],
-        target_ids: Sequence[Sequence[int]],
-    ) -> None:
-        """Ensure paths differ only in source and align target position-by-position."""
-        if not paths:
-            raise ValueError("At least one text path is required for validation.")
-
-        for path_name, path in paths.items():
-            if path.input_ids.size(0) != len(target_ids):
-                raise ValueError(
-                    f"{path_name} batch size does not match target_ids batch size."
-                )
-            for batch_index, expected_target in enumerate(target_ids):
-                observed_target = path.labels[batch_index][
-                    path.labels[batch_index].ne(-100)
-                ].tolist()
-                if observed_target != list(expected_target):
-                    raise ValueError(
-                        f"{path_name} target tokens do not align at batch index "
-                        f"{batch_index}."
-                    )
-
-        reference_name, reference_path = next(iter(paths.items()))
-        for batch_index in range(len(target_ids)):
-            reference_mask = (
-                reference_path.attention_mask[batch_index].bool()
-                & ~reference_path.source_mask[batch_index].bool()
-            )
-            reference_tokens = reference_path.input_ids[batch_index][
-                reference_mask
-            ].tolist()
-            for path_name, path in paths.items():
-                non_source_mask = (
-                    path.attention_mask[batch_index].bool()
-                    & ~path.source_mask[batch_index].bool()
-                )
-                non_source_tokens = path.input_ids[batch_index][
-                    non_source_mask
-                ].tolist()
-                if non_source_tokens != reference_tokens:
-                    raise ValueError(
-                        f"{path_name} and {reference_name} differ outside the "
-                        f"source span at batch index {batch_index}."
-                    )
-
-    @staticmethod
-    def _teacher_path_data(
-        prefix: str, path: _TextPathFeatures
-    ) -> dict[str, torch.Tensor]:
-        """Expose the tensors needed for a frozen text-teacher forward pass."""
-        return {
-            f"{prefix}_input_ids": path.input_ids,
-            f"{prefix}_attention_mask": path.attention_mask,
-            f"{prefix}_position_ids": path.position_ids,
-            f"{prefix}_labels": path.labels,
-        }
-
     def _encode_prompts_and_targets(
         self,
         text: Sequence[str],
@@ -618,98 +548,6 @@ class SignTranslationProcessor(ProcessorMixin):
             self._encode_text_segments(labels),
             language_ids,
         )
-
-    def _build_dsid_teacher_paths(
-        self,
-        encoded_prompt_parts: Sequence[_EncodedPromptParts],
-        target_ids: Sequence[Sequence[int]],
-        pseudo_gloss_ids: Sequence[Sequence[int]],
-    ) -> tuple[_TextPathFeatures, _TextPathFeatures]:
-        """Build and mutually validate pseudo-gloss and empty-source paths."""
-        pseudo_gloss_path = self._process_text_path(
-            encoded_prompt_parts,
-            pseudo_gloss_ids,
-            target_ids,
-            source_token_type=0,
-        )
-        empty_source_ids = [[] for _ in target_ids]
-        empty_source_path = self._process_text_path(
-            encoded_prompt_parts,
-            empty_source_ids,
-            target_ids,
-            source_token_type=0,
-        )
-
-        self._validate_teacher_path(
-            "pseudo-gloss teacher path",
-            pseudo_gloss_path,
-            pseudo_gloss_ids,
-        )
-        self._validate_teacher_path(
-            "empty-source teacher path",
-            empty_source_path,
-            empty_source_ids,
-        )
-        self._validate_corresponding_paths(
-            {
-                "pseudo-gloss teacher path": pseudo_gloss_path,
-                "empty-source teacher path": empty_source_path,
-            },
-            target_ids,
-        )
-        return pseudo_gloss_path, empty_source_path
-
-    def process_dsid_teacher_paths(
-        self,
-        text: Sequence[str] | str,
-        src_lang: Sequence[str] | str,
-        pseudo_gloss: Sequence[str] | str,
-        *,
-        add_bos_token: bool = False,
-        add_eos_token: bool = True,
-    ) -> BatchFeature:
-        """Build the two D-SID teacher paths without reading or processing video."""
-        text = [text] if isinstance(text, str) else list(text)
-        src_lang = [src_lang] if isinstance(src_lang, str) else list(src_lang)
-        pseudo_gloss = (
-            [pseudo_gloss] if isinstance(pseudo_gloss, str) else list(pseudo_gloss)
-        )
-        if not text:
-            raise ValueError("text must contain at least one sample")
-        for name, values in (
-            ("src_lang", src_lang),
-            ("pseudo_gloss", pseudo_gloss),
-        ):
-            if len(values) != len(text):
-                raise ValueError(
-                    f"{name} batch size ({len(values)}) does not match text "
-                    f"batch size ({len(text)})"
-                )
-        for name, values in (
-            ("text", text),
-            ("src_lang", src_lang),
-            ("pseudo_gloss", pseudo_gloss),
-        ):
-            if not all(isinstance(value, str) for value in values):
-                raise TypeError(f"every item in {name} must be a string")
-
-        encoded_prompt_parts, target_ids, _ = self._encode_prompts_and_targets(
-            text,
-            src_lang,
-            add_bos_token=add_bos_token,
-            add_eos_token=add_eos_token,
-        )
-        pseudo_gloss_ids = self._encode_text_segments(pseudo_gloss)
-        pseudo_gloss_path, empty_source_path = self._build_dsid_teacher_paths(
-            encoded_prompt_parts,
-            target_ids,
-            pseudo_gloss_ids,
-        )
-        data = {
-            **self._teacher_path_data("pseudo_gloss_teacher", pseudo_gloss_path),
-            **self._teacher_path_data("empty_source_teacher", empty_source_path),
-        }
-        return BatchFeature(data=data, tensor_type=TensorType.PYTORCH)
 
     @staticmethod
     def _validate_and_batch_inputs(
@@ -841,8 +679,7 @@ class SignTranslationProcessor(ProcessorMixin):
         video_lengths = video_batch_features.pixel_values_lengths.cpu().numpy()
         video_lengths_tensor = video_batch_features.pixel_values_lengths
 
-        # Build the video-conditioned text path. Keeping source boundaries
-        # explicit lets the distillation paths reuse the same processing logic.
+        # Build the video-conditioned text path.
         encoded_prompt_parts, target_ids, language_ids = (
             self._encode_prompts_and_targets(
                 text,
@@ -863,11 +700,9 @@ class SignTranslationProcessor(ProcessorMixin):
         self._validate_video_path(video_path, video_source_ids)
 
         # Keep the standalone pseudo-gloss fields for batch inspection and
-        # compatibility, while reusing exactly the same token IDs as the
-        # pseudo-gloss teacher source.
+        # compatibility.
         pseudo_gloss_ids = None
         pseudo_gloss_attention_mask = None
-        teacher_path_data: dict[str, torch.Tensor] = {}
         if pseudo_gloss is not None:
             unpadded_pseudo_gloss_ids = self._encode_text_segments(pseudo_gloss)
             pseudo_gloss_ids = self._left_pad_sequences(
@@ -876,37 +711,6 @@ class SignTranslationProcessor(ProcessorMixin):
             pseudo_gloss_attention_mask = self._attention_mask_for(
                 unpadded_pseudo_gloss_ids, pseudo_gloss_ids.size(1)
             )
-
-            # The two frozen-teacher paths are training-only. Evaluation keeps
-            # its existing prompt-only generation inputs and standalone gloss
-            # fields without paying for unused teacher sequences.
-            if training:
-                pseudo_gloss_teacher_path, empty_source_teacher_path = (
-                    self._build_dsid_teacher_paths(
-                        encoded_prompt_parts,
-                        target_ids,
-                        unpadded_pseudo_gloss_ids,
-                    )
-                )
-                self._validate_corresponding_paths(
-                    {
-                        "video path": video_path,
-                        "pseudo-gloss teacher path": pseudo_gloss_teacher_path,
-                        "empty-source teacher path": empty_source_teacher_path,
-                    },
-                    target_ids,
-                )
-
-                teacher_path_data.update(
-                    self._teacher_path_data(
-                        "pseudo_gloss_teacher", pseudo_gloss_teacher_path
-                    )
-                )
-                teacher_path_data.update(
-                    self._teacher_path_data(
-                        "empty_source_teacher", empty_source_teacher_path
-                    )
-                )
 
         data = {
             "pixel_values": video_batch_features.pixel_values,
@@ -926,7 +730,6 @@ class SignTranslationProcessor(ProcessorMixin):
         if pseudo_gloss_ids is not None:
             data["pseudo_gloss_input_ids"] = pseudo_gloss_ids
             data["pseudo_gloss_attention_mask"] = pseudo_gloss_attention_mask
-        data.update(teacher_path_data)
         if semantic_ids is not None:
             data["semantic_ids"] = torch.tensor(
                 [_stable_semantic_id(value) for value in semantic_ids],

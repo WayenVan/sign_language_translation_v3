@@ -33,27 +33,6 @@ def test_retired_contrastive_and_alignment_config_keys_are_ignored():
     assert not hasattr(config, "alignment_pooling_distill_weight")
 
 
-def test_dsid_config_requires_a_calibrated_tau_when_enabled():
-    with pytest.raises(ValueError, match="dsid_js_tau must be provided"):
-        SltConfig(
-            llm_model_name_or_path="Qwen/Qwen3-test",
-            llm_config=_llm_config(),
-            dsid_loss_weight=1.0,
-        )
-
-
-def test_dsid_config_accepts_valid_loss_values():
-    config = SltConfig(
-        llm_model_name_or_path="Qwen/Qwen3-test",
-        llm_config=_llm_config(),
-        dsid_loss_weight=0.75,
-        dsid_js_tau=0.08,
-    )
-
-    assert config.dsid_loss_weight == 0.75
-    assert config.dsid_js_tau == 0.08
-
-
 def test_attention_diversity_loss_weight_is_configurable():
     config = SltConfig(
         llm_model_name_or_path="Qwen/Qwen3-test",
@@ -73,15 +52,3 @@ def test_attention_diversity_loss_weight_rejects_invalid_values(weight):
             llm_config=_llm_config(),
             attention_diversity_loss_weight=weight,
         )
-
-
-def test_old_model_level_dsid_schedule_keys_are_ignored():
-    config = SltConfig(
-        llm_model_name_or_path="Qwen/Qwen3-test",
-        llm_config=_llm_config(),
-        dsid_warmup_ratio=0.2,
-        dsid_decay_ratio=0.4,
-    )
-
-    assert not hasattr(config, "dsid_warmup_ratio")
-    assert not hasattr(config, "dsid_decay_ratio")

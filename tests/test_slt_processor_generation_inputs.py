@@ -1,4 +1,3 @@
-from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -244,7 +243,7 @@ def test_rendered_prompt_requires_exactly_one_source_sentinel():
         )
 
 
-def test_training_builds_corresponding_pseudo_gloss_and_empty_teacher_paths():
+def test_training_keeps_standalone_pseudo_gloss_without_teacher_paths():
     processor = _make_processor()
     output = processor(
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
@@ -254,76 +253,9 @@ def test_training_builds_corresponding_pseudo_gloss_and_empty_teacher_paths():
         training=True,
     )
 
-    teacher_prefixes = ("pseudo_gloss_teacher", "empty_source_teacher")
-    for prefix in teacher_prefixes:
-        for suffix in ("input_ids", "attention_mask", "position_ids", "labels"):
-            assert f"{prefix}_{suffix}" in output
-        assert output[f"{prefix}_input_ids"].shape == output[f"{prefix}_labels"].shape
-
-    before = processor.tokenizer._encode("prompt-en:")
-    after = processor.tokenizer._encode(":")
-    target = processor.tokenizer._encode("answer<eos>")
-    pseudo_source = processor.tokenizer._encode("GLOSS")
-
-    assert output["input_ids"][0].tolist() == before + [7] * 4 + after + target
-    assert output["pseudo_gloss_teacher_input_ids"][0].tolist() == (
-        before + pseudo_source + after + target
-    )
-    assert output["empty_source_teacher_input_ids"][0].tolist() == (
-        before + after + target
-    )
-
-    expected_target = torch.tensor(target)
-    for labels in (
-        output["labels"],
-        output["pseudo_gloss_teacher_labels"],
-        output["empty_source_teacher_labels"],
-    ):
-        valid_labels = labels[0][labels[0] != -100]
-        assert torch.equal(valid_labels, expected_target)
-
-
-def test_text_only_dsid_processing_matches_training_paths_without_video_io():
-    processor = _make_processor()
-    common = {
-        "text": ["short", "a longer answer"],
-        "src_lang": ["en", "de"],
-        "pseudo_gloss": ["ONE", "TWO THREE"],
-    }
-    training_output = processor(
-        videos=[
-            np.zeros((4, 1, 1, 3), dtype=np.uint8),
-            np.zeros((8, 1, 1, 3), dtype=np.uint8),
-        ],
-        training=True,
-        **common,
-    )
-    video_calls_before = list(processor.video_processor.training_values)
-
-    teacher_output = processor.process_dsid_teacher_paths(**common)
-
-    for prefix in ("pseudo_gloss_teacher", "empty_source_teacher"):
-        for suffix in ("input_ids", "attention_mask", "position_ids", "labels"):
-            name = f"{prefix}_{suffix}"
-            assert torch.equal(teacher_output[name], training_output[name])
-    assert processor.video_processor.training_values == video_calls_before
-
-
-def test_empty_pseudo_gloss_and_empty_source_paths_are_token_identical():
-    processor = _make_processor()
-    output = processor(
-        videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
-        text=["answer"],
-        src_lang=["en"],
-        pseudo_gloss=[""],
-        training=True,
-    )
-
-    for suffix in ("input_ids", "attention_mask", "position_ids", "labels"):
-        assert torch.equal(
-            output[f"pseudo_gloss_teacher_{suffix}"],
-            output[f"empty_source_teacher_{suffix}"],
-        )
+    assert "pseudo_gloss_input_ids" in output
+    assert "pseudo_gloss_attention_mask" in output
+    assert not any("_teacher_" in name for name in output)
 
 
 def test_evaluation_omits_training_only_teacher_paths():
@@ -338,45 +270,6 @@ def test_evaluation_omits_training_only_teacher_paths():
 
     assert "pseudo_gloss_input_ids" in output
     assert not any("_teacher_" in name for name in output)
-
-
-def test_cross_path_validation_rejects_non_source_differences():
-    processor = _make_processor()
-    prompt_parts = processor._encode_prompt_parts(
-        [processor._get_prompt_parts_for_lang("en", False)]
-    )
-    target_ids = [processor.tokenizer._encode("answer<eos>")]
-    video_path = processor._process_text_path(
-        prompt_parts, [[7] * 4], target_ids, source_token_type=1
-    )
-    pseudo_path = processor._process_text_path(
-        prompt_parts,
-        [processor.tokenizer._encode("GLOSS")],
-        target_ids,
-        source_token_type=0,
-    )
-    empty_path = processor._process_text_path(
-        prompt_parts, [[]], target_ids, source_token_type=0
-    )
-
-    corrupted_ids = pseudo_path.input_ids.clone()
-    invariant_prompt_mask = (
-        pseudo_path.attention_mask.bool()
-        & ~pseudo_path.source_mask.bool()
-        & pseudo_path.labels.eq(-100)
-    )
-    corrupted_ids[invariant_prompt_mask] += 1
-    corrupted_pseudo_path = replace(pseudo_path, input_ids=corrupted_ids)
-
-    with pytest.raises(ValueError, match="differ outside the source span"):
-        processor._validate_corresponding_paths(
-            {
-                "video path": video_path,
-                "pseudo path": corrupted_pseudo_path,
-                "empty path": empty_path,
-            },
-            target_ids,
-        )
 
 
 def test_processor_encodes_dataset_semantic_ids_deterministically():

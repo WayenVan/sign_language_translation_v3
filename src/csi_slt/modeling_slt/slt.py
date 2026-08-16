@@ -1,5 +1,4 @@
 from copy import deepcopy
-from contextlib import contextmanager, nullcontext
 from typing import Callable, Optional
 
 import torch
@@ -18,11 +17,6 @@ from csi_slt.modeling_slt.info_utils import (
     InformationRequest,
     build_information_output,
 )
-from csi_slt.modeling_slt.dsid import (
-    DSIDLossOutput,
-    compute_dsid_loss,
-)
-
 from peft import get_peft_model, LoraConfig
 from ..configuration_slt.configuration import SltConfig
 from .output_utils import (
@@ -182,10 +176,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.config.num_extra_tokens = 2  # Start and end video tokens.
         self.config.is_encoder_decoder = False
         self.config.is_decoder = True
-        # An engine-owned scheduler updates this runtime coefficient during
-        # training. Keep the configured maximum as the default for direct use.
-        self._current_dsid_loss_weight = self.config.dsid_loss_weight
-
         self.post_init()
 
         # NOTE: tie the weights when using LoRA initialization
@@ -612,115 +602,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             ignore_index=-100,
         )
 
-    def set_dsid_loss_weight(self, weight: float) -> float:
-        """Set the current externally scheduled D-SID coefficient."""
-        weight = float(weight)
-        if not 0.0 <= weight <= self.config.dsid_loss_weight:
-            raise ValueError(
-                "scheduled D-SID weight must be between zero and "
-                f"dsid_loss_weight ({self.config.dsid_loss_weight}), got {weight}"
-            )
-        self._current_dsid_loss_weight = weight
-        return self._current_dsid_loss_weight
-
-    @contextmanager
-    def _frozen_text_teacher_context(self):
-        """Run the shared base LLM in eval mode, without gradients or LoRA."""
-        was_training = self.llm.training
-        disable_adapter = nullcontext()
-        if self.config.llm_lora:
-            if not hasattr(self.llm, "disable_adapter"):
-                raise RuntimeError(
-                    "D-SID requires a PEFT model exposing disable_adapter() so "
-                    "the text teacher remains LoRA-off"
-                )
-            disable_adapter = self.llm.disable_adapter()
-
-        self.llm.eval()
-        try:
-            with torch.no_grad(), disable_adapter:
-                yield
-        finally:
-            self.llm.train(was_training)
-
-    def _compute_dsid_training_loss(
-        self,
-        student_logits: torch.Tensor,
-        student_labels: torch.Tensor,
-        *,
-        pseudo_gloss_teacher_input_ids: Optional[torch.Tensor],
-        pseudo_gloss_teacher_attention_mask: Optional[torch.Tensor],
-        pseudo_gloss_teacher_position_ids: Optional[torch.Tensor],
-        pseudo_gloss_teacher_labels: Optional[torch.Tensor],
-        empty_source_teacher_input_ids: Optional[torch.Tensor],
-        empty_source_teacher_attention_mask: Optional[torch.Tensor],
-        empty_source_teacher_position_ids: Optional[torch.Tensor],
-        empty_source_teacher_labels: Optional[torch.Tensor],
-    ) -> DSIDLossOutput:
-        """Run both frozen text paths and compute target-aligned D-SID."""
-        trainable_llm_parameters = [
-            name
-            for name, parameter in self.llm.named_parameters()
-            if parameter.requires_grad
-        ]
-        if trainable_llm_parameters:
-            preview = ", ".join(trainable_llm_parameters[:3])
-            raise RuntimeError(
-                "D-SID adapter-only gradient routing requires every student LLM "
-                f"parameter to be frozen; found trainable parameters: {preview}"
-            )
-
-        teacher_inputs = {
-            "pseudo_gloss_teacher_input_ids": pseudo_gloss_teacher_input_ids,
-            "pseudo_gloss_teacher_attention_mask": (
-                pseudo_gloss_teacher_attention_mask
-            ),
-            "pseudo_gloss_teacher_position_ids": pseudo_gloss_teacher_position_ids,
-            "pseudo_gloss_teacher_labels": pseudo_gloss_teacher_labels,
-            "empty_source_teacher_input_ids": empty_source_teacher_input_ids,
-            "empty_source_teacher_attention_mask": (
-                empty_source_teacher_attention_mask
-            ),
-            "empty_source_teacher_position_ids": empty_source_teacher_position_ids,
-            "empty_source_teacher_labels": empty_source_teacher_labels,
-        }
-        missing = [name for name, value in teacher_inputs.items() if value is None]
-        if missing:
-            raise ValueError(
-                "D-SID is enabled during training, but the batch is missing: "
-                + ", ".join(missing)
-            )
-
-        with self._frozen_text_teacher_context():
-            gloss_outputs = self.llm(
-                input_ids=pseudo_gloss_teacher_input_ids,
-                attention_mask=pseudo_gloss_teacher_attention_mask,
-                position_ids=pseudo_gloss_teacher_position_ids,
-                use_cache=False,
-                output_attentions=False,
-                output_hidden_states=False,
-                return_dict=True,
-            )
-            empty_outputs = self.llm(
-                input_ids=empty_source_teacher_input_ids,
-                attention_mask=empty_source_teacher_attention_mask,
-                position_ids=empty_source_teacher_position_ids,
-                use_cache=False,
-                output_attentions=False,
-                output_hidden_states=False,
-                return_dict=True,
-            )
-
-        return compute_dsid_loss(
-            student_logits,
-            student_labels,
-            gloss_outputs.logits,
-            pseudo_gloss_teacher_labels,
-            empty_outputs.logits,
-            empty_source_teacher_labels,
-            js_tau=self.config.dsid_js_tau,
-        )
-
     def forward(
         self,
         input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <video_soft_token>, ...]
@@ -737,14 +618,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         pseudo_gloss_input_ids: Optional[torch.Tensor] = None,
         pseudo_gloss_attention_mask: Optional[torch.Tensor] = None,
         semantic_ids: Optional[torch.Tensor] = None,
-        pseudo_gloss_teacher_input_ids: Optional[torch.Tensor] = None,
-        pseudo_gloss_teacher_attention_mask: Optional[torch.Tensor] = None,
-        pseudo_gloss_teacher_position_ids: Optional[torch.Tensor] = None,
-        pseudo_gloss_teacher_labels: Optional[torch.Tensor] = None,
-        empty_source_teacher_input_ids: Optional[torch.Tensor] = None,
-        empty_source_teacher_attention_mask: Optional[torch.Tensor] = None,
-        empty_source_teacher_position_ids: Optional[torch.Tensor] = None,
-        empty_source_teacher_labels: Optional[torch.Tensor] = None,
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
         # ------------ NOTE: special kwars for experimental features ------------
@@ -908,25 +781,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             else None
         )
         loss = ce_loss
-        dsid_output = None
-        if ce_loss is not None and self.training and self.config.dsid_loss_weight > 0.0:
-            dsid_output = self._compute_dsid_training_loss(
-                outputs.logits,
-                labels,
-                pseudo_gloss_teacher_input_ids=pseudo_gloss_teacher_input_ids,
-                pseudo_gloss_teacher_attention_mask=(
-                    pseudo_gloss_teacher_attention_mask
-                ),
-                pseudo_gloss_teacher_position_ids=pseudo_gloss_teacher_position_ids,
-                pseudo_gloss_teacher_labels=pseudo_gloss_teacher_labels,
-                empty_source_teacher_input_ids=empty_source_teacher_input_ids,
-                empty_source_teacher_attention_mask=(
-                    empty_source_teacher_attention_mask
-                ),
-                empty_source_teacher_position_ids=empty_source_teacher_position_ids,
-                empty_source_teacher_labels=empty_source_teacher_labels,
-            )
-            loss = ce_loss + self._current_dsid_loss_weight * dsid_output.loss
 
         attention_diversity_loss = None
         if (
@@ -958,36 +812,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         loss_info = (
             {
-                # Final objective: CE + scheduled D-SID + attention diversity.
+                # Final objective: CE + attention diversity.
                 "main_loss": loss.detach(),
             }
             if loss is not None
             else None
         )
-        if dsid_output is not None:
-            weighted_dsid_loss = self._current_dsid_loss_weight * dsid_output.loss
-            loss_info.update(
-                {
-                    # Video student's teacher-forcing translation CE.
-                    "ce_loss": ce_loss.detach(),
-                    # Raw D-SID before applying the scheduled coefficient.
-                    "dsid_loss": dsid_output.loss.detach(),
-                    # D-SID contribution actually added to the total loss.
-                    "dsid_weighted_loss": weighted_dsid_loss.detach(),
-                    # Current externally scheduled D-SID coefficient (lambda).
-                    "dsid_loss_weight": loss.new_tensor(self._current_dsid_loss_weight),
-                    # Mean JS(q_g, q_0) over all valid target positions.
-                    "dsid_mean_js": dsid_output.mean_js.detach(),
-                    # Fraction where q_g gives the gold token more probability.
-                    "dsid_gate_coverage": dsid_output.gate_coverage.detach(),
-                    # Mean direction-gated JS weight, including zero positions.
-                    "dsid_mean_weight": dsid_output.mean_weight.detach(),
-                    # Unweighted mean KL(q_g || p_v) over valid targets.
-                    "dsid_mean_kl": dsid_output.mean_kl.detach(),
-                    # Mean NLL(q_0) - NLL(q_g); positive means gloss helps.
-                    "dsid_teacher_nll_gain": dsid_output.teacher_nll_gain.detach(),
-                }
-            )
         if attention_diversity_loss is not None:
             weighted_attention_diversity_loss = (
                 self.config.attention_diversity_loss_weight
