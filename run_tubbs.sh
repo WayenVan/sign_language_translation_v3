@@ -17,8 +17,8 @@ else
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle \
-  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0815-224x224 \
+  model=qwen3-1.7b-siglip2-g-dinoframecrossv2shuffle \
+  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-siglip2-g-dinoframecrossv2shuffle-0815-224x224 \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
@@ -34,7 +34,9 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   data.processor.num_extra_video_tokens=2 \
   data.processor.video_processor.padding_to_multiple_of=4 \
   data.processor.video_processor.do_resize=False \
-  data.processor.video_processor.do_normalize=False
+  data.processor.video_processor.image_mean='[0.5,0.5,0.5]' \
+  data.processor.video_processor.image_std='[0.5,0.5,0.5]' \
+  data.processor.video_processor.do_normalize=True
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
 # engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train_ft_peft \

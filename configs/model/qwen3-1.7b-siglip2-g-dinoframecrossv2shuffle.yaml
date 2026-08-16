@@ -1,0 +1,26 @@
+config:
+  hidden_size: 2048
+  video_soft_token_id: 151656
+  video_token_scale: 1.0
+  dsid_loss_weight: 0.0
+  dsid_js_tau: 0.6919847726821899
+  llm_model_name_or_path: Qwen/Qwen3-1.7B
+  visual_backbone_type: siglip2
+  visual_backbone_config:
+    id: google/siglip2-giant-opt-patch16-256
+    output_layer: [-1]
+    freeze_visual_encoder: true
+    # The checkpoint is native at 256px. Enable position interpolation so the
+    # backbone can also consume the project's existing 224px frame pipeline.
+    interpolate_pos_encoding: true
+  visual_adapter_type: dinoframe_cross_v2_shuffle
+  visual_adapter_kwargs:
+    input_dim: 1536
+    cls_input_dim: 1536
+    output_dim: 2048
+    temperature: 0.1
+    spatial_window_radius: null
+    temporal_gate_init: -2.0 # sigmoid
+    # V2 emits 2 tokens/frame; scale-factor 2 compresses them back to 1/frame.
+    temporal_scale_factor: 2
+    use_short_temporal_conv: false

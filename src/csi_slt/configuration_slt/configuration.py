@@ -49,7 +49,7 @@ class SltConfig(PretrainedConfig):
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
         dsid_loss_weight: float = 0.0,
         dsid_js_tau: Optional[float] = None,
-        attention_diversity_loss_weight: float = 0.001,
+        attention_diversity_loss_weight: float = 0.000,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -177,9 +177,7 @@ class SltConfig(PretrainedConfig):
             raise TypeError("attention_diversity_loss_weight must be a real number")
         if attention_diversity_loss_weight < 0.0:
             raise ValueError("attention_diversity_loss_weight must be non-negative")
-        self.attention_diversity_loss_weight = float(
-            attention_diversity_loss_weight
-        )
+        self.attention_diversity_loss_weight = float(attention_diversity_loss_weight)
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.
         if llm_config is None:

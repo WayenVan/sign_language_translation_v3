@@ -5,7 +5,7 @@ prompt_templates:
   de: jinjas/de_prompt.md.j2
   en: jinjas/en_prompt.md.j2
 
-assemble: True
+assemble: true
 
 processor:
   _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
@@ -19,45 +19,36 @@ processor:
     padding_to_multiple_of: 4
     image_mean: [0.485, 0.456, 0.406]
     image_std: [0.229, 0.224, 0.225]
-    do_normalize: True
-    do_crop: False
-    do_resize: False
+    do_normalize: true
+    do_crop: false
+    do_resize: false
     crop_size:
       height: 224
       width: 224
-    do_random_speed: True
+    do_random_speed: true
 
 train:
-  dataset:
+  dataset: &dataset
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
     data_root: ${data.data_root}
     mode: train
-  collator:
+  collator: &collator
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
-    debug: False
+    debug: false
     mode: train
 
 val:
   dataset:
-    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
-    data_root: ${data.data_root}
+    <<: *dataset
     mode: validation
   collator:
-    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
-    debug: False
+    <<: *collator
     mode: eval
 
 test:
   dataset:
-    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
-    data_root: ${data.data_root}
+    <<: *dataset
     mode: test
   collator:
-    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
-    debug: False
+    <<: *collator
     mode: test
-
-fraction_dataset: False
-train_fraction: 1.0
-val_fraction: 0.01
-test_fraction: 0.05

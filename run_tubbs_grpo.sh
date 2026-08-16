@@ -21,7 +21,7 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   model.checkpoint_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv3-0815-224x224/checkpoint-24000 \
   engine.training_args.output_dir=outputs/first_demo_grpo \
   engine.training_args.dataloader_num_workers=12 \
-  engine.training_args.logging_steps=5 \
+  engine.training_args.logging_steps=1 \
   engine.training_args.report_to="$REPORT_TO" \
   data=ph14t_*x224x224_qwen_multiling \
   data.processor.video_token_scale=1.0 \

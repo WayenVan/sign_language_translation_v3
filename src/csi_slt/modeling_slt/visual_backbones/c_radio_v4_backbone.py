@@ -43,13 +43,14 @@ class _LayerAttentionFusion(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if len(tensors) != self.num_layers:
             raise RuntimeError(
-                f"expected {self.num_layers} C-RADIO {name} layers, "
-                f"got {len(tensors)}"
+                f"expected {self.num_layers} C-RADIO {name} layers, got {len(tensors)}"
             )
         reference_shape = tensors[0].shape
         if any(tensor.shape != reference_shape for tensor in tensors[1:]):
             shapes = [tuple(tensor.shape) for tensor in tensors]
-            raise RuntimeError(f"cannot fuse C-RADIO {name} tensors with shapes {shapes}")
+            raise RuntimeError(
+                f"cannot fuse C-RADIO {name} tensors with shapes {shapes}"
+            )
 
         # [F, L, ..., C]. Scores are produced per frame and per optional token.
         stacked = torch.stack(tensors, dim=1)
@@ -97,7 +98,9 @@ class CRadioV4Backbone(nn.Module):
             self.c_radio_v4_config = AutoConfig.from_pretrained(
                 self.id, trust_remote_code=True
             )
-            self.visual_encoder = AutoModel.from_config(self.c_radio_v4_config)
+            self.visual_encoder = AutoModel.from_config(
+                self.c_radio_v4_config, trust_remote_code=True
+            )
         else:
             self.visual_encoder = c_radio_v4
             self.c_radio_v4_config = c_radio_v4.config
@@ -180,7 +183,9 @@ class CRadioV4Backbone(nn.Module):
         layers = tuple(output_layer)
         if not layers:
             raise ValueError("output_layer must contain at least one layer index")
-        if any(isinstance(layer, bool) or not isinstance(layer, int) for layer in layers):
+        if any(
+            isinstance(layer, bool) or not isinstance(layer, int) for layer in layers
+        ):
             raise TypeError("every output_layer entry must be an integer")
         if len(set(layers)) != len(layers):
             raise ValueError("output_layer must not contain duplicate layer indices")
