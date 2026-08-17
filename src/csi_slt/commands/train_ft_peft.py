@@ -21,6 +21,20 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
+def freeze_except_lora_adapters(model: SltModel) -> int:
+    """Freeze the complete SLT model and leave only LoRA parameters trainable."""
+    trainable_parameter_count = 0
+    for name, parameter in model.named_parameters():
+        is_lora_parameter = "lora_" in name
+        parameter.requires_grad_(is_lora_parameter)
+        if is_lora_parameter:
+            trainable_parameter_count += parameter.numel()
+
+    if trainable_parameter_count == 0:
+        raise ValueError("No LoRA adapter parameters were found in the model")
+    return trainable_parameter_count
+
+
 def get_transform_layers_from_strategy(llm_num_layers, strategy_config):
     strategy_name = strategy_config.name
     if strategy_name == "none":
@@ -58,6 +72,7 @@ def main(cfg: DictConfig):
     slt_model = SltModel.from_pretrained_with_new_lora(
         peft_config, cfg.model.checkpoint_dir
     )
+    freeze_except_lora_adapters(slt_model)
 
     # create datamodule
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)
