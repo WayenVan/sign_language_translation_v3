@@ -22,6 +22,11 @@ engine:
   eval_information:
     every_n_evaluations: -1
     num_samples: 4
+  train_probe:
+    every_n_evaluations: 1
+    num_samples: 200
+    seed: 42
+    metric_key_prefix: train_probe
   dsid_scheduler:
     warmup_ratio: 0.01
     decay_ratio: 0.3

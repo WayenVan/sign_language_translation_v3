@@ -47,5 +47,5 @@ class PrepareForCausalLMOutput(NamedTuple):
 class SltCausalLMOutputWithPast(CausalLMOutputWithPast):
     """Causal-LM outputs augmented with detached logging information."""
 
-    loss_info: Optional[dict[str, torch.Tensor]] = None
+    logging_scalars: Optional[dict[str, torch.Tensor]] = None
     information: Optional[InformationOutput] = None

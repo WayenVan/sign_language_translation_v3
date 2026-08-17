@@ -20,6 +20,63 @@ from .information_visualization import render_llm_attention
 logger = logging.get_logger(__name__)
 
 
+class TrainSubsetMetricsCallback(TrainerCallback, ExportableState):
+    """Periodically evaluate a fixed, deterministic subset of the train set."""
+
+    def __init__(
+        self,
+        every_n_evaluations=-1,
+        num_samples=200,
+        seed=42,
+        metric_key_prefix="train_probe",
+    ):
+        for name, value in (
+            ("every_n_evaluations", every_n_evaluations),
+            ("num_samples", num_samples),
+            ("seed", seed),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+        if every_n_evaluations == 0 or every_n_evaluations < -1:
+            raise ValueError("every_n_evaluations must be -1 or a positive integer")
+        if num_samples <= 0:
+            raise ValueError("num_samples must be a positive integer")
+        if not isinstance(metric_key_prefix, str) or not metric_key_prefix:
+            raise ValueError("metric_key_prefix must be a non-empty string")
+        self.every_n_evaluations = every_n_evaluations
+        self.num_samples = num_samples
+        self.seed = seed
+        self.metric_key_prefix = metric_key_prefix
+        self.evaluation_count = 0
+
+    def state(self):
+        return {
+            "args": {
+                "every_n_evaluations": self.every_n_evaluations,
+                "num_samples": self.num_samples,
+                "seed": self.seed,
+                "metric_key_prefix": self.metric_key_prefix,
+            },
+            "attributes": {"evaluation_count": self.evaluation_count},
+        }
+
+    def on_evaluate(self, args, state, control, **kwargs):
+        self.evaluation_count += 1
+        if self.every_n_evaluations == -1:
+            return
+        if self.evaluation_count % self.every_n_evaluations != 0:
+            return
+        trainer = kwargs.get("trainer")
+        if trainer is None:
+            raise RuntimeError("TrainSubsetMetricsCallback requires the trainer")
+        metrics = trainer.evaluate_train_subset(
+            num_samples=self.num_samples,
+            seed=self.seed,
+            metric_key_prefix=self.metric_key_prefix,
+        )
+        trainer.log(metrics)
+
+
 class EvalInformationVisualizationCallback(TrainerCallback, ExportableState):
     """Periodically render information from the first evaluation samples."""
 

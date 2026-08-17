@@ -105,11 +105,6 @@ class CRadioV4Backbone(nn.Module):
             self.visual_encoder = c_radio_v4
             self.c_radio_v4_config = c_radio_v4.config
 
-        if self.freeze_visual_encoder:
-            for param in self.visual_encoder.parameters():
-                param.requires_grad = False
-            self.visual_encoder.eval()
-
         if len(self.output_layers) > 1:
             fusion_hidden_dim = config.get("layer_fusion_hidden_dim", 32)
             if isinstance(fusion_hidden_dim, bool) or not isinstance(
@@ -126,6 +121,8 @@ class CRadioV4Backbone(nn.Module):
             self.summary_layer_fusion = None
             self.feature_layer_fusion = None
 
+        self.apply_freeze_policy()
+
         # Preserve the encoder's initialization/checkpoint and the fusion
         # modules' uniform-mean initialization when attached to SltModel.
         mark_module_tree_as_initialized(self)
@@ -133,9 +130,16 @@ class CRadioV4Backbone(nn.Module):
     def train(self, mode: bool = True):
         """Train fusion modules while keeping a frozen encoder in eval mode."""
         super().train(mode)
+        self.apply_freeze_policy()
+        return self
+
+    def apply_freeze_policy(self) -> None:
+        """Apply the configured encoder gradient and module-mode policy."""
+        self.visual_encoder.requires_grad_(not self.freeze_visual_encoder)
         if self.freeze_visual_encoder:
             self.visual_encoder.eval()
-        return self
+        else:
+            self.visual_encoder.train(self.training)
 
     def forward(self, x, t_lengths=None) -> VisualBackboneOutput:
         """
@@ -273,7 +277,9 @@ class CRadioV4Backbone(nn.Module):
         c_radio_v4 = AutoModel.from_pretrained(id, dtype=dtype, trust_remote_code=True)
         logger.info(f"Loaded pretrained CRadioV4 model from {id}")
 
-        return cls(config=config, c_radio_v4=c_radio_v4)
+        backbone = cls(config=config, c_radio_v4=c_radio_v4)
+        backbone.apply_freeze_policy()
+        return backbone
 
 
 if __name__ == "__main__":

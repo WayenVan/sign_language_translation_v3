@@ -33,6 +33,25 @@ def test_retired_contrastive_and_alignment_config_keys_are_ignored():
     assert not hasattr(config, "alignment_pooling_distill_weight")
 
 
+def test_retired_dsid_config_keys_are_ignored():
+    config = SltConfig(
+        llm_model_name_or_path="Qwen/Qwen3-test",
+        llm_config=_llm_config(),
+        dsid_loss_weight=0.75,
+        dsid_js_tau=0.08,
+        dsid_warmup_ratio=0.2,
+        dsid_decay_ratio=0.4,
+    )
+
+    for key in (
+        "dsid_loss_weight",
+        "dsid_js_tau",
+        "dsid_warmup_ratio",
+        "dsid_decay_ratio",
+    ):
+        assert not hasattr(config, key)
+
+
 def test_attention_diversity_loss_weight_is_configurable():
     config = SltConfig(
         llm_model_name_or_path="Qwen/Qwen3-test",
@@ -41,6 +60,16 @@ def test_attention_diversity_loss_weight_is_configurable():
     )
 
     assert config.attention_diversity_loss_weight == 0.01
+
+
+def test_visual_semantic_encoder_is_disabled_by_default():
+    config = SltConfig(
+        llm_model_name_or_path="Qwen/Qwen3-test",
+        llm_config=_llm_config(),
+    )
+
+    assert config.visual_semantic_encoder_type is None
+    assert config.visual_semantic_encoder_config == {}
 
 
 @pytest.mark.parametrize("weight", (-0.1, True, "0.001"))

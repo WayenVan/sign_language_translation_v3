@@ -28,7 +28,11 @@ from .output_utils import (
 from .misc import (
     mark_module_tree_as_initialized,
 )
-from .registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
+from .registry import (
+    VISUAL_ADAPTERS,
+    VISUAL_BACKBONES,
+    VISUAL_SEMANTIC_ENCODERS,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -83,6 +87,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         config: SltConfig,
         llm: Optional[nn.Module] = None,
         visual_backbone: Optional[nn.Module] = None,
+        visual_semantic_encoder: Optional[nn.Module] = None,
     ):
         super().__init__(config)
         for component_name, component in (
@@ -105,6 +110,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # Always construct the model structure here to support meta-device models.
         self.llm = llm
         self.visual_backbone = visual_backbone
+        self.visual_semantic_encoder = visual_semantic_encoder
 
         # Initialize the visual backbone when it was not supplied by the caller.
         if self.visual_backbone is None:
@@ -126,6 +132,35 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 f"{list(VISUAL_ADAPTERS.keys())}"
             )
         self.visual_adapter = adapter_cls(**config.visual_adapter_kwargs)
+
+        semantic_encoder_type = config.visual_semantic_encoder_type
+        if semantic_encoder_type is None:
+            if self.visual_semantic_encoder is not None:
+                raise ValueError(
+                    "visual_semantic_encoder was supplied while "
+                    "visual_semantic_encoder_type is None"
+                )
+        else:
+            semantic_encoder_cls = VISUAL_SEMANTIC_ENCODERS.get(semantic_encoder_type)
+            if semantic_encoder_cls is None:
+                raise ValueError(
+                    f"Unsupported visual semantic encoder type: "
+                    f"{semantic_encoder_type}. Supported types are: "
+                    f"{list(VISUAL_SEMANTIC_ENCODERS.keys())}"
+                )
+            if self.visual_semantic_encoder is None:
+                self.visual_semantic_encoder = semantic_encoder_cls.from_encoder_config(
+                    config.visual_semantic_encoder_config
+                )
+            semantic_output_dim = getattr(
+                self.visual_semantic_encoder, "output_dim", None
+            )
+            if semantic_output_dim != config.hidden_size:
+                raise ValueError(
+                    "visual semantic encoder output_dim must match the LLM "
+                    f"hidden size ({config.hidden_size}), got "
+                    f"{semantic_output_dim}"
+                )
 
         # Initialize the language model when it was not supplied by the caller.
         if self.llm is None:
@@ -204,7 +239,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     @classmethod
     def from_pretrained_components(
-        cls, config: SltConfig, llm_dtype="auto", visual_backbone_dtype="auto"
+        cls,
+        config: SltConfig,
+        llm_dtype="auto",
+        visual_backbone_dtype="auto",
+        visual_semantic_encoder_dtype="auto",
     ):
         visual_backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
         if visual_backbone_cls is None:
@@ -216,6 +255,24 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_backbone = visual_backbone_cls.from_pretrained_backbone(
             config.visual_backbone_config, dtype=visual_backbone_dtype
         )
+
+        visual_semantic_encoder = None
+        semantic_encoder_type = config.visual_semantic_encoder_type
+        if semantic_encoder_type is not None:
+            semantic_encoder_cls = VISUAL_SEMANTIC_ENCODERS.get(semantic_encoder_type)
+            if semantic_encoder_cls is None:
+                raise ValueError(
+                    f"Unsupported visual semantic encoder type: "
+                    f"{semantic_encoder_type}. Supported types are: "
+                    f"{list(VISUAL_SEMANTIC_ENCODERS.keys())}"
+                )
+            visual_semantic_encoder = semantic_encoder_cls.from_pretrained_encoder(
+                config.visual_semantic_encoder_config,
+                dtype=visual_semantic_encoder_dtype,
+            )
+            # Save the source architecture so SltModel.from_pretrained can
+            # reconstruct the semantic encoder without contacting its source.
+            config.visual_semantic_encoder_config = dict(visual_semantic_encoder.config)
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
         llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
@@ -231,7 +288,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         logger.info("force retie the lm_head to the input embeddings!!!!!!!!")
 
-        return cls(config=config, llm=llm, visual_backbone=visual_backbone)
+        return cls(
+            config=config,
+            llm=llm,
+            visual_backbone=visual_backbone,
+            visual_semantic_encoder=visual_semantic_encoder,
+        )
 
         # fmt: on
 
@@ -242,12 +304,20 @@ class SltModel(PreTrainedModel, GenerationMixin):
         peft_config: LoraConfig,
         llm_dtype="auto",
         visual_backbone_dtype="auto",
+        visual_semantic_encoder_dtype="auto",
     ):
         model = cls.from_pretrained_components(
             config=config,
             llm_dtype=llm_dtype,
             visual_backbone_dtype=visual_backbone_dtype,
+            visual_semantic_encoder_dtype=visual_semantic_encoder_dtype,
         )
+
+        # --------------------------
+        # appli freze policy for visual encoder, let the encoder itself decide which parameters to freeze,
+        # so that the trainable parameters are not frozen accidentally.
+        # -----------------------
+        model.visual_backbone.apply_freeze_policy()
 
         if model.config.llm_lora:
             raise ValueError(
@@ -401,6 +471,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_adapter_output: VisualAdapterOutput = self.visual_adapter(
             visual_backbone_output, permute_video_tokens=permute_video_tokens
         )  # [BT,  D]
+        if self.visual_semantic_encoder is not None:
+            visual_adapter_output = self.visual_semantic_encoder(visual_adapter_output)
 
         if return_visual_backbone_extras:
             return visual_adapter_output, visual_backbone_output.extras
@@ -542,9 +614,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )  # [G, N, N]
         diagonal = query_similarity.diagonal(dim1=1, dim2=2).sum()
         off_diagonal = query_similarity.sum() - diagonal
-        denominator = (
-            attention_weights.shape[0] * num_queries * (num_queries - 1)
-        )
+        denominator = attention_weights.shape[0] * num_queries * (num_queries - 1)
         return off_diagonal / denominator
 
     @classmethod
@@ -788,10 +858,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             and self.training
             and self.config.attention_diversity_loss_weight > 0.0
         ):
-            attention_diversity_loss = (
-                self._compute_adapter_attention_diversity_loss(
-                    visual_adapter_extras
-                )
+            attention_diversity_loss = self._compute_adapter_attention_diversity_loss(
+                visual_adapter_extras
             )
             if attention_diversity_loss is not None:
                 loss = (
@@ -810,7 +878,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 visual_backbone_extras=visual_backbone_extras,
             )
 
-        loss_info = (
+        logging_scalars = (
             {
                 # Final objective: CE + attention diversity.
                 "main_loss": loss.detach(),
@@ -820,10 +888,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
         if attention_diversity_loss is not None:
             weighted_attention_diversity_loss = (
-                self.config.attention_diversity_loss_weight
-                * attention_diversity_loss
+                self.config.attention_diversity_loss_weight * attention_diversity_loss
             )
-            loss_info.update(
+            logging_scalars.update(
                 {
                     "attention_diversity_loss": attention_diversity_loss.detach(),
                     "attention_diversity_weighted_loss": (
@@ -837,7 +904,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         return SltCausalLMOutputWithPast(
             loss=loss,
-            loss_info=loss_info,
+            logging_scalars=logging_scalars,
             information=information,
             logits=outputs.logits,
             past_key_values=outputs.past_key_values,

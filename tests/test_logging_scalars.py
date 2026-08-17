@@ -5,22 +5,22 @@ from csi_slt.modeling_slt.output_utils import SltCausalLMOutputWithPast
 from csi_slt.modeling_slt.slt import SltModel
 
 
-def test_loss_info_is_a_detached_logging_dictionary():
+def test_logging_scalars_are_detached():
     source = torch.tensor(2.0, requires_grad=True)
     total_loss = source.square()
-    loss_info = {
+    logging_scalars = {
         "main_loss": total_loss.detach(),
     }
 
     output = SltCausalLMOutputWithPast(
         loss=total_loss,
         logits=torch.empty(0),
-        loss_info=loss_info,
+        logging_scalars=logging_scalars,
     )
 
     assert output.loss.requires_grad is True
-    assert set(output.loss_info) == {"main_loss"}
-    for value in output.loss_info.values():
+    assert set(output.logging_scalars) == {"main_loss"}
+    for value in output.logging_scalars.values():
         assert value.requires_grad is False
         assert value.grad_fn is None
 

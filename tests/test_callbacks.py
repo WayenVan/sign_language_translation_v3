@@ -7,6 +7,7 @@ from torch import nn
 from csi_slt.engine.sft.callbacks import (
     EvalInformationVisualizationCallback,
     ModelInfoCallback,
+    TrainSubsetMetricsCallback,
 )
 from csi_slt.modeling_slt.info_utils import InformationOutput
 
@@ -79,4 +80,29 @@ def test_eval_information_callback_uses_evaluation_cadence_and_flat_paths(
         Path(tmp_path) / "eval_info_step120" / "sample000_layer-1_llm_attention.png"
     ]
     assert rendered_paths[0].parent.is_dir()
+    assert callback.state()["attributes"]["evaluation_count"] == 2
+
+
+def test_train_subset_metrics_callback_uses_evaluation_cadence():
+    calls = []
+    logged = []
+    trainer = SimpleNamespace(
+        evaluate_train_subset=lambda **kwargs: calls.append(kwargs)
+        or {"train_probe_bleu": 12.0},
+        log=lambda metrics: logged.append(metrics),
+    )
+    callback = TrainSubsetMetricsCallback(
+        every_n_evaluations=2,
+        num_samples=200,
+        seed=7,
+    )
+
+    callback.on_evaluate(None, None, None, trainer=trainer)
+    assert calls == []
+    callback.on_evaluate(None, None, None, trainer=trainer)
+
+    assert calls == [
+        {"num_samples": 200, "seed": 7, "metric_key_prefix": "train_probe"}
+    ]
+    assert logged == [{"train_probe_bleu": 12.0}]
     assert callback.state()["attributes"]["evaluation_count"] == 2

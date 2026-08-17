@@ -22,6 +22,16 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
+def get_transform_layers_from_strategy(llm_num_layers, strategy_config):
+    if strategy_config.type == "none":
+        raise ValueError("No transform layers specified in strategy config.")
+    elif strategy_config.type == "last_n_layers":
+        n = strategy_config.n_layers
+        return list(range(llm_num_layers - n, llm_num_layers))
+    else:
+        raise ValueError(f"Unknown strategy type: {strategy_config.type}")
+
+
 @hydra.main(
     version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/base"
 )
@@ -35,7 +45,7 @@ def main(cfg: DictConfig):
     if cfg.peft.type == "lora":
         from peft import LoraConfig, TaskType
 
-        lora_args = OmegaConf.to_container(cfg.peft.lora_config, resolve=True)
+        lora_args = OmegaConf.to_container(cfg.peft.llm_lora_config, resolve=True)
         peft_config = LoraConfig(
             **lora_args,
             task_type=TaskType.CAUSAL_LM,
@@ -89,6 +99,13 @@ def main(cfg: DictConfig):
             )
         ],
     )
+    train_probe_metrics = None
+    train_probe_interval = OmegaConf.select(
+        cfg, "engine.train_probe.every_n_evaluations", default=-1
+    )
+    if train_probe_interval != -1:
+        # Probe calls must not advance the state of the normal evaluation metric.
+        train_probe_metrics = SLTMetric(processor=datamodule.processor)
 
     trainer = SltTrainer(
         model=slt_model,
@@ -100,6 +117,7 @@ def main(cfg: DictConfig):
         train_data_collator=datamodule.train_collator,
         eval_data_collator=datamodule.test_collator,
         compute_metrics=metrics,
+        train_probe_compute_metrics=train_probe_metrics,
     )
 
     if training_args.do_train:

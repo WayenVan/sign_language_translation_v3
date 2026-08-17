@@ -32,6 +32,7 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v3 import (
 )
 from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import CRadioV4Backbone
 from csi_slt.modeling_slt.visual_backbones.siglip2_backbone import Siglip2Backbone
+from csi_slt.modeling_slt.labse_top_encoder import LaBSESemanticEncoder
 
 VISUAL_BACKBONES: Dict[str, nn.Module] = {
     "dinov2": DinoV2Backbone,
@@ -53,4 +54,8 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "dinoframe_cross_v2_grouped_shuffle": DINOFrameAdapterCrossV2GroupedShuffle,
     "dinoframe_cross_v3": DINOFrameAdapterCrossV3,
     "c_radio_v4": CRadioV4Backbone,
+}
+
+VISUAL_SEMANTIC_ENCODERS: Dict[str, nn.Module] = {
+    "labse": LaBSESemanticEncoder,
 }

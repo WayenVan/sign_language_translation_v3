@@ -8,6 +8,7 @@ from .callbacks import (
     ETACallback,
     DSIDWeightSchedulerCallback,
     EvalInformationVisualizationCallback,
+    TrainSubsetMetricsCallback,
 )
 from torch import nn
 import torch
@@ -24,11 +25,12 @@ from transformers.utils import is_datasets_available
 
 import datasets
 from datasets import Dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from transformers.utils import logging
 from typing import Callable, Literal, Tuple
 from functools import partial
 import inspect
+import random
 
 from csi_slt.data.sampler import (
     GlobalLengthBucketSampler,
@@ -46,6 +48,7 @@ class SltTrainer(Seq2SeqTrainer):
         eval_data_collator=None,
         train_data_collator=None,
         test_data_collator=None,
+        train_probe_compute_metrics=None,
         *args,
         **kwargs,
     ):
@@ -70,6 +73,7 @@ class SltTrainer(Seq2SeqTrainer):
         self.test_data_collator = (
             test_data_collator if test_data_collator is not None else self.data_collator
         )
+        self.train_probe_compute_metrics = train_probe_compute_metrics
 
         # NOTE: add custom callbacks
         # self.add_callback(
@@ -108,6 +112,16 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(
             EvalInformationVisualizationCallback(**eval_information_kwargs)
         )
+        train_probe_kwargs = {}
+        if hydra_config is not None:
+            train_probe_config = OmegaConf.select(
+                hydra_config, "engine.train_probe", default=None
+            )
+            if train_probe_config is not None:
+                train_probe_kwargs = OmegaConf.to_container(
+                    train_probe_config, resolve=True
+                )
+        self.add_callback(TrainSubsetMetricsCallback(**train_probe_kwargs))
 
         # if _is_peft_model(unwrap_model(self.model)):
         #     self.add_callback(SaveBaseModelInPEFT())
@@ -123,8 +137,8 @@ class SltTrainer(Seq2SeqTrainer):
 
         # Accumulate detached per-micro-batch values.  They are reduced in
         # ``log`` so their cadence exactly matches Trainer's ``logging_steps``.
-        self._loss_component_totals: dict[str, torch.Tensor] = {}
-        self._loss_component_count = 0
+        self._logging_scalar_totals: dict[str, torch.Tensor] = {}
+        self._logging_scalar_counts: dict[str, int] = {}
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
@@ -207,6 +221,48 @@ class SltTrainer(Seq2SeqTrainer):
 
         return records
 
+    def evaluate_train_subset(
+        self,
+        num_samples: int = 200,
+        seed: int = 42,
+        metric_key_prefix: str = "train_probe",
+    ) -> dict[str, float]:
+        """Predict a reproducible train subset with an isolated metric object."""
+        if self.train_dataset is None:
+            raise ValueError("train subset evaluation requires a train_dataset")
+        if isinstance(self.train_dataset, dict):
+            raise TypeError(
+                "train subset evaluation does not support dataset dictionaries"
+            )
+        if self.train_probe_compute_metrics is None:
+            raise ValueError(
+                "train subset evaluation requires train_probe_compute_metrics"
+            )
+        if num_samples <= 0:
+            raise ValueError("num_samples must be a positive integer")
+
+        sample_count = min(num_samples, len(self.train_dataset))
+        indices = random.Random(seed).sample(
+            range(len(self.train_dataset)), sample_count
+        )
+        subset = Subset(self.train_dataset, indices)
+
+        previous_collator = self.test_data_collator
+        previous_compute_metrics = self.compute_metrics
+        was_training = self.model.training
+        self.test_data_collator = self.eval_data_collator
+        self.compute_metrics = self.train_probe_compute_metrics
+        try:
+            output = self.predict(
+                test_dataset=subset,
+                metric_key_prefix=metric_key_prefix,
+            )
+        finally:
+            self.test_data_collator = previous_collator
+            self.compute_metrics = previous_compute_metrics
+            self.model.train(was_training)
+        return dict(output.metrics)
+
     def compute_loss(
         self,
         model: nn.Module,
@@ -214,7 +270,7 @@ class SltTrainer(Seq2SeqTrainer):
         return_outputs: bool = False,
         num_items_in_batch: Optional[Union[torch.Tensor, int]] = None,
     ):
-        """Compute the optimization loss and retain individual loss terms for logging."""
+        """Compute loss and retain model-provided scalar values for logging."""
         model_inputs = {
             name: value
             for name, value in inputs.items()
@@ -227,35 +283,39 @@ class SltTrainer(Seq2SeqTrainer):
             num_items_in_batch=num_items_in_batch,
         )
 
-        loss_info = getattr(outputs, "loss_info", None)
-        if loss_info is None and isinstance(outputs, dict):
-            loss_info = outputs.get("loss_info")
-        for name, value in (loss_info or {}).items():
+        logging_scalars = getattr(outputs, "logging_scalars", None)
+        if logging_scalars is None and isinstance(outputs, dict):
+            logging_scalars = outputs.get("logging_scalars")
+        for name, value in (logging_scalars or {}).items():
             if not isinstance(value, torch.Tensor) or value.numel() != 1:
                 raise TypeError(
-                    f"loss_info[{name!r}] must be a scalar tensor, got "
+                    f"logging_scalars[{name!r}] must be a scalar tensor, got "
                     f"{type(value).__name__}"
                 )
             value = value.detach()
-            self._loss_component_totals[name] = (
-                self._loss_component_totals.get(name, torch.zeros_like(value)) + value
+            self._logging_scalar_totals[name] = (
+                self._logging_scalar_totals.get(name, torch.zeros_like(value)) + value
             )
-        self._loss_component_count += 1
+            self._logging_scalar_counts[name] = (
+                self._logging_scalar_counts.get(name, 0) + 1
+            )
 
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        """Add detached loss components to training logs."""
-        if "loss" in logs and self._loss_component_count:
-            count = torch.tensor(
-                self._loss_component_count, device=self.args.device, dtype=torch.float
-            )
-            global_count = self.accelerator.gather_for_metrics(count).sum().item()
-            for name, total in self._loss_component_totals.items():
+        """Add averaged model-provided scalars to training logs."""
+        if "loss" in logs and self._logging_scalar_totals:
+            for name, total in self._logging_scalar_totals.items():
+                count = torch.tensor(
+                    self._logging_scalar_counts[name],
+                    device=self.args.device,
+                    dtype=torch.float,
+                )
+                global_count = self.accelerator.gather_for_metrics(count).sum().item()
                 global_total = self.accelerator.gather_for_metrics(total).sum().item()
                 logs[name] = global_total / global_count
-            self._loss_component_totals.clear()
-            self._loss_component_count = 0
+            self._logging_scalar_totals.clear()
+            self._logging_scalar_counts.clear()
 
         super().log(logs, start_time=start_time)
 

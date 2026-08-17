@@ -107,6 +107,24 @@ def test_encoder_can_be_unfrozen_by_backbone_config():
     )
 
     assert encoder.radio_model.weight.requires_grad is True
+
+
+def test_apply_freeze_policy_is_idempotent_and_supports_policy_changes():
+    encoder = _FakeEncoder()
+    backbone = CRadioV4Backbone(
+        {"id": "fake", "output_layer": [-1]},
+        c_radio_v4=encoder,
+    )
+
+    backbone.train()
+    backbone.apply_freeze_policy()
+    assert not encoder.training
+    assert all(not parameter.requires_grad for parameter in encoder.parameters())
+
+    backbone.freeze_visual_encoder = False
+    backbone.apply_freeze_policy()
+    assert encoder.training
+    assert all(parameter.requires_grad for parameter in encoder.parameters())
     backbone.train()
     assert encoder.training is True
 

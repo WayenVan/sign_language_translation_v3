@@ -8,6 +8,7 @@ from transformers import GenerationConfig, Seq2SeqTrainingArguments
 from csi_slt.engine.sft.callbacks import (
     DSIDWeightSchedulerCallback,
     EvalInformationVisualizationCallback,
+    TrainSubsetMetricsCallback,
 )
 from csi_slt.engine.sft.trainer import SltTrainer
 from csi_slt.engine.sft.training_args import SltTrainingArguments
@@ -100,6 +101,79 @@ def test_trainer_builds_eval_information_callback_from_engine_config(tmp_path):
     )
     assert callback.every_n_evaluations == 3
     assert callback.num_samples == 2
+
+
+def test_trainer_builds_train_probe_callback_from_engine_config(tmp_path):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    hydra_config = OmegaConf.create(
+        {
+            "engine": {
+                "train_probe": {
+                    "every_n_evaluations": 3,
+                    "num_samples": 17,
+                    "seed": 9,
+                    "metric_key_prefix": "train_sample",
+                }
+            }
+        }
+    )
+    trainer = SltTrainer(
+        model=_MeanReducedModelWithKwargs(), args=args, hydra_config=hydra_config
+    )
+
+    callback = next(
+        item
+        for item in trainer.callback_handler.callbacks
+        if isinstance(item, TrainSubsetMetricsCallback)
+    )
+    assert callback.every_n_evaluations == 3
+    assert callback.num_samples == 17
+    assert callback.seed == 9
+    assert callback.metric_key_prefix == "train_sample"
+
+
+def test_evaluate_train_subset_is_deterministic_and_restores_state(
+    tmp_path, monkeypatch
+):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    normal_metric = object()
+    probe_metric = object()
+    train_collator = object()
+    eval_collator = object()
+    test_collator = object()
+    trainer = SltTrainer(
+        model=_MeanReducedModelWithKwargs(),
+        args=args,
+        train_dataset=list(range(20)),
+        compute_metrics=normal_metric,
+        train_probe_compute_metrics=probe_metric,
+        train_data_collator=train_collator,
+        eval_data_collator=eval_collator,
+        test_data_collator=test_collator,
+    )
+    observed = {}
+
+    def fake_predict(test_dataset, **kwargs):
+        observed["samples"] = [
+            test_dataset[index] for index in range(len(test_dataset))
+        ]
+        observed["collator"] = trainer.test_data_collator
+        observed["metric"] = trainer.compute_metrics
+        observed["prefix"] = kwargs["metric_key_prefix"]
+        trainer.model.eval()
+        return SimpleNamespace(metrics={"train_probe_bleu": 1.5})
+
+    monkeypatch.setattr(trainer, "predict", fake_predict)
+    metrics = trainer.evaluate_train_subset(num_samples=5, seed=7)
+
+    assert observed["samples"] == [10, 4, 12, 1, 2]
+    assert observed["collator"] is eval_collator
+    assert observed["metric"] is probe_metric
+    assert observed["prefix"] == "train_probe"
+    assert trainer.test_data_collator is test_collator
+    assert trainer.compute_metrics is normal_metric
+    assert trainer.model.training is True
+    assert metrics == {"train_probe_bleu": 1.5}
 
 
 def test_compute_loss_does_not_forward_generation_fields(tmp_path):
