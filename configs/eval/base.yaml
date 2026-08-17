@@ -1,8 +1,8 @@
 # @package _global_
 
 defaults:
-  - /model: base_model
   - /data: ph14t_*x224x224_qwen_multiling
+  - /datamodule: standard
   - override /hydra/hydra_logging: none
   - override /hydra/job_logging: none
   - _self_
@@ -14,23 +14,31 @@ hydra:
     dir: .
   output_subdir: null
 
+seed: 42
+
 model:
-  checkpoint_dir: ""
+  checkpoint_dir: ???
 
 engine:
+  model_dtype: auto
   training_args:
-    num_train_epochs: 80
-    per_device_eval_batch_size: 2
+    do_train: false
+    do_eval: false
+    do_predict: true
+    predict_with_generate: true
+    predict_with_teacher_forcing: false
+    per_device_eval_batch_size: 1
     report_to: none
-    remove_unused_columns: False
-    ddp_find_unused_parameters: False
+    remove_unused_columns: false
     dataloader_num_workers: 6
-    disable_tqdm: False
-    auto_output_dir: False
-    logging_steps: 50
-    output_dir: outputs/debug_output
+    dataloader_persistent_workers: true
+    disable_tqdm: false
+    auto_output_dir: false
+    output_dir: outputs/evaluation
+    logging_steps: 15
   generation_config:
     max_new_tokens: 128
+    do_sample: false
 
 experiment:
-  permutation: False
+  permutation: false
