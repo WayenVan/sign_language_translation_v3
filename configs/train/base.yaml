@@ -24,7 +24,7 @@ engine:
     num_samples: 4
   train_probe:
     every_n_evaluations: 1
-    num_samples: 200
+    num_samples: 800
     seed: 42
     metric_key_prefix: train_probe
   dsid_scheduler:

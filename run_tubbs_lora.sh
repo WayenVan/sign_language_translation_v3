@@ -21,8 +21,6 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
-  engine.training_args.eval_steps=6000 \
-  engine.training_args.save_steps=6000 \
   engine.training_args.logging_steps=15 \
   engine.training_args.disable_tqdm=False \
   engine.training_args.report_to="$REPORT_TO" \
