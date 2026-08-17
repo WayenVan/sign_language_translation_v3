@@ -21,13 +21,11 @@ source .venv/bin/activate
 if [[ "${1:-}" == "debug" ]]; then
   echo "Debug mode"
 else
-  export WANDB_PROJECT=sign_language_translation_v3.1
 fi
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.evaluate \
-  model.checkpoint_dir=outputs/qwen3-1.7b-dinoframev2-shuffle-cross-0731/checkpoint-68000 \
-  experiment.permutation=True \
-  engine.training_args.output_dir=outputs/permutation_exp/perm \
+  model.checkpoint_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0815-224x224//checkpoint-54000 \
+  engine.training_args.output_dir=outputs/eval_base \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
   engine.training_args.logging_steps=15 \
@@ -35,8 +33,9 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.report_to=none \
   data=ph14t_*x224x224_qwen_multiling \
   data.processor.video_token_scale=1.0 \
-  data.processor.video_processor.padding_to_multiple_of=4
-
+  data.processor.video_processor.padding_to_multiple_of=4 \
+  data.processor.video_processor.do_resize=False \
+  data.processor.video_processor.do_normalize=False
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
 
 # engine.training_args.dataloader_num_workers=10 \

@@ -30,9 +30,9 @@ engine:
   training_args:
     do_train: true
     max_steps: 4500
-    per_device_train_batch_size: 2
+    per_device_train_batch_size: 8
     per_device_eval_batch_size: 2
-    gradient_accumulation_steps: 2
+    gradient_accumulation_steps: 1
 
     # One prompt produces two sampled translations. The generation batch must
     # be divisible by num_generations on every distributed launch topology.

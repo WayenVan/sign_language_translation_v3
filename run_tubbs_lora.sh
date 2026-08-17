@@ -3,7 +3,7 @@
 export PYTHONPATH=./src:$PYTHONPATH
 export CUDA_VISIBLE_DEVICES=0,1
 
-export WANDB_PROJECT=sign_language_translation_v3.0-dev
+export WANDB_PROJECT=sign_language_translation_v4.0-dev
 
 source .venv/bin/activate
 
@@ -12,14 +12,12 @@ if [[ "${1:-}" == "debug" ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
 else
-  export WANDB_PROJECT=sign_language_translation_v3.0-dev
   REPORT_TO=wandb
 fi
 
-accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  --config-name train/with_lora \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv2groupedshuffle \
-  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-denoframecrossv2groupedshuffle-0811.224x224-lora \
+accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train_ft_peft \
+  --config-name train/ft_peft \
+  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0815-224x224-0817-lora \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=12 \
@@ -29,7 +27,7 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.disable_tqdm=False \
   engine.training_args.report_to="$REPORT_TO" \
   engine.llm_dtype=bfloat16 \
-  engine.visual_backbone_dtype=float32 \
+  engine.visual_backbone_dtype=auto \
   data=ph14t_*x224x224_qwen_multiling \
   data.processor.video_token_scale=1.0 \
   data.processor.num_extra_video_tokens=2 \
