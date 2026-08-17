@@ -24,6 +24,9 @@ from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2_global impo
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2_shuffle import (
     DINOFrameAdapterCrossV2Shuffle,
 )
+from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v25_shuffle import (
+    DINOFrameAdapterCrossV25Shuffle,
+)
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v2_grouped_shuffle import (
     DINOFrameAdapterCrossV2GroupedShuffle,
 )
@@ -51,6 +54,7 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "dinoframe_cross_v2": DINOFrameAdapterCrossV2,  # WARN: Two-token V2 adapter.
     "dinoframe_cross_v2_global": DINOFrameAdapterCrossV2Global,
     "dinoframe_cross_v2_shuffle": DINOFrameAdapterCrossV2Shuffle,
+    "dinoframe_cross_v25_shuffle": DINOFrameAdapterCrossV25Shuffle,
     "dinoframe_cross_v2_grouped_shuffle": DINOFrameAdapterCrossV2GroupedShuffle,
     "dinoframe_cross_v3": DINOFrameAdapterCrossV3,
     "c_radio_v4": CRadioV4Backbone,
