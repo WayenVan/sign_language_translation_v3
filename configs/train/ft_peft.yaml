@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+  - base
+  - override /peft: lora
+  - _self_
+
+model:
+  checkpoint_dir: "outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0815-224x224//checkpoint-54000"
+
+engine:
+  training_args:
+    output_dir: outputs/ft_peft
+    num_train_epochs: 5
+    learning_rate: 5e-5
+    warmup_ratio: 0.03
+    weight_decay: 0.01
+    eval_strategy: steps
+    eval_steps: 0.1
+    save_strategy: steps
+    save_steps: 0.1
+
+peft:
+  llm_lora_strategy:
+    name: last_n_layers
+    n_layers: 4
