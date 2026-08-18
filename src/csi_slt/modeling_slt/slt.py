@@ -947,8 +947,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         logging_scalars = (
             {
-                # Final objective: CE + attention diversity.
+                # Final objective: CE + attention diversity (+ CTC).
                 "main_loss": loss.detach(),
+                "ce_loss": ce_loss.detach(),
+                # CE has no configurable weight (implicitly 1.0), unlike the
+                # attention-diversity/CTC terms below, so this equals ce_loss.
+                # Logged anyway for parity with those terms' raw/weighted pairs.
+                "ce_weighted_loss": ce_loss.detach(),
             }
             if loss is not None
             else None
