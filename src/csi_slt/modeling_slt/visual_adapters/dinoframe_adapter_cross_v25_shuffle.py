@@ -26,8 +26,10 @@ Model flow::
                   \             /
                    \           /
                     v         v
-            g = sigmoid(fusion_gate)
-            fused = g * CLS + (1 - g) * PATCH
+              base = 0.5 * (CLS + PATCH)
+              value, gate = split(Linear(LN(concat(CLS, PATCH))))
+              residual = Linear(value * SiLU(gate))
+              fused = base + sigmoid(residual_gate) * residual
                          |
                          v
                     LayerNorm
@@ -43,6 +45,7 @@ Model flow::
 from collections.abc import Sequence
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 
@@ -112,6 +115,45 @@ class PackedShortTemporalConv(nn.Module):
         return features + torch.sigmoid(self.residual_gate) * packed_residual
 
 
+class GatedCLSPatchFusion(nn.Module):
+    """Fuse aligned CLS/PATCH tokens with a data-dependent SwiGLU residual.
+
+    ``base = 0.5 * (cls + patch)`` reproduces the fixed 50/50 blend this
+    module replaces, so training starts from the same point. ``value, gate =
+    split(Linear(LN(concat(cls, patch))))`` then lets the mixing ratio depend
+    on the actual CLS/PATCH content instead of being a single global scalar,
+    the same base-path-plus-gated-residual shape used by
+    :class:`~csi_slt.modeling_slt.visual_adapters.patch_shuffle.TemporalShuffleAdapter`.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
+        mlp_hidden_size: int | None = None,
+        gate_init: float = -2.0,
+    ) -> None:
+        super().__init__()
+        if hidden_size <= 0:
+            raise ValueError("hidden_size must be positive")
+        mlp_hidden_size = mlp_hidden_size or hidden_size
+
+        self.input_norm = nn.LayerNorm(hidden_size * 2)
+        self.in_projection = nn.Linear(hidden_size * 2, mlp_hidden_size * 2)
+        self.out_projection = nn.Linear(mlp_hidden_size, hidden_size)
+        self.residual_gate = nn.Parameter(torch.tensor(float(gate_init)))
+
+    def forward(
+        self, cls_tokens: torch.Tensor, patch_tokens: torch.Tensor
+    ) -> torch.Tensor:
+        base = 0.5 * (cls_tokens + patch_tokens)
+        fusion_input = torch.cat((cls_tokens, patch_tokens), dim=-1)
+        value, gate = self.in_projection(self.input_norm(fusion_input)).chunk(
+            2, dim=-1
+        )
+        residual = self.out_projection(value * F.silu(gate))
+        return base + torch.sigmoid(self.residual_gate) * residual
+
+
 class DINOFrameAdapterCrossV25Shuffle(nn.Module):
     """Compress CLS/PATCH streams independently, then fuse each aligned pair."""
 
@@ -130,7 +172,8 @@ class DINOFrameAdapterCrossV25Shuffle(nn.Module):
         use_short_temporal_conv: bool = False,
         short_temporal_kernel_size: int = 3,
         short_temporal_gate_init: float = -2.0,
-        fusion_gate_init: float = 0.0,
+        fusion_gate_init: float = -2.0,
+        fusion_hidden_dim: int | None = None,
     ) -> None:
         super().__init__()
         if temporal_scale_factor < 2:
@@ -161,7 +204,11 @@ class DINOFrameAdapterCrossV25Shuffle(nn.Module):
             output_hidden_size=output_dim,
             scale_factor=temporal_scale_factor,
         )
-        self.fusion_gate = nn.Parameter(torch.tensor(float(fusion_gate_init)))
+        self.fusion = GatedCLSPatchFusion(
+            hidden_size=output_dim,
+            mlp_hidden_size=fusion_hidden_dim,
+            gate_init=fusion_gate_init,
+        )
         self.fusion_norm = nn.LayerNorm(output_dim)
         self.short_temporal_conv = (
             PackedShortTemporalConv(
@@ -210,10 +257,7 @@ class DINOFrameAdapterCrossV25Shuffle(nn.Module):
         if not torch.equal(compressed_length, patch_length):
             raise RuntimeError("CLS and pooled-patch temporal lengths diverged")
 
-        fusion_gate = torch.sigmoid(self.fusion_gate)
-        visual_features = self.fusion_norm(
-            fusion_gate * cls_tokens + (1.0 - fusion_gate) * patch_tokens
-        )
+        visual_features = self.fusion_norm(self.fusion(cls_tokens, patch_tokens))
         if self.use_short_temporal_conv:
             if self.short_temporal_conv is None:
                 raise RuntimeError("short temporal convolution module is missing")
@@ -232,7 +276,9 @@ class DINOFrameAdapterCrossV25Shuffle(nn.Module):
             ]
         )
         extras = dict(frame_output.extras or {})
-        extras["cls_patch_fusion_gate"] = fusion_gate
+        extras["cls_patch_fusion_residual_gate"] = torch.sigmoid(
+            self.fusion.residual_gate
+        )
         if self.use_short_temporal_conv:
             extras["short_temporal_gate"] = torch.sigmoid(
                 self.short_temporal_conv.residual_gate

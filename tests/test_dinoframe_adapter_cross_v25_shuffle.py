@@ -43,10 +43,13 @@ def test_v25_fuses_cls_and_patch_into_one_token_per_temporal_group():
     assert torch.equal(output.visual_length, torch.tensor([2, 1]))
     assert output.visual_features.shape == (3, output_dim)
     assert torch.equal(output.position_ids, torch.tensor([0, 1, 0]))
-    torch.testing.assert_close(output.extras["cls_patch_fusion_gate"], torch.tensor(0.5))
+    torch.testing.assert_close(
+        output.extras["cls_patch_fusion_residual_gate"],
+        torch.sigmoid(torch.tensor(-2.0)),
+    )
     output.visual_features[0, 0].backward()
-    assert adapter.fusion_gate.grad is not None
-    assert adapter.fusion_gate.grad.abs() > 0
+    assert adapter.fusion.residual_gate.grad is not None
+    assert adapter.fusion.residual_gate.grad.abs() > 0
 
 
 def test_v25_adapter_is_registered():
