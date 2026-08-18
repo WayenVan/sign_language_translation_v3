@@ -1,4 +1,5 @@
 import hashlib
+import random
 from dataclasses import dataclass
 
 from transformers.processing_utils import ProcessorMixin
@@ -17,6 +18,7 @@ from csi_slt.data.processors.sign_video_processor import (
     SignVideoKwargs,
     SignVideoProcessor,
 )
+from csi_slt.modeling_slt.misc import padded_to_packed
 
 import torch
 import json
@@ -96,11 +98,18 @@ class SignTranslationProcessor(ProcessorMixin):
         num_extra_video_tokens=2,  # for video start and end tokens
         position_shift_range=(0, 20),
         ctc_tokenizer: PreTrainedTokenizerBase | None = None,
+        pseudo_gloss_dropout: float = 0.0,
     ):
         if ctc_tokenizer is not None and not isinstance(
             ctc_tokenizer, PreTrainedTokenizerBase
         ):
             raise TypeError("ctc_tokenizer must be a PreTrainedTokenizerBase or None")
+        if not 0.0 <= pseudo_gloss_dropout < 1.0:
+            raise ValueError(
+                "pseudo_gloss_dropout must be in [0.0, 1.0), got "
+                f"{pseudo_gloss_dropout}"
+            )
+        self.pseudo_gloss_dropout = pseudo_gloss_dropout
         # Deliberately not registered via ProcessorMixin's `attributes` machinery:
         # that machinery requires every attribute to be present and non-None on every
         # construction. Naming this param "*_tokenizer" would also make
@@ -291,6 +300,24 @@ class SignTranslationProcessor(ProcessorMixin):
             )
         before_source, _, after_source = prompt.partition(self.video_start_token)
         return _PromptParts(before_source, after_source)
+
+    def _drop_pseudo_gloss_tokens(self, text: str) -> str:
+        """Randomly drop whitespace-separated gloss tokens from ``text``.
+
+        ``pseudo_gloss`` is a single string of space-joined gloss tokens, so
+        the perturbation is: split on whitespace, drop each token
+        independently with probability ``pseudo_gloss_dropout``, and rejoin
+        the survivors with a single space. At least one gloss token is always
+        kept (when ``text`` has any), so the CTC target never collapses to an
+        empty sequence.
+        """
+        tokens = text.split()
+        if not tokens:
+            return text
+        kept = [token for token in tokens if random.random() >= self.pseudo_gloss_dropout]
+        if not kept:
+            kept = [random.choice(tokens)]
+        return " ".join(kept)
 
     def _encode_text_segments(
         self, texts: Sequence[str], tokenizer=None
@@ -765,18 +792,30 @@ class SignTranslationProcessor(ProcessorMixin):
         # Pseudo-gloss fields for batch inspection and CTC training, tokenized
         # with the separate word-level ctc_tokenizer when one is attached to
         # this processor. Without a ctc_tokenizer there is nothing to encode
-        # these with, so both fields stay None.
+        # these with, so both fields stay None. CTC losses (e.g. torch's
+        # nn.CTCLoss) expect a packed 1D target sequence plus per-sample
+        # lengths, not a padded/attention-mask pair, so pad+mask internally
+        # and immediately strip the padding back out with padded_to_packed.
         pseudo_gloss_ids = None
-        pseudo_gloss_attention_mask = None
+        pseudo_gloss_length = None
         if self.ctc_tokenizer is not None and pseudo_gloss is not None:
+            # Optional training-time perturbation: randomly drop gloss tokens
+            # so the CTC head can't just memorize the exact gloss sequence.
+            if training and self.pseudo_gloss_dropout > 0:
+                pseudo_gloss = [
+                    self._drop_pseudo_gloss_tokens(text) for text in pseudo_gloss
+                ]
             unpadded_pseudo_gloss_ids = self._encode_text_segments(
                 pseudo_gloss, tokenizer=self.ctc_tokenizer
             )
-            pseudo_gloss_ids = self._left_pad_sequences(
+            padded_pseudo_gloss_ids = self._left_pad_sequences(
                 unpadded_pseudo_gloss_ids, self.ctc_tokenizer.pad_token_id
             )
-            pseudo_gloss_attention_mask = self._attention_mask_for(
-                unpadded_pseudo_gloss_ids, pseudo_gloss_ids.size(1)
+            pseudo_gloss_mask = self._attention_mask_for(
+                unpadded_pseudo_gloss_ids, padded_pseudo_gloss_ids.size(1)
+            )
+            pseudo_gloss_ids, pseudo_gloss_length = padded_to_packed(
+                padded_pseudo_gloss_ids, pseudo_gloss_mask
             )
 
         data = {
@@ -795,8 +834,8 @@ class SignTranslationProcessor(ProcessorMixin):
             data["generation_attention_mask"] = video_path.prompt_attention_mask
             data["generation_token_type_ids"] = video_path.prompt_token_type_ids
         if pseudo_gloss_ids is not None:
-            data["pseudo_gloss_input_ids"] = pseudo_gloss_ids
-            data["pseudo_gloss_attention_mask"] = pseudo_gloss_attention_mask
+            data["pseudo_gloss_ids"] = pseudo_gloss_ids
+            data["pseudo_gloss_length"] = pseudo_gloss_length
         if semantic_ids is not None:
             data["semantic_ids"] = torch.tensor(
                 [_stable_semantic_id(value) for value in semantic_ids],

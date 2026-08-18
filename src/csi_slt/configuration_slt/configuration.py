@@ -50,6 +50,10 @@ class SltConfig(PretrainedConfig):
         visual_semantic_encoder_type: Optional[str] = None,
         visual_semantic_encoder_config: Optional[Dict[str, Any]] = None,
         attention_diversity_loss_weight: float = 0.000,
+        ctc_enabled: bool = False,
+        ctc_loss_weight: float = 0.0,
+        ctc_vocab_size: Optional[int] = None,
+        ctc_blank_id: Optional[int] = None,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -107,6 +111,21 @@ class SltConfig(PretrainedConfig):
                 static- and motion-branch query attention diversity losses.
                 It is active only when the visual adapter returns both sets of
                 attention weights. A value of zero disables its contribution.
+            ctc_enabled: Whether the model builds and trains a CTC head over
+                the visual tokens. When ``False`` (the default) no CTC head is
+                constructed and ``ctc_loss_weight``/``ctc_vocab_size`` are
+                inert.
+            ctc_loss_weight: Coefficient applied to the CTC loss when summed
+                with the other training objectives. Only meaningful when
+                ``ctc_enabled`` is ``True``.
+            ctc_vocab_size: Vocabulary size of the CTC head's output
+                projection, i.e. the size of the word-level CTC tokenizer
+                (including the blank token). Required when ``ctc_enabled`` is
+                ``True``.
+            ctc_blank_id: Token id used as the CTC blank symbol, valid within
+                ``[0, ctc_vocab_size)``. Required when ``ctc_enabled`` is
+                ``True``; it is dataset-tokenizer-specific and not assumed to
+                be ``0``.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -171,6 +190,40 @@ class SltConfig(PretrainedConfig):
         if attention_diversity_loss_weight < 0.0:
             raise ValueError("attention_diversity_loss_weight must be non-negative")
         self.attention_diversity_loss_weight = float(attention_diversity_loss_weight)
+
+        if not isinstance(ctc_enabled, bool):
+            raise TypeError("ctc_enabled must be a bool")
+        if isinstance(ctc_loss_weight, bool) or not isinstance(
+            ctc_loss_weight, (int, float)
+        ):
+            raise TypeError("ctc_loss_weight must be a real number")
+        if ctc_loss_weight < 0.0:
+            raise ValueError("ctc_loss_weight must be non-negative")
+        if ctc_vocab_size is not None and (
+            isinstance(ctc_vocab_size, bool) or not isinstance(ctc_vocab_size, int)
+        ):
+            raise TypeError("ctc_vocab_size must be an int or None")
+        if ctc_vocab_size is not None and ctc_vocab_size <= 0:
+            raise ValueError("ctc_vocab_size must be positive")
+        if ctc_enabled and ctc_vocab_size is None:
+            raise ValueError("ctc_vocab_size is required when ctc_enabled is True")
+        if ctc_blank_id is not None and (
+            isinstance(ctc_blank_id, bool) or not isinstance(ctc_blank_id, int)
+        ):
+            raise TypeError("ctc_blank_id must be an int or None")
+        if ctc_enabled and ctc_blank_id is None:
+            raise ValueError("ctc_blank_id is required when ctc_enabled is True")
+        if (
+            ctc_blank_id is not None
+            and ctc_vocab_size is not None
+            and not 0 <= ctc_blank_id < ctc_vocab_size
+        ):
+            raise ValueError("ctc_blank_id must be in [0, ctc_vocab_size)")
+        self.ctc_enabled = ctc_enabled
+        self.ctc_loss_weight = float(ctc_loss_weight)
+        self.ctc_vocab_size = ctc_vocab_size
+        self.ctc_blank_id = ctc_blank_id
+
         # New checkpoints embed the complete LLM configuration. Loading it by
         # name is retained only for old configs that do not contain this field.
         if llm_config is None:

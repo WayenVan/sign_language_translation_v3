@@ -29,7 +29,7 @@ class Ph14TMultiLinglDataset(Dataset):
         self,
         data_root: str,
         mode: str = "train",
-        pseudo_gloss_column: str = "pseudo_gloss_strict",
+        pseudo_gloss_column: str = "orig_pseudo_gloss_strict",
         pipline=None,
     ):
         self.data_root = data_root

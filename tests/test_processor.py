@@ -6,7 +6,12 @@ from csi_slt.data.processors.sign_video_processor import SignVideoProcessor
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
 from csi_slt.data.ph14t.ph14t_torch_dataset import Ph14TGeneralDataset
 from csi_slt.data.collators.general_collator import GeneralSLTCollator
-from transformers import AutoTokenizer, AutoVideoProcessor, AutoProcessor
+from transformers import (
+    AutoTokenizer,
+    AutoVideoProcessor,
+    AutoProcessor,
+    PreTrainedTokenizerFast,
+)
 from torch.utils.data import DataLoader
 
 
@@ -19,16 +24,18 @@ def test_processor_save_load():
 
 
 def test_slt_processor_save_load():
-    tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
     prompt_paths_per_language = {
         "en": "jinjas/en_prompt.md.j2",
         "de": "jinjas/de_prompt.md.j2",
         "zh": "jinjas/zh_prompt.md.j2",
     }
+    ctc_tokenizer = PreTrainedTokenizerFast.from_pretrained("outputs/ctc_tokenizer")
     video_processor = SignVideoProcessor()
     processor = SignTranslationProcessor(
         video_processor=video_processor,
         tokenizer=tokenizer,
+        ctc_tokenizer=ctc_tokenizer,
         prompt_paths_per_language=prompt_paths_per_language,
     )
     processor.save_pretrained("outputs/slt_processor_test")
@@ -78,6 +85,6 @@ def test_slt_processor_checkpoint():
 
 if __name__ == "__main__":
     # test_processor_save_load()
-    test_slt_processor()
+    # test_slt_processor()
     # test_slt_processor_checkpoint()
-    # test_slt_processor_save_load()
+    test_slt_processor_save_load()

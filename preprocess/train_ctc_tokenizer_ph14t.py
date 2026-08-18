@@ -83,7 +83,9 @@ hf_tokenizer = PreTrainedTokenizerFast(
     # 注意：
     # transformers 本身没有标准的 blank_token 参数
     # 所以 <blank> 作为 additional special token 保存
-    additional_special_tokens=["<blank>"],
+    extra_special_tokens={
+        "blank_token": "<blank>",
+    },
 )
 
 

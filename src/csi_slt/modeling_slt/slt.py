@@ -27,6 +27,7 @@ from .output_utils import (
 )
 from .misc import (
     mark_module_tree_as_initialized,
+    packed_to_padded,
 )
 from .registry import (
     VISUAL_ADAPTERS,
@@ -203,6 +204,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
         # Global learnable scale, initialized as an identity transform.
         self.visual_scale = nn.Parameter(torch.tensor(1.0))
+        # CTC head over visual tokens, predicting the word-level pseudo-gloss
+        # vocabulary. Only constructed when the CTC objective is enabled;
+        # otherwise the model carries no extra CTC parameters.
+        self.ctc_head = (
+            nn.Linear(self.config.hidden_size, config.ctc_vocab_size)
+            if config.ctc_enabled
+            else None
+        )
         # The adapter projection and learned visual positions can have a
         # different scale from the frozen LLM's token embeddings. Normalize the
         # completed visual token (projection + position) immediately before it
@@ -520,6 +529,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )  # [BT, D]
         # visual_feats = self.visual_output_norm(visual_feats)
 
+        # Keep the pre-scale features/lengths for the CTC head, so its input
+        # is unaffected by the LLM-embedding scale factor applied below.
+        ctc_visual_features = visual_feats
+        ctc_visual_lengths = visual_lengths
+
         # Scale adapted visual features before injecting them into the LLM.
         visual_feats = visual_feats * self.visual_scale
 
@@ -574,6 +588,8 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_mask=visual_token_mask,  # [B, L]
             visual_lengths=visual_lengths,  # [B]
             packed_visual_position_ids=visual_position_ids,
+            ctc_visual_features=ctc_visual_features,  # [sum(Lv), D]
+            ctc_visual_lengths=ctc_visual_lengths,  # [B]
         )
         if return_visual_adapter_extras and return_visual_backbone_extras:
             return prepare_output, visual_output.extras, visual_backbone_extras
@@ -672,6 +688,31 @@ class SltModel(PreTrainedModel, GenerationMixin):
             ignore_index=-100,
         )
 
+    def _compute_ctc_loss(
+        self,
+        ctc_visual_features: torch.Tensor,  # [sum(Lv), D]
+        ctc_visual_lengths: torch.Tensor,  # [B]
+        pseudo_gloss_ids: torch.Tensor,  # [sum(pseudo_gloss_length)]
+        pseudo_gloss_length: torch.Tensor,  # [B]
+    ) -> torch.Tensor:
+        """Compute the CTC loss between visual tokens and packed pseudo-gloss targets."""
+        logits = self.ctc_head(ctc_visual_features)  # [sum(Lv), V]
+        # Compute in fp32 for numerical stability under mixed-precision training.
+        log_probs = nn.functional.log_softmax(logits.float(), dim=-1)
+        padded_log_probs, _ = packed_to_padded(
+            log_probs, ctc_visual_lengths
+        )  # [B, T, V]
+        log_probs = padded_log_probs.transpose(0, 1)  # [T, B, V], required by ctc_loss
+        return nn.functional.ctc_loss(
+            log_probs,
+            pseudo_gloss_ids,
+            ctc_visual_lengths,
+            pseudo_gloss_length,
+            blank=self.config.ctc_blank_id,
+            reduction="mean",
+            zero_infinity=True,
+        )
+
     def forward(
         self,
         input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <video_soft_token>, ...]
@@ -685,8 +726,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         labels: Optional[torch.Tensor] = None,  # [B, L]
         # Accepted temporarily so existing processor batches remain compatible
         # after removal of the old contrastive/alignment objectives.
-        pseudo_gloss_input_ids: Optional[torch.Tensor] = None,
-        pseudo_gloss_attention_mask: Optional[torch.Tensor] = None,
+        # Packed (no padding) pseudo-gloss token ids plus per-sample lengths,
+        # e.g. for a future CTC loss.
+        pseudo_gloss_ids: Optional[torch.Tensor] = None,  # [sum(pseudo_gloss_length)]
+        pseudo_gloss_length: Optional[torch.Tensor] = None,  # [B]
         semantic_ids: Optional[torch.Tensor] = None,
         use_cache: Optional[bool] = None,
         cache_position: Optional[torch.Tensor] = None,
@@ -868,6 +911,30 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     * attention_diversity_loss
                 )
 
+        ctc_loss = None
+        if (
+            loss is not None
+            and self.training
+            and self.config.ctc_enabled
+            and self.config.ctc_loss_weight > 0.0
+        ):
+            if (
+                pseudo_gloss_ids is None
+                or pseudo_gloss_length is None
+                or prepare_output is None
+            ):
+                raise ValueError(
+                    "ctc_enabled with ctc_loss_weight > 0 requires pseudo_gloss_ids, "
+                    "pseudo_gloss_length, and pixel_values to be provided."
+                )
+            ctc_loss = self._compute_ctc_loss(
+                prepare_output.ctc_visual_features,
+                prepare_output.ctc_visual_lengths,
+                pseudo_gloss_ids,
+                pseudo_gloss_length,
+            )
+            loss = loss + self.config.ctc_loss_weight * ctc_loss
+
         information = None
         if information_request.enabled:
             information = build_information_output(
@@ -899,6 +966,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     "attention_diversity_loss_weight": loss.new_tensor(
                         self.config.attention_diversity_loss_weight
                     ),
+                }
+            )
+        if ctc_loss is not None:
+            weighted_ctc_loss = self.config.ctc_loss_weight * ctc_loss
+            logging_scalars.update(
+                {
+                    "ctc_loss": ctc_loss.detach(),
+                    "ctc_weighted_loss": weighted_ctc_loss.detach(),
+                    "ctc_loss_weight": loss.new_tensor(self.config.ctc_loss_weight),
                 }
             )
 

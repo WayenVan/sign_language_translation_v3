@@ -125,6 +125,7 @@ def _make_processor(ctc_tokenizer=None) -> SignTranslationProcessor:
     processor.tokenizer = _FakeTokenizer("<video>", 7)
     processor.pad_token_id = processor.tokenizer.pad_token_id
     processor.ctc_tokenizer = ctc_tokenizer
+    processor.pseudo_gloss_dropout = 0.0
     processor.video_processor = _FakeVideoProcessor()
     processor._merge_kwargs = lambda *args, **kwargs: {"videos_kwargs": {}}
     processor._get_rendered_prompt_for_lang = (
@@ -254,8 +255,8 @@ def test_training_keeps_standalone_pseudo_gloss_without_teacher_paths():
         training=True,
     )
 
-    assert "pseudo_gloss_input_ids" in output
-    assert "pseudo_gloss_attention_mask" in output
+    assert "pseudo_gloss_ids" in output
+    assert "pseudo_gloss_length" in output
     assert not any("_teacher_" in name for name in output)
 
 
@@ -269,7 +270,7 @@ def test_evaluation_omits_training_only_teacher_paths():
         training=False,
     )
 
-    assert "pseudo_gloss_input_ids" in output
+    assert "pseudo_gloss_ids" in output
     assert not any("_teacher_" in name for name in output)
 
 

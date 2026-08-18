@@ -41,6 +41,11 @@ class PrepareForCausalLMOutput(NamedTuple):
     visual_mask: torch.Tensor  # [B, L]
     visual_lengths: Optional[torch.Tensor] = None  # [B]
     packed_visual_position_ids: Optional[torch.Tensor] = None  # [sum(Lv)]
+    # Pre-scale visual features/lengths, i.e. before `* self.visual_scale`,
+    # kept for the CTC head so its input isn't affected by that LLM-embedding
+    # scale factor.
+    ctc_visual_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
+    ctc_visual_lengths: Optional[torch.Tensor] = None  # [B]
 
 
 @dataclass

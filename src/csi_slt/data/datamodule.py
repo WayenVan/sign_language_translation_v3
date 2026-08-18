@@ -8,6 +8,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import Dataset
+from transformers import AutoTokenizer
 
 from .datamodule_strategies import DatasetMap, Split, Stage
 
@@ -116,12 +117,30 @@ class DataModule:
         return dataset
 
     @cached_property
+    def ctc_tokenizer(self):
+        """Load the optional word-level CTC tokenizer used for pseudo-gloss supervision."""
+        path = self.data_cfg.get("ctc_tokenizer_dir")
+        if path is None:
+            return None
+
+        path = path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
+        if not os.path.isdir(path):
+            raise FileNotFoundError(f"CTC tokenizer directory not found: {path}")
+
+        return AutoTokenizer.from_pretrained(path)
+
+    @cached_property
     def processor(self):
+        processor_kwargs: dict[str, Any] = {}
+        if self.ctc_tokenizer is not None:
+            processor_kwargs["ctc_tokenizer"] = self.ctc_tokenizer
+
         return instantiate(
             self.data_cfg.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
             prompt_paths_per_language=self._prompt_paths,
+            **processor_kwargs,
             _convert_="all",
         )
 
