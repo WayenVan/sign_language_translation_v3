@@ -115,7 +115,7 @@ class _FakeVideoProcessor:
         )
 
 
-def _make_processor() -> SignTranslationProcessor:
+def _make_processor(ctc_tokenizer=None) -> SignTranslationProcessor:
     processor = object.__new__(SignTranslationProcessor)
     processor.video_soft_token = "<video>"
     processor.video_start_token = "<video-start>"
@@ -124,6 +124,7 @@ def _make_processor() -> SignTranslationProcessor:
     processor.num_extra_video_tokens = 2
     processor.tokenizer = _FakeTokenizer("<video>", 7)
     processor.pad_token_id = processor.tokenizer.pad_token_id
+    processor.ctc_tokenizer = ctc_tokenizer
     processor.video_processor = _FakeVideoProcessor()
     processor._merge_kwargs = lambda *args, **kwargs: {"videos_kwargs": {}}
     processor._get_rendered_prompt_for_lang = (
@@ -244,7 +245,7 @@ def test_rendered_prompt_requires_exactly_one_source_sentinel():
 
 
 def test_training_keeps_standalone_pseudo_gloss_without_teacher_paths():
-    processor = _make_processor()
+    processor = _make_processor(ctc_tokenizer=_FakeTokenizer("<video>", 7))
     output = processor(
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
         text=["answer"],
@@ -259,7 +260,7 @@ def test_training_keeps_standalone_pseudo_gloss_without_teacher_paths():
 
 
 def test_evaluation_omits_training_only_teacher_paths():
-    processor = _make_processor()
+    processor = _make_processor(ctc_tokenizer=_FakeTokenizer("<video>", 7))
     output = processor(
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
         text=["answer"],

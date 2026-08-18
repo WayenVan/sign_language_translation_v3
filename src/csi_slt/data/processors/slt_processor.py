@@ -8,7 +8,8 @@ from transformers.image_processing_utils import (
 from transformers.utils import TensorType
 from transformers.processing_utils import ProcessingKwargs, Unpack
 import numpy as np
-from transformers.tokenization_utils_base import TextInput
+from transformers.tokenization_utils_base import TextInput, PreTrainedTokenizerBase
+from transformers import AutoTokenizer
 
 from typing import Mapping, Sequence, Union
 
@@ -94,7 +95,19 @@ class SignTranslationProcessor(ProcessorMixin):
         video_token_scale=0.5,
         num_extra_video_tokens=2,  # for video start and end tokens
         position_shift_range=(0, 20),
+        ctc_tokenizer: PreTrainedTokenizerBase | None = None,
     ):
+        if ctc_tokenizer is not None and not isinstance(
+            ctc_tokenizer, PreTrainedTokenizerBase
+        ):
+            raise TypeError("ctc_tokenizer must be a PreTrainedTokenizerBase or None")
+        # Deliberately not registered via ProcessorMixin's `attributes` machinery:
+        # that machinery requires every attribute to be present and non-None on every
+        # construction. Naming this param "*_tokenizer" would also make
+        # ProcessorMixin.get_attributes() auto-detect it as a required attribute (it
+        # matches on the substring "tokenizer"), which is why get_attributes() is
+        # overridden below to pin the attribute list explicitly.
+        self.ctc_tokenizer = ctc_tokenizer
         if (
             prompt_paths_per_language is not None
             and prompt_templates_per_language is not None
@@ -148,6 +161,53 @@ class SignTranslationProcessor(ProcessorMixin):
         # Cache rendered prompts. BOS handling is part of the cache key because
         # callers may use the same processor in both modes.
         self._prompt_cache: dict[str, str] = {}
+
+    @classmethod
+    def get_attributes(cls):
+        # Pin the attribute list explicitly instead of relying on
+        # ProcessorMixin's default detection, which infers attributes from
+        # __init__ parameter names containing a modality substring (e.g.
+        # "tokenizer"). That default would sweep up the optional
+        # ctc_tokenizer param and require it on every construction.
+        return list(cls.attributes)
+
+    def to_dict(self) -> dict:
+        # ProcessorMixin.to_dict() deep-copies __dict__ and then JSON-dumps
+        # the result. ctc_tokenizer is a stateful tokenizer object (not JSON
+        # serializable) and isn't covered by ProcessorMixin's usual "delete
+        # registered tokenizer attributes" step because it's deliberately not
+        # a registered attribute (see get_attributes above). Pull it out
+        # before deep-copying rather than after, so it's never touched.
+        _missing = object()
+        ctc_tokenizer = self.__dict__.pop("ctc_tokenizer", _missing)
+        try:
+            output = super().to_dict()
+        finally:
+            if ctc_tokenizer is not _missing:
+                self.ctc_tokenizer = ctc_tokenizer
+        output.pop("ctc_tokenizer", None)
+        return output
+
+    def save_pretrained(self, save_directory, push_to_hub: bool = False, **kwargs):
+        # Save ctc_tokenizer's own files before delegating, so that if
+        # push_to_hub=True, ProcessorMixin's upload (which snapshots file
+        # timestamps up front) picks them up too.
+        os.makedirs(save_directory, exist_ok=True)
+        if self.ctc_tokenizer is not None:
+            self.ctc_tokenizer.save_pretrained(
+                os.path.join(save_directory, "ctc_tokenizer")
+            )
+        return super().save_pretrained(save_directory, push_to_hub=push_to_hub, **kwargs)
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        processor = super().from_pretrained(pretrained_model_name_or_path, **kwargs)
+        ctc_tokenizer_dir = os.path.join(
+            str(pretrained_model_name_or_path), "ctc_tokenizer"
+        )
+        if os.path.isdir(ctc_tokenizer_dir):
+            processor.ctc_tokenizer = AutoTokenizer.from_pretrained(ctc_tokenizer_dir)
+        return processor
 
     @staticmethod
     def _read_prompt_file(path: str) -> str:
@@ -232,9 +292,12 @@ class SignTranslationProcessor(ProcessorMixin):
         before_source, _, after_source = prompt.partition(self.video_start_token)
         return _PromptParts(before_source, after_source)
 
-    def _encode_text_segments(self, texts: Sequence[str]) -> list[list[int]]:
+    def _encode_text_segments(
+        self, texts: Sequence[str], tokenizer=None
+    ) -> list[list[int]]:
         """Tokenize text segments without padding or special-token insertion."""
-        encoded = self.tokenizer(
+        tokenizer = tokenizer if tokenizer is not None else self.tokenizer
+        encoded = tokenizer(
             list(texts),
             add_special_tokens=False,
             padding=False,
@@ -699,14 +762,18 @@ class SignTranslationProcessor(ProcessorMixin):
         # Validate the behavior specific to the video source path.
         self._validate_video_path(video_path, video_source_ids)
 
-        # Keep the standalone pseudo-gloss fields for batch inspection and
-        # compatibility.
+        # Pseudo-gloss fields for batch inspection and CTC training, tokenized
+        # with the separate word-level ctc_tokenizer when one is attached to
+        # this processor. Without a ctc_tokenizer there is nothing to encode
+        # these with, so both fields stay None.
         pseudo_gloss_ids = None
         pseudo_gloss_attention_mask = None
-        if pseudo_gloss is not None:
-            unpadded_pseudo_gloss_ids = self._encode_text_segments(pseudo_gloss)
+        if self.ctc_tokenizer is not None and pseudo_gloss is not None:
+            unpadded_pseudo_gloss_ids = self._encode_text_segments(
+                pseudo_gloss, tokenizer=self.ctc_tokenizer
+            )
             pseudo_gloss_ids = self._left_pad_sequences(
-                unpadded_pseudo_gloss_ids, self.pad_token_id
+                unpadded_pseudo_gloss_ids, self.ctc_tokenizer.pad_token_id
             )
             pseudo_gloss_attention_mask = self._attention_mask_for(
                 unpadded_pseudo_gloss_ids, pseudo_gloss_ids.size(1)
