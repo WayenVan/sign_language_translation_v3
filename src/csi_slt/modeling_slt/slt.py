@@ -44,7 +44,7 @@ def get_llm_cls_by_model_name(model_name):
         from transformers.models.qwen3 import Qwen3ForCausalLM
 
         model_cls = Qwen3ForCausalLM
-    elif "gemma" in model_name.lower():
+    elif "gemma-3" in model_name.lower():
         from transformers.models.gemma3 import (
             Gemma3ForCausalLM,
             Gemma3ForConditionalGeneration,
@@ -55,6 +55,13 @@ def get_llm_cls_by_model_name(model_name):
             if "1b" in model_name.lower()
             else Gemma3ForConditionalGeneration
         )
+    elif "gemma-4" in model_name.lower():
+        from transformers.models.gemma4_unified import (
+            Gemma4UnifiedForConditionalGeneration,
+        )
+
+        model_cls = Gemma4UnifiedForConditionalGeneration
+
     else:
         raise ValueError(f"Unsupported LLM model: {model_name}")
     return model_cls
@@ -812,9 +819,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 inputs_embeds = self.llm.get_input_embeddings()(input_ids)
 
         if use_cache and past_key_values is None:
-            past_key_values = DynamicCache(
-                self.llm.config,
-            )
+            past_key_values = DynamicCache(config=self.llm.config)
 
         if cache_position is None:
             past_seen_tokens = (
@@ -832,7 +837,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 "config": self.config.get_text_config(),
                 "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
-                "cache_position": cache_position,
                 "past_key_values": past_key_values,
                 "position_ids": position_ids,
             }
@@ -998,11 +1002,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
         input_ids,
         pixel_values=None,
         pixel_values_length=None,
-        cache_position=None,
         position_ids=None,
         attention_mask=None,
         token_type_ids=None,
         labels=None,
+        is_first_iteration=False,
         **kwargs,
     ):
         # Extend the standard generation inputs with video tensors during prefill.
@@ -1010,14 +1014,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
             input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            cache_position=cache_position,
             token_type_ids=token_type_ids,
+            is_first_iteration=is_first_iteration,
             **kwargs,
         )
 
         # Cached decoding no longer contains video placeholder tokens, so video
         # tensors are only passed on the first generation step.
-        if cache_position[0] == 0:
+        if is_first_iteration:
             model_inputs["pixel_values"] = pixel_values
             model_inputs["pixel_values_length"] = pixel_values_length
 

@@ -1,79 +1,58 @@
-chat_template_jinjia: jinjas/gemma_slt.jinja
 data_root: dataset/PHOENIX-2014-T-release-v3
 
-en_data_root: large_files/ph14t_english
-zh_data_root: large_files/ph14t_chinese
+prompt_templates:
+  zh: jinjas/zh_prompt.md.j2
+  de: jinjas/de_prompt.md.j2
+  en: jinjas/en_prompt.md.j2
 
-assemble: True
+ctc_tokenizer_dir: outputs/ctc_tokenizer
 
-train:
-  dataset:
-    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
-    data_root: ${data.data_root}
-    zh_data_root: ${data.zh_data_root}
-    en_data_root: ${data.en_data_root}
-    mode: train
-  processor:
-    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
-    video_token_scale: 0.5
-    num_extra_video_tokens: 2
-    video_padding_to_multiple_of: 4
-    video_start_token: <unused1>
-    video_soft_token: <unused0>
-    eos_token: <end_of_turn>
-    mode: train
-    video_processor:
-      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+processor:
+  _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+  video_token_scale: 1.0
+  num_extra_video_tokens: 2
+  video_start_token: <unused1>
+  video_soft_token: <unused0>
+  pseudo_gloss_dropout: 0.2
+  video_processor:
+    _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+    size:
       height: 224
       width: 224
-  collator:
+    padding_to_multiple_of: 4
+    image_mean: [0.485, 0.456, 0.406]
+    image_std: [0.229, 0.224, 0.225]
+    do_normalize: true
+    do_crop: false
+    do_resize: false
+    crop_size:
+      height: 224
+      width: 224
+    do_random_speed: true
+
+train:
+  dataset: &dataset
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    mode: train
+    pseudo_gloss_column: orig_pseudo_gloss_strict
+  collator: &collator
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
-    debug: False
+    debug: false
+    mode: train
 
 val:
   dataset:
-    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
-    data_root: ${data.data_root}
-    zh_data_root: ${data.zh_data_root}
-    en_data_root: ${data.en_data_root}
-    mode: dev
-  processor:
-    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
-    video_token_scale: 0.5
-    num_extra_video_tokens: 2
-    video_padding_to_multiple_of: 4
-    mode: eval
-    video_start_token: <unused1>
-    video_soft_token: <unused0>
-    eos_token: <end_of_turn>
-    video_processor:
-      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
-      height: 224
-      width: 224
+    <<: *dataset
+    mode: validation
   collator:
-    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
-    debug: False
+    <<: *collator
+    mode: eval
 
 test:
   dataset:
-    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
-    data_root: ${data.data_root}
-    zh_data_root: ${data.zh_data_root}
-    en_data_root: ${data.en_data_root}
+    <<: *dataset
     mode: test
-  processor:
-    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
-    video_token_scale: 0.5
-    num_extra_video_tokens: 2
-    video_padding_to_multiple_of: 4
-    video_start_token: <unused1>
-    video_soft_token: <unused0>
-    eos_token: <end_of_turn>
-    mode: test
-    video_processor:
-      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
-      height: 224
-      width: 224
   collator:
-    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
-    debug: False
+    <<: *collator
+    mode: test

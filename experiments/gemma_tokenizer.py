@@ -2,20 +2,24 @@ from transformers import AutoTokenizer, BitsAndBytesConfig
 
 from transformers.models.gemma.tokenization_gemma import GemmaTokenizer
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
+from transformers.models.gemma4_unified.modeling_gemma4_unified import (
+    Gemma4UnifiedForCausalLM,
+    Gemma4UnifiedForConditionalGeneration,
+)
 
-tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
-model = Gemma3ForCausalLM.from_pretrained("google/gemma-3-1b-it")
-print(model.config.eos_token_id)
-exit()
+from transformers import AutoModelForMultimodalLM
 
-model.config
+tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-12b-it")
+model = Gemma4UnifiedForConditionalGeneration.from_pretrained("google/gemma-4-12b-it")
+
+# model.config
 
 tokenizer.add_bos_token = False
 tokenizer.add_eos_token = True
-tokenizer.eos_token = "<end_of_turn>"
-tokenizer.eos_token_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
 print(tokenizer.eos_token_id)
 print(tokenizer.eos_token)
+print(tokenizer.convert_tokens_to_ids("<unused0>"))
+print(tokenizer.convert_tokens_to_ids("<unused1>"))
 
 # output the tokens rather than the ids
 label_ids = tokenizer(

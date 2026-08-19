@@ -1,0 +1,79 @@
+chat_template_jinjia: jinjas/gemma_slt.jinja
+data_root: dataset/PHOENIX-2014-T-release-v3
+
+en_data_root: large_files/ph14t_english
+zh_data_root: large_files/ph14t_chinese
+
+assemble: True
+
+train:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    zh_data_root: ${data.zh_data_root}
+    en_data_root: ${data.en_data_root}
+    mode: train
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    video_padding_to_multiple_of: 4
+    video_start_token: <unused1>
+    video_soft_token: <unused0>
+    eos_token: <end_of_turn>
+    mode: train
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+
+val:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    zh_data_root: ${data.zh_data_root}
+    en_data_root: ${data.en_data_root}
+    mode: dev
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    video_padding_to_multiple_of: 4
+    mode: eval
+    video_start_token: <unused1>
+    video_soft_token: <unused0>
+    eos_token: <end_of_turn>
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
+
+test:
+  dataset:
+    _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
+    data_root: ${data.data_root}
+    zh_data_root: ${data.zh_data_root}
+    en_data_root: ${data.en_data_root}
+    mode: test
+  processor:
+    _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    video_padding_to_multiple_of: 4
+    video_start_token: <unused1>
+    video_soft_token: <unused0>
+    eos_token: <end_of_turn>
+    mode: test
+    video_processor:
+      _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+      height: 224
+      width: 224
+  collator:
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: False
