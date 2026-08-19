@@ -62,26 +62,37 @@ else
 fi
 echo "DATASET_PATH=$DATASET_PATH"
 
-accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder \
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc \
-  engine.training_args.per_device_train_batch_size=2 \
-  engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=8 \
-  engine.training_args.dataloader_persistent_workers=True \
-  engine.training_args.eval_steps=6000 \
-  engine.training_args.save_steps=6000 \
-  engine.training_args.logging_steps=15 \
-  engine.training_args.disable_tqdm="$HG_TQDM_DISABLE" \
-  engine.training_args.report_to="$REPORT_TO" \
-  engine.training_args.ddp_find_unused_parameters=False \
-  data=ph14t_*x224x224_qwen_multiling \
-  data.processor.video_token_scale=1.0 \
-  data.data_root="$DATASET_PATH" \
-  data.processor.num_extra_video_tokens=2 \
-  data.processor.video_processor.padding_to_multiple_of=4 \
-  data.processor.video_processor.do_resize=False \
+# Array form instead of backslash-continued lines: inside (...) each element
+# can live on its own line and be commented out individually with a leading
+# "#" without breaking the rest of the command (a "#" on a "\"-continued
+# line eats that line's trailing backslash too and splits the command).
+CMD_ARGS=(
+  --num_processes=2
+  --mixed_precision=bf16
+  --debug
+  -m csi_slt.commands.train
+  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
+  engine.training_args.per_device_train_batch_size=2
+  engine.training_args.per_device_eval_batch_size=1
+  engine.training_args.dataloader_num_workers=8
+  engine.training_args.dataloader_persistent_workers=True
+  engine.training_args.eval_steps=6000
+  engine.training_args.save_steps=6000
+  engine.training_args.logging_steps=15
+  engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
+  engine.training_args.report_to="$REPORT_TO"
+  engine.training_args.ddp_find_unused_parameters=False
+  data=ph14t_*x224x224_qwen_multiling
+  data.processor.video_token_scale=1.0
+  data.data_root="$DATASET_PATH"
+  data.processor.num_extra_video_tokens=2
+  data.processor.video_processor.padding_to_multiple_of=4
+  data.processor.video_processor.do_resize=False
   data.processor.video_processor.do_normalize=False # NOTE: 很重要！！！
+)
+
+accelerate launch "${CMD_ARGS[@]}"
 
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
