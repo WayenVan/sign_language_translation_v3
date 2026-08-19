@@ -154,6 +154,21 @@ class SltConfig(PretrainedConfig):
         ):
             kwargs.pop(retired_key, None)
 
+        # Transformers validates token ids during PretrainedConfig
+        # initialization. That validation dynamically calls get_text_config(),
+        # so the embedded language-model config must exist before super().__init__.
+        if llm_config is None:
+            llm_config = AutoConfig.from_pretrained(llm_model_name_or_path)
+        elif isinstance(llm_config, dict):
+            llm_config = dict(llm_config)
+            model_type = llm_config.pop("model_type", None)
+            if model_type is None:
+                raise ValueError("Serialized llm_config must contain 'model_type'.")
+            llm_config = AutoConfig.for_model(model_type, **llm_config)
+        elif not isinstance(llm_config, PretrainedConfig):
+            raise TypeError("llm_config must be a PretrainedConfig, a dict, or None.")
+
+        self.llm_config = llm_config
         super().__init__(**kwargs)
 
         self.video_soft_token_id = video_soft_token_id
@@ -224,20 +239,6 @@ class SltConfig(PretrainedConfig):
         self.ctc_vocab_size = ctc_vocab_size
         self.ctc_blank_id = ctc_blank_id
 
-        # New checkpoints embed the complete LLM configuration. Loading it by
-        # name is retained only for old configs that do not contain this field.
-        if llm_config is None:
-            llm_config = AutoConfig.from_pretrained(llm_model_name_or_path)
-        elif isinstance(llm_config, dict):
-            llm_config = dict(llm_config)
-            model_type = llm_config.pop("model_type", None)
-            if model_type is None:
-                raise ValueError("Serialized llm_config must contain 'model_type'.")
-            llm_config = AutoConfig.for_model(model_type, **llm_config)
-        elif not isinstance(llm_config, PretrainedConfig):
-            raise TypeError("llm_config must be a PretrainedConfig, a dict, or None.")
-
-        self.llm_config = llm_config
         text_hidden_size = self.get_text_config().hidden_size
         if hidden_size is not None and hidden_size != text_hidden_size:
             raise ValueError(

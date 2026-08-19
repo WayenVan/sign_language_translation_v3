@@ -15,7 +15,8 @@ def test_datamodule():
         cfg = hydra.compose(
             config_name="train/base",
             overrides=[
-                "data=ph14t_*x224x224_qwen_multiling",
+                # "data=ph14t_*x224x224_qwen_multiling",
+                "data=ph14t_*x224x224_gemma_multiling",
                 # "datamodule=shared_subset",
                 # "model=gemma3-1b-dino-base",
                 "data.processor.video_processor.do_normalize=False",

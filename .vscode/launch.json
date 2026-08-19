@@ -12,14 +12,14 @@
         "CUDA_VISIBLE_DEVICES": "1",
         "WANDB_PROJECT": "debugs"
       },
-      "justMyCode": false,
+      "justMyCode": true,
       "args": [
         "--num_processes=1",
         "--mixed_precision=bf16",
         "-m",
         "csi_slt.commands.train",
-        "model=qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-labse",
-        "data=ph14t_*x224x224_qwen_multiling",
+        "model=gemma4-12b-cradio-l-dinoframecrossv28shuffle",
+        "data=ph14t_*x224x224_gemma_multiling",
         "datamodule=shared_subset",
         "engine.training_args.report_to=none",
         "engine.training_args.save_steps=1000",
