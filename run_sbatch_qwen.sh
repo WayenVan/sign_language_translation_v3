@@ -26,7 +26,7 @@ if [[ "${1:-}" == "debug" ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
 else
-  export WANDB_PROJECT=sign_language_translation_v3.1
+  export WANDB_PROJECT=sign_language_translation_v4.0-dev
   REPORT_TO=wandb
 fi
 
@@ -46,8 +46,8 @@ DATASET_PATH=$(prepare_dataset \
 echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
-  model=qwen3-1.7b-cradio-l-dinoframecrossv3 \
-  engine.training_args.output_dir=outputs/qwen3-1.7b-cradio-l-dinoframecrossv3-0810.224x224 \
+  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle \
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc \
   engine.training_args.per_device_train_batch_size=2 \
   engine.training_args.per_device_eval_batch_size=1 \
   engine.training_args.dataloader_num_workers=8 \
@@ -59,7 +59,7 @@ accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.co
   engine.training_args.report_to="$REPORT_TO" \
   engine.training_args.ddp_find_unused_parameters=False \
   data=ph14t_*x224x224_qwen_multiling \
-  data.processor.video_token_scale=2.0 \
+  data.processor.video_token_scale=1.0 \
   data.data_root="$DATASET_PATH" \
   data.processor.num_extra_video_tokens=2 \
   data.processor.video_processor.padding_to_multiple_of=4 \
