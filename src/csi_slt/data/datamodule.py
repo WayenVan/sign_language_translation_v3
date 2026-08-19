@@ -33,10 +33,36 @@ class DataModule:
         self.tokenizer = tokenizer
         self.accelerator = accelerator
 
+        self._register_processor_special_tokens()
+
         self.train_dataset: Dataset | None = None
         self.val_dataset: Dataset | None = None
         self.test_dataset: Dataset | None = None
         self._source_datasets: DatasetMap = {}
+
+    def _register_processor_special_tokens(self) -> None:
+        """Make configured video markers atomic without replacing existing ones."""
+        processor_cfg = self.data_cfg.get("processor")
+        if processor_cfg is None:
+            return
+
+        video_tokens = [
+            processor_cfg.get(name)
+            for name in ("video_soft_token", "video_start_token")
+            if processor_cfg.get(name) is not None
+        ]
+        if not video_tokens:
+            return
+
+        # Gemma's <unusedN> entries exist in its vocabulary but are not matched
+        # atomically in ordinary text until registered as extra special tokens.
+        # Do not replace the tokenizer's existing special-token set (notably
+        # Qwen's native vision tokens), and remove duplicates while preserving
+        # the configuration order.
+        self.tokenizer.add_special_tokens(
+            {"additional_special_tokens": list(dict.fromkeys(video_tokens))},
+            replace_extra_special_tokens=False,
+        )
 
     @property
     def chat_template(self) -> str | None:
