@@ -17,12 +17,24 @@ SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
 cd "$SCRIPT_DIR"
 
 source "$SCRIPT_DIR/.venv/bin/activate"
-source "$SCRIPT_DIR/prepare_dataset.sh"
 
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
-# 如果第一个参数是 "debug"，则设置 REPORT_TO=none
-if [[ "${1:-}" == "debug" ]]; then
+# 可选参数：debug 关闭 WandB，share 直接使用共享数据集。
+DEBUG=false
+SHARED_DATASET=false
+for arg in "$@"; do
+  case "$arg" in
+    debug) DEBUG=true ;;
+    share) SHARED_DATASET=true ;;
+    *)
+      echo "Unknown argument: $arg (supported: debug, share)" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
 else
@@ -39,10 +51,15 @@ else
   HG_TQDM_DISABLE=True
 fi
 
-# 准备数据集，函数输出 DATASET_PATH
-DATASET_PATH=$(prepare_dataset \
-  "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
-  "$HOME/localscratch/ph14t")
+# share 模式下直接使用共享路径，否则准备数据集到本地 scratch。
+if [[ "$SHARED_DATASET" == true ]]; then
+  DATASET_PATH="$SCRIPT_DIR/dataset/PHOENIX-2014-T-release-v3"
+else
+  source "$SCRIPT_DIR/prepare_dataset.sh"
+  DATASET_PATH=$(prepare_dataset \
+    "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
+    "$HOME/localscratch/ph14t")
+fi
 echo "DATASET_PATH=$DATASET_PATH"
 
 accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train \
