@@ -25,12 +25,12 @@ DEBUG=false
 SHARED_DATASET=false
 for arg in "$@"; do
   case "$arg" in
-    debug) DEBUG=true ;;
-    share) SHARED_DATASET=true ;;
-    *)
-      echo "Unknown argument: $arg (supported: debug, share)" >&2
-      exit 2
-      ;;
+  debug) DEBUG=true ;;
+  share) SHARED_DATASET=true ;;
+  *)
+    echo "Unknown argument: $arg (supported: debug, share)" >&2
+    exit 2
+    ;;
   esac
 done
 
@@ -71,8 +71,10 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
+  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
+  model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=8

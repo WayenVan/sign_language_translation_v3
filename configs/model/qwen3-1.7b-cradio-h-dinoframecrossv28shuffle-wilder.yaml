@@ -1,0 +1,38 @@
+config:
+  hidden_size: 2048
+  video_soft_token_id: 151656
+  video_token_scale: 1.0
+  # CTC head over visual tokens, supervised by outputs/ctc_tokenizer's
+  # word-level pseudo-gloss vocab (data.ctc_tokenizer_dir). vocab_size/
+  # blank_id must match that tokenizer exactly (len(tokenizer)=2417,
+  # convert_tokens_to_ids("<blank>")=2) -- update both together if the
+  # tokenizer is ever retrained.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+  llm_model_name_or_path: Qwen/Qwen3-1.7B
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-H
+    output_layer: [-1]
+  visual_adapter_type: dinoframe_cross_v28_shuffle
+  visual_adapter_kwargs:
+    input_dim: 1280
+    cls_input_dim: 2560
+    output_dim: 2048
+    temperature: 0.1
+    spatial_window_radius: null
+    temporal_gate_init: -2.0 # sigmoid
+    # V28 is V2Shuffle with extra capacity knobs (defaults below reproduce V2Shuffle exactly):
+    # - temporal_hidden_dim / temporal_mlp_depth widen and deepen the per-frame motion MLP.
+    # - patch_score_hidden_dim / patch_score_depth turn the patch pooling scorer into an MLP.
+    # - motion_hidden_dim decouples the temporal-shuffle SwiGLU's inner width from output_dim.
+    temporal_hidden_dim: 5120 # defaults to input_dim
+    temporal_mlp_depth: 2
+    patch_score_hidden_dim: 5120 # defaults to input_dim
+    patch_score_depth: 2
+    motion_hidden_dim: 8192 # defaults to output_dim
+    # V2 emits 2 tokens/frame; scale-factor 2 compresses them back to 1/frame.
+    temporal_scale_factor: 2
+    use_short_temporal_conv: false
