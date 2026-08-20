@@ -21,8 +21,15 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
-def freeze_except_lora_adapters(model: SltModel) -> int:
-    """Freeze the complete SLT model and leave only LoRA parameters trainable."""
+def freeze_except_lora_adapters(
+    model: SltModel,
+    *,
+    unfreeze_visual_adapter: bool = False,
+) -> int:
+    """Freeze the SLT model except LoRA and, optionally, the visual adapter."""
+    if not isinstance(unfreeze_visual_adapter, bool):
+        raise TypeError("unfreeze_visual_adapter must be a boolean")
+
     trainable_parameter_count = 0
     for name, parameter in model.named_parameters():
         is_lora_parameter = "lora_" in name
@@ -32,6 +39,17 @@ def freeze_except_lora_adapters(model: SltModel) -> int:
 
     if trainable_parameter_count == 0:
         raise ValueError("No LoRA adapter parameters were found in the model")
+
+    if unfreeze_visual_adapter:
+        visual_adapter = getattr(model, "visual_adapter", None)
+        if visual_adapter is None:
+            raise ValueError(
+                "unfreeze_visual_adapter=True requires model.visual_adapter"
+            )
+        for parameter in visual_adapter.parameters():
+            parameter.requires_grad_(True)
+            trainable_parameter_count += parameter.numel()
+
     return trainable_parameter_count
 
 
@@ -39,6 +57,8 @@ def get_transform_layers_from_strategy(llm_num_layers, strategy_config):
     strategy_name = strategy_config.name
     if strategy_name == "none":
         raise ValueError("No transform layers specified in strategy config.")
+    elif strategy_name == "all_layers":
+        return list(range(llm_num_layers))
     elif strategy_name == "last_n_layers":
         n = strategy_config.n_layers
         if isinstance(n, bool) or not isinstance(n, int):
@@ -72,7 +92,10 @@ def main(cfg: DictConfig):
     slt_model = SltModel.from_pretrained_with_new_lora(
         peft_config, cfg.model.checkpoint_dir
     )
-    freeze_except_lora_adapters(slt_model)
+    freeze_except_lora_adapters(
+        slt_model,
+        unfreeze_visual_adapter=cfg.peft.unfreeze_adapter,
+    )
 
     # create datamodule
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)

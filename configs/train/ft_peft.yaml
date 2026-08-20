@@ -13,7 +13,7 @@ engine:
     output_dir: outputs/ft_peft
     num_train_epochs: 5
     learning_rate: 5e-5
-    warmup_ratio: 0.03
+    warmup_steps: 0.03
     weight_decay: 0.01
     eval_strategy: steps
     eval_steps: 0.1
@@ -21,6 +21,7 @@ engine:
     save_steps: 0.1
 
 peft:
+  unfreeze_adapter: true
   llm_lora_strategy:
-    name: last_n_layers
+    name: all_layers
     n_layers: 4

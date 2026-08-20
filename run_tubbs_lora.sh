@@ -1,7 +1,7 @@
 #! /bin/bash
 
 export PYTHONPATH=./src:$PYTHONPATH
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 
 export WANDB_PROJECT=sign_language_translation_v4.0-dev
 
@@ -15,23 +15,31 @@ else
   REPORT_TO=wandb
 fi
 
-accelerate launch --num_processes=2 --mixed_precision=bf16 --debug -m csi_slt.commands.train_ft_peft \
-  --config-name train/ft_peft \
-  engine.training_args.output_dir=outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0815-224x224-0817-lora \
-  engine.training_args.per_device_train_batch_size=2 \
-  engine.training_args.per_device_eval_batch_size=1 \
-  engine.training_args.dataloader_num_workers=12 \
-  engine.training_args.logging_steps=15 \
-  engine.training_args.disable_tqdm=False \
-  engine.training_args.report_to="$REPORT_TO" \
-  engine.llm_dtype=bfloat16 \
-  engine.visual_backbone_dtype=auto \
-  data=ph14t_*x224x224_qwen_multiling \
-  data.processor.video_token_scale=1.0 \
-  data.processor.num_extra_video_tokens=2 \
-  data.processor.video_processor.padding_to_multiple_of=4 \
-  data.processor.video_processor.do_resize=False \
+CMD_ARGS=(
+  --num_processes=1
+  --mixed_precision=bf16
+  --debug
+  -m csi_slt.commands.train_ft_peft
+  --config-name train/ft_peft
+  model.checkpoint_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc//checkpoint-84000
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc-peft-ft
+  engine.training_args.per_device_train_batch_size=4
+  engine.training_args.per_device_eval_batch_size=1
+  engine.training_args.dataloader_num_workers=12
+  engine.training_args.logging_steps=15
+  engine.training_args.disable_tqdm=False
+  engine.training_args.report_to="$REPORT_TO"
+  engine.llm_dtype=bfloat16
+  engine.visual_backbone_dtype=auto
+  data=ph14t_*x224x224_qwen_multiling
+  data.processor.video_token_scale=1.0
+  data.processor.num_extra_video_tokens=2
+  data.processor.video_processor.padding_to_multiple_of=4
+  data.processor.video_processor.do_resize=False
   data.processor.video_processor.do_normalize=False
+)
+
+accelerate launch "${CMD_ARGS[@]}"
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
 # engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train_ft_peft \
