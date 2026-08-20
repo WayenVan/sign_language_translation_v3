@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 from transformers import GenerationConfig
 
+from csi_slt.modeling_slt.slt import SltModel
 from csi_slt.utils.generation_config import merge_generation_config
 
 
@@ -20,3 +23,27 @@ def test_merge_generation_config_rejects_unknown_overrides():
 
     with pytest.raises(ValueError, match="unknown_option"):
         merge_generation_config(base, {"unknown_option": True})
+
+
+def test_slt_model_preserves_model_specific_multiple_eos_ids():
+    model = SimpleNamespace(
+        llm=SimpleNamespace(
+            generation_config=GenerationConfig(
+                bos_token_id=2,
+                eos_token_id=[1, 106, 50],
+                pad_token_id=0,
+            )
+        ),
+        config=SimpleNamespace(
+            get_text_config=lambda: SimpleNamespace(
+                bos_token_id=2,
+                eos_token_id=1,
+                pad_token_id=0,
+                layer_types=["sliding_attention"],
+            )
+        ),
+    )
+
+    SltModel._configure_generation(model)
+
+    assert model.generation_config.eos_token_id == [1, 106, 50]

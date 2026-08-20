@@ -394,12 +394,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
         else:
             generation_config = deepcopy(generation_config)
 
-        # Token identities come from the canonical text config. Keep a list of
-        # EOS ids intact because GenerationConfig supports multiple stop tokens.
+        # Preserve model-specific generation token ids (notably Gemma 4's
+        # multiple EOS ids) and only fall back to the text config when the
+        # generation config does not define one.
         for name in ("bos_token_id", "eos_token_id", "pad_token_id"):
-            value = getattr(text_config, name, None)
-            if value is not None:
-                setattr(generation_config, name, value)
+            if getattr(generation_config, name, None) is None:
+                value = getattr(text_config, name, None)
+                if value is not None:
+                    setattr(generation_config, name, value)
 
         generation_config.do_sample = False
         generation_config.top_k = None

@@ -79,6 +79,8 @@ def _stable_semantic_id(value: str | int) -> int:
 
 
 class SignTranslationProcessor(ProcessorMixin):
+    _ASSISTANT_TARGET_SENTINEL = "__CSI_SLT_ASSISTANT_TARGET_7F3A9C__"
+
     attributes = ["video_processor", "tokenizer"]
 
     video_processor_class = "AutoVideoProcessor"
@@ -170,6 +172,7 @@ class SignTranslationProcessor(ProcessorMixin):
         # Cache rendered prompts. BOS handling is part of the cache key because
         # callers may use the same processor in both modes.
         self._prompt_cache: dict[str, str] = {}
+        self._assistant_suffix_ids_cache: tuple[int, ...] | None = None
 
     @classmethod
     def get_attributes(cls):
@@ -336,6 +339,56 @@ class SignTranslationProcessor(ProcessorMixin):
                 "Tokenizer returned a different batch size than it received."
             )
         return [list(token_ids) for token_ids in input_ids]
+
+    def _get_assistant_suffix_ids(self) -> list[int]:
+        """Derive the assistant-turn terminator from the active chat template.
+
+        Rendering a completed assistant message lets each tokenizer supply its
+        native terminator (for example, Qwen's ``<|im_end|>`` or Gemma 4's
+        ``<turn|>``) without branching on model names. Trailing template
+        whitespace is excluded because generation stops at the terminator and
+        it must not become part of the supervised translation text.
+        """
+        cached = self._assistant_suffix_ids_cache
+        if cached is not None:
+            return list(cached)
+
+        sentinel = self._ASSISTANT_TARGET_SENTINEL
+        rendered = self.apply_chat_template(
+            [
+                {
+                    "role": "user",
+                    "content": "Determine the assistant turn suffix.",
+                },
+                {
+                    "role": "assistant",
+                    "content": sentinel,
+                },
+            ],
+            add_generation_prompt=False,
+            enable_thinking=False,
+            tokenize=False,
+        )
+        if rendered.count(sentinel) != 1:
+            raise ValueError(
+                "The chat template must preserve the assistant target sentinel "
+                "exactly once when deriving its suffix."
+            )
+
+        assistant_suffix = rendered.partition(sentinel)[2].rstrip()
+        if not assistant_suffix:
+            raise ValueError(
+                "The chat template did not append an assistant-turn suffix."
+            )
+
+        suffix_ids = self._encode_text_segments([assistant_suffix])[0]
+        if not suffix_ids:
+            raise ValueError(
+                "The assistant-turn suffix did not produce any token ids."
+            )
+
+        self._assistant_suffix_ids_cache = tuple(suffix_ids)
+        return list(suffix_ids)
 
     def _encode_prompt_parts(
         self, prompt_parts: Sequence[_PromptParts]
@@ -622,20 +675,23 @@ class SignTranslationProcessor(ProcessorMixin):
     ) -> tuple[list[_EncodedPromptParts], list[list[int]], list[int]]:
         """Encode shared prompt boundaries and target IDs for all source paths."""
         prompt_parts: list[_PromptParts] = []
-        labels: list[str] = []
+        target_texts: list[str] = []
         language_ids: list[int] = []
         for target_text, language in zip(text, src_lang, strict=True):
             prompt_parts.append(
                 self._get_prompt_parts_for_lang(language, add_bos_token)
             )
-            labels.append(
-                target_text + self.tokenizer.eos_token if add_eos_token else target_text
-            )
+            target_texts.append(target_text)
             language_ids.append(LANGUAGE_MAP[language])
+
+        target_ids = self._encode_text_segments(target_texts)
+        if add_eos_token:
+            assistant_suffix_ids = self._get_assistant_suffix_ids()
+            target_ids = [ids + assistant_suffix_ids for ids in target_ids]
 
         return (
             self._encode_prompt_parts(prompt_parts),
-            self._encode_text_segments(labels),
+            target_ids,
             language_ids,
         )
 

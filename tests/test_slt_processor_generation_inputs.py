@@ -128,6 +128,7 @@ def _make_processor(ctc_tokenizer=None) -> SignTranslationProcessor:
     processor.pseudo_gloss_dropout = 0.0
     processor.video_processor = _FakeVideoProcessor()
     processor._merge_kwargs = lambda *args, **kwargs: {"videos_kwargs": {}}
+    processor._assistant_suffix_ids_cache = (processor.tokenizer.eos_token_id,)
     processor._get_rendered_prompt_for_lang = (
         lambda lang, add_bos_token: f"prompt-{lang}:<video-start>:"
     )
@@ -178,6 +179,7 @@ def test_eval_keeps_supervised_inputs_and_adds_prompt_only_generation_fields():
 def test_real_eos_label_is_not_masked_when_it_shares_the_padding_id():
     processor = _make_processor()
     processor.tokenizer.eos_token_id = processor.tokenizer.pad_token_id
+    processor._assistant_suffix_ids_cache = (processor.tokenizer.eos_token_id,)
 
     output = processor(
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
