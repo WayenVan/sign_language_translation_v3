@@ -467,6 +467,29 @@ class SltModel(PreTrainedModel, GenerationMixin):
         position_embeddings = self.visual_position_embedding(position_ids)
         return video_feats + position_embeddings  # [BT, D]
 
+    def _apply_llm_embedding_scale(
+        self, visual_embeddings: torch.Tensor
+    ) -> torch.Tensor:
+        """Match injected visual embeddings to the LLM token-embedding scale.
+
+        Some LLMs scale token embeddings inside their embedding module. Gemma
+        4, for example, multiplies them by ``sqrt(hidden_size)``. Visual
+        embeddings bypass that module when injected through ``inputs_embeds``,
+        so apply the same scale explicitly. Backends such as Qwen that expose
+        no embedding scale retain their original behavior.
+        """
+        embedding_layer = self.llm.get_input_embeddings()
+        embedding_scale = getattr(embedding_layer, "embed_scale", None)
+        if embedding_scale is None:
+            return visual_embeddings
+
+        if isinstance(embedding_scale, torch.Tensor):
+            embedding_scale = embedding_scale.to(
+                device=visual_embeddings.device,
+                dtype=visual_embeddings.dtype,
+            )
+        return visual_embeddings * embedding_scale
+
     def get_visual_feats(
         self,
         video: torch.Tensor,
@@ -581,6 +604,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
         extended_visual_feats = torch.stack(
             extended_visual_feats, dim=0
         ).contiguous()  # [B, L, D]
+        extended_visual_feats = self._apply_llm_embedding_scale(
+            extended_visual_feats
+        )
         text_embeds = self.llm.get_input_embeddings()(text_input_ids).contiguous()
         # Keep multimodal inputs in the LLM embedding dtype (e.g. bf16) after
         # the fp32 position embedding and RMSNorm computation.
