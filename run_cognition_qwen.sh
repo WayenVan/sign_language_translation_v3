@@ -3,7 +3,7 @@
 #SBATCH --job-name=slt_qwen
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
-#SBATCH --partition=gpu-h100
+#SBATCH --partition=gpu-l40s
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256g
@@ -71,16 +71,16 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
+  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
-  model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
-  engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
+  # model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
+  # engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
-  engine.training_args.dataloader_num_workers=8
-  engine.training_args.dataloader_persistent_workers=True
+  engine.training_args.dataloader_num_workers=6
+  engine.training_args.dataloader_persistent_workers=False
   engine.training_args.eval_steps=6000
   engine.training_args.save_steps=6000
   engine.training_args.logging_steps=15

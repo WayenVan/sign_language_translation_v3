@@ -63,7 +63,6 @@ class GeneralSLTCollator:
             **batch_processed.data,
             "names": names,
             "lang": lang,
-            "original_videos": videos,
             "input_text": input_text,
             "label_text": label_text,
         }

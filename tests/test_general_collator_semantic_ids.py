@@ -40,3 +40,4 @@ def test_collator_forwards_plural_semantic_ids():
 
     assert processor.kwargs["semantic_ids"] == ("meaning-1", "meaning-1")
     assert output["semantic_ids"] == ("meaning-1", "meaning-1")
+    assert "original_videos" not in output

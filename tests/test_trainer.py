@@ -50,6 +50,29 @@ def test_trainer_does_not_claim_model_handles_num_items_in_batch(tmp_path):
     assert "num_items_in_batch" not in model.last_kwargs
 
 
+def test_train_probe_test_dataloader_disables_persistent_workers(tmp_path, monkeypatch):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+        dataloader_persistent_workers=True,
+        dataloader_num_workers=1,
+    )
+    trainer = SltTrainer(model=_MeanReducedModelWithKwargs(), args=args)
+    captured = {}
+
+    def capture_get_dataloader(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(trainer, "_get_dataloader", capture_get_dataloader)
+    trainer._is_train_probe = True
+
+    trainer.get_test_dataloader([{"labels": torch.tensor([1])}])
+
+    assert captured["persistent_workers"] is False
+    assert trainer.args.dataloader_persistent_workers is True
+
+
 def test_trainer_builds_dsid_scheduler_callback_from_engine_config(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),

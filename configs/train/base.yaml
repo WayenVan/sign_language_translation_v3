@@ -50,14 +50,13 @@ engine:
     metric_for_best_model: "eval_overall_weighted_bleu4"
     greater_is_better: True
     learning_rate: 1e-4
-    max_grad_norm: 100.0
     dataloader_num_workers: 6
     disable_tqdm: True
     auto_output_dir: False
     output_dir: outputs/test
     lr_scheduler_type: cosine
     restore_callback_states_from_checkpoint: true
-    dataloader_persistent_workers: True
+    dataloader_persistent_workers: False
     dataloader_drop_last: true
   generation_config:
     max_new_tokens: 128

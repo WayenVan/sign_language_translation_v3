@@ -148,6 +148,7 @@ class SltTrainer(Seq2SeqTrainer):
         self.args.predict_with_generate = True
         self.hydra_config = hydra_config
         self._is_predicting = False
+        self._is_train_probe = False
 
     @torch.no_grad()
     def collect_eval_information(self, num_samples: int) -> list[dict[str, Any]]:
@@ -252,12 +253,14 @@ class SltTrainer(Seq2SeqTrainer):
         was_training = self.model.training
         self.test_data_collator = self.eval_data_collator
         self.compute_metrics = self.train_probe_compute_metrics
+        self._is_train_probe = True
         try:
             output = self.predict(
                 test_dataset=subset,
                 metric_key_prefix=metric_key_prefix,
             )
         finally:
+            self._is_train_probe = False
             self.test_data_collator = previous_collator
             self.compute_metrics = previous_compute_metrics
             self.model.train(was_training)
@@ -498,6 +501,7 @@ class SltTrainer(Seq2SeqTrainer):
         is_training: bool = False,
         dataloader_key: Optional[str] = None,
         mode: Literal["train", "eval", "test"] = "train",
+        persistent_workers: Optional[bool] = None,
     ) -> DataLoader:
         """Create a [`~torch.utils.data.DataLoader`] from the given dataset."""
 
@@ -515,12 +519,15 @@ class SltTrainer(Seq2SeqTrainer):
                 data_collator, description=description
             )
 
+        if persistent_workers is None:
+            persistent_workers = self.args.dataloader_persistent_workers
+
         dataloader_params = {
             "batch_size": batch_size,
             "collate_fn": data_collator,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
-            "persistent_workers": self.args.dataloader_persistent_workers,
+            "persistent_workers": persistent_workers,
         }
 
         if not isinstance(dataset, torch.utils.data.IterableDataset):
@@ -664,6 +671,10 @@ class SltTrainer(Seq2SeqTrainer):
             batch_size=self.args.eval_batch_size,
             sampler_fn=self._get_eval_sampler,
             mode="test",
+            # A train probe creates a short-lived test DataLoader on every
+            # evaluation. Its workers must exit after the probe rather than
+            # inheriting the long-lived train/eval setting.
+            persistent_workers=False if self._is_train_probe else None,
         )
 
     def predict(self, test_dataset: Dataset, test_collator=None, **gen_kwargs):
