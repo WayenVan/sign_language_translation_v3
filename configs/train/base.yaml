@@ -50,6 +50,7 @@ engine:
     metric_for_best_model: "eval_overall_weighted_bleu4"
     greater_is_better: True
     learning_rate: 1e-4
+    max_grad_norm: 100.0
     dataloader_num_workers: 6
     disable_tqdm: True
     auto_output_dir: False
