@@ -71,12 +71,12 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
+  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
-  # model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
+  model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
+  engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
