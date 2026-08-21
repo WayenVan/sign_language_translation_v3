@@ -22,7 +22,8 @@ CMD_ARGS=(
   -m csi_slt.commands.train_ft_peft
   --config-name train/ft_peft
   model.checkpoint_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc//checkpoint-84000
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc-peft-ft
+  peft.llm_lora_config.rank=16
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc-peft-ft-r16
   engine.training_args.per_device_train_batch_size=4
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=12
