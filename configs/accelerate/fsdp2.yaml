@@ -1,0 +1,88 @@
+# Accelerate FSDP2 config for the large SLT models (Qwen3-32B / Gemma4-12B).
+#
+# Usage (overrides the plain `accelerate launch` in run_cognition_qwen.sh):
+#
+#   accelerate launch --config_file configs/accelerate/fsdp2.yaml \
+#     --num_processes=<gpus> -m csi_slt.commands.train model=... ...
+#
+# Notes on this project's model (SltModel):
+#   * The LLM is fully frozen (peft=none) but activations still backprop
+#     through it, so FSDP is used to shard the 32B parameters, not to shard
+#     gradients/optimizer state (there are almost none for the LLM).
+#   * Only `Qwen3DecoderLayer` is auto-wrapped. The visual backbone
+#     (C-RADIOv4-SO400M, frozen) and the trainable fp32 visual adapter stay in
+#     the root FSDP unit -- they are ~1.5B params total, and keeping them out
+#     of the per-layer wrap avoids any interaction with the adapter's
+#     `_keep_in_fp32_modules` policy. FSDP2's MixedPrecisionPolicy keeps each
+#     shard in its original dtype (fp32 adapter / bf16 LLM) and only casts for
+#     compute, so master weights stay fp32.
+#   * `fsdp_activation_checkpointing` applies to the same wrap policy, i.e. to
+#     the Qwen3 decoder layers. Do NOT also set
+#     `engine.training_args.gradient_checkpointing=true` -- Trainer rejects
+#     enabling both.
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: "no"
+enable_cpu_affinity: false
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+# Adjust to the GPU count of the job; a CLI --num_processes still overrides it.
+# The gpu-l40s nodes carry three 48GB L40S each, so a single-node job tops out
+# at 3 -- which is also what Qwen3-32B needs at minimum, since its ~65GB of
+# bf16 parameters have to fit sharded alongside activations and optimizer state.
+num_processes: 2
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+fsdp_config:
+  fsdp_version: 2
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  # SltModel defines no `_no_split_modules`, so this must be set explicitly --
+  # accelerate would otherwise build an empty wrap policy and shard nothing.
+  # Gemma4-12B: swap for `Gemma4UnifiedDecoderLayer` (check the class name with
+  #   python -c "from transformers.models.gemma4_unified import *" and inspect
+  #   the model's `named_modules()`).
+  fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
+  # Free the all-gathered layer weights after forward and re-gather in backward:
+  # the memory/communication trade-off that makes 32B fit at all.
+  fsdp_reshard_after_forward: true
+  fsdp_activation_checkpointing: true
+  # WARN: OFF deliberately -- do not turn this on without reading the following.
+  # It would save CPU RAM by having only rank 0 materialize the weights, the
+  # other ranks building on meta and receiving parameters through
+  # `fsdp2_load_full_state_dict`. That function walks `model.state_dict()` and
+  # reads `.device_mesh` off every entry, but `fully_shard` only converts
+  # *parameters* into DTensors. The C-RADIO encoder contributes three persistent
+  # buffers (`summary_idxs`, and the input conditioner's `norm_mean`/`norm_std`),
+  # so preparation dies with "'Tensor' object has no attribute 'device_mesh'".
+  # Still broken in accelerate 1.14.0 (checked against the released wheel).
+  #
+  # WARN: Worse, the obvious workaround is unsafe: demoting those buffers to
+  # non-persistent moves them onto Accelerate's other path, which copies them
+  # rank-locally instead of broadcasting -- and Transformers has already zeroed
+  # every parameter and buffer on non-local-rank-0 by then
+  # (`modeling_utils.py:4744`). That silently leaves norm_std=0 everywhere but
+  # rank 0. Keeping this off avoids the whole code path: no meta round-trip, no
+  # state-dict broadcast, and `is_fsdp_enabled()` stays False so nothing is
+  # zeroed in the first place. Every rank simply loads the real weights.
+  #
+  # WARN: The cost is CPU RAM at startup: one full model copy per process (~70GB for
+  # Qwen3-32B), released once `fully_shard` moves the shards to GPU. Budget the
+  # job's --mem accordingly.
+  fsdp_cpu_ram_efficient_loading: false
+  # Set to true only if the GPU count is too small to hold the sharded
+  # parameters (much slower; pairs with a bigger --cpus-per-task).
+  fsdp_offload_params: false
+  fsdp_forward_prefetch: false
+  # FULL_STATE_DICT gathers the whole model on rank 0's CPU at save time, so
+  # checkpoints load straight back through `SltModel.from_pretrained`. For 32B
+  # that is a ~64GB write per checkpoint -- switch to SHARDED_STATE_DICT if
+  # that becomes the bottleneck (checkpoints then need
+  # `accelerate merge-weights` before evaluation).
+  fsdp_state_dict_type: FULL_STATE_DICT
