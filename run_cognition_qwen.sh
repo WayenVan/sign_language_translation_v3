@@ -5,7 +5,7 @@
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
 #SBATCH --gres=gpu:2
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=21
 #SBATCH --mem=256g
 
 set -euo pipefail
@@ -67,6 +67,9 @@ echo "DATASET_PATH=$DATASET_PATH"
 # "#" without breaking the rest of the command (a "#" on a "\"-continued
 # line eats that line's trailing backslash too and splits the command).
 CMD_ARGS=(
+  # FSDP2: shards the frozen LLM across the job's GPUs. Comment this line out
+  # to fall back to plain DDP for the small (1.7B) models.
+  # --config_file="$SCRIPT_DIR/configs/accelerate/fsdp2.yaml"
   --num_processes=2
   --mixed_precision=bf16
   --debug
@@ -77,8 +80,12 @@ CMD_ARGS=(
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
   # engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
-  model=qwen3-8b-cradio-l-dinoframecrossv28shuffle
-  engine.training_args.output_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc
+  # model=qwen3-8b-cradio-l-dinoframecrossv28shuffle
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc
+  # model=qwen3-32b-cradio-l-dinoframecrossv28shuffle
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-32b-cradio-l-dinoframecrossv28shuffle-0822.224x224-ctc
+  model=qwen3-14b-cradio-l-dinoframecrossv28shuffle
+  engine.training_args.output_dir=outputs/v4.0-qwen3-14b-cradio-l-dinoframecrossv28shuffle-0822.224x224-ctc
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
