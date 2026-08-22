@@ -1,3 +1,6 @@
+from types import MethodType
+
+from accelerate.utils import get_mixed_precision_context_manager
 from transformers.trainer_seq2seq import Seq2SeqTrainer
 from .callbacks import (
     SltTrainerCallbackHandler,
@@ -12,7 +15,7 @@ from .callbacks import (
 )
 from torch import nn
 import torch
-from torch.distributed.fsdp import FullyShardedDataParallel
+from torch.distributed.fsdp import FSDPModule, FullyShardedDataParallel
 from typing import Any, Optional, Union
 import contextlib
 from omegaconf import OmegaConf
@@ -39,6 +42,47 @@ from csi_slt.data.sampler import (
 from csi_slt.modeling_slt.info_utils import InformationRequest
 
 logger = logging.get_logger(__name__)
+
+
+def apply_fsdp2_autocast(accelerator, model: nn.Module) -> None:
+    """Re-apply the autocast wrapper that Accelerate skips under FSDP2.
+
+    On every other path ``Accelerator.prepare`` routes the model through
+    ``prepare_model``, which wraps ``model.forward`` in ``torch.autocast``
+    (``accelerator.py:1774``). ``_prepare_fsdp2`` takes its own branch and never
+    calls it, while Transformers' ``autocast_smart_context_manager`` returns a
+    null context on purpose because it delegates AMP to Accelerate -- so under
+    FSDP2 nothing applies autocast at all.
+
+    FSDP2's ``MixedPrecisionPolicy`` does not cover the gap. It casts parameters
+    on all-gather and module inputs on entry, but it has no ``buffer_dtype``
+    (FSDP1 did), so arithmetic between a bf16 activation and an fp32 buffer
+    promotes the result back to fp32 and the next matmul dies with "expected
+    mat1 and mat2 to have the same dtype". The C-RADIO input conditioner does
+    exactly that with its ``norm_mean``/``norm_std`` buffers. Autocast resolves
+    dtypes per operation, so it covers that whole class rather than one site,
+    and it restores the fp32 treatment of softmax/cross-entropy that the earlier
+    DDP runs were trained with.
+
+    Accelerate additionally wraps the forward in ``convert_outputs_to_fp32``.
+    That is deliberately skipped here: the policy sets ``output_dtype`` to bf16,
+    and FSDP's own post-forward cast runs after this wrapper, so converting back
+    to fp32 inside it would be undone immediately.
+    """
+    if not getattr(accelerator, "is_fsdp2", False):
+        # Accelerate already wrapped `forward` on the DDP/FSDP1/single-device paths.
+        return
+    if getattr(model, "_original_forward", None) is not None:
+        return
+
+    autocast_context = get_mixed_precision_context_manager(
+        accelerator.native_amp, accelerator.autocast_handler
+    )
+    model._original_forward = model.forward
+    if hasattr(model.forward, "__func__"):
+        model.forward = MethodType(autocast_context(model.forward.__func__), model)
+    else:
+        model.forward = autocast_context(model.forward)
 
 
 class SltTrainer(Seq2SeqTrainer):
@@ -149,6 +193,12 @@ class SltTrainer(Seq2SeqTrainer):
         self.hydra_config = hydra_config
         self._is_predicting = False
         self._is_train_probe = False
+
+    def _prepare_for_training(self, *args, **kwargs):
+        """Prepare as usual, then restore autocast on the FSDP2 path."""
+        result = super()._prepare_for_training(*args, **kwargs)
+        apply_fsdp2_autocast(self.accelerator, self.model)
+        return result
 
     @torch.no_grad()
     def collect_eval_information(self, num_samples: int) -> list[dict[str, Any]]:
@@ -333,8 +383,15 @@ class SltTrainer(Seq2SeqTrainer):
             if gen_kwargs.get(name, ...) is None:
                 gen_kwargs.pop(name)
 
-        default_synced_gpus = is_deepspeed_zero3_enabled() or is_fsdp_managed_module(
-            self.model
+        # ``is_fsdp_managed_module`` only recognizes FSDP2 through the
+        # ``_is_fsdp_managed_module`` flag that Transformers' own ``apply_fsdp2``
+        # sets; Accelerate's ``fully_shard`` path never sets it. Check for the
+        # FSDP2 module type directly so generation stays synchronized when the
+        # model is sharded by ``accelerate launch --config_file .../fsdp2.yaml``.
+        default_synced_gpus = (
+            is_deepspeed_zero3_enabled()
+            or is_fsdp_managed_module(self.model)
+            or isinstance(self.model, FSDPModule)
         )
         gen_kwargs.setdefault("synced_gpus", default_synced_gpus)
         return gen_kwargs
