@@ -209,8 +209,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.visual_position_embedding = nn.Embedding(
             self.MAX_TOKEN_LENGTH, self.config.hidden_size
         )
-        # Global learnable scale, initialized as an identity transform.
-        self.visual_scale = nn.Parameter(torch.tensor(1.0))
+        # Global learnable scale, initialized as an identity transform. Shape
+        # (1,) rather than a scalar: FSDP2 shards along dim 0 and rejects 0-dim
+        # parameters. Broadcasting against the visual features is unchanged.
+        self.visual_scale = nn.Parameter(torch.tensor([1.0]))
         # CTC head over visual tokens, predicting the word-level pseudo-gloss
         # vocabulary. Only constructed when the CTC objective is enabled;
         # otherwise the model carries no extra CTC parameters.

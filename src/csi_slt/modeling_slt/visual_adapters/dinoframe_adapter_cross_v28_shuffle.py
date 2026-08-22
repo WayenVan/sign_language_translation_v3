@@ -69,7 +69,9 @@ class TemporalShuffleAdapter(nn.Module):
 
         # Begin close to the stable base path, then learn how much motion
         # residual to inject. sigmoid(-2) is approximately 0.12.
-        self.motion_gate = nn.Parameter(torch.tensor(-2.0))
+        # Shape (1,) rather than a scalar: FSDP2 shards along dim 0 and
+        # rejects 0-dim parameters outright. Broadcasting is unchanged.
+        self.motion_gate = nn.Parameter(torch.tensor([-2.0]))
 
     def temporal_shuffle(self, x, t_length, scale_factor=2):
         # x [BT, D]
@@ -201,7 +203,10 @@ class DINOFrameAdapterCrossV2(nn.Module):
 
         # NOTE: Start with a small temporal contribution (sigmoid(-2) ~= 0.12)
         # so that early training remains close to the original DINO features.
-        self.temporal_gate = nn.Parameter(torch.tensor(float(temporal_gate_init)))
+        # Shape (1,) for FSDP2 compatibility; see motion_gate above.
+        self.temporal_gate = nn.Parameter(
+            torch.tensor([float(temporal_gate_init)])
+        )
 
         # NOTE: Fused patches remain D-dimensional in V2, rather than becoming
         # 2D-dimensional through concatenation. bias=False on the last layer is
@@ -518,7 +523,8 @@ class PackedShortTemporalConv(nn.Module):
             bias=False,
         )
         self.activation = nn.GELU()
-        self.residual_gate = nn.Parameter(torch.tensor(float(gate_init)))
+        # Shape (1,) for FSDP2 compatibility; see motion_gate above.
+        self.residual_gate = nn.Parameter(torch.tensor([float(gate_init)]))
 
         nn.init.zeros_(self.temporal_conv.weight)
         mark_module_tree_as_initialized(self)
