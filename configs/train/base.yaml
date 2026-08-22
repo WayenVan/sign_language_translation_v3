@@ -43,10 +43,18 @@ engine:
     save_strategy: best
     save_steps: 4000
     save_total_limit: 1
+    # Keep only the model in each checkpoint, dropping the optimizer, scheduler
+    # and RNG state -- and, under FSDP, the separate full-size
+    # `pytorch_model_fsdp.bin` that `save_fsdp_model` writes alongside them.
+    # Trades `resume_from_checkpoint` for roughly half the bytes per save.
+    # Transformers rejects this together with `load_best_model_at_end` under
+    # FSDP/DeepSpeed, so that option stays off; `save_strategy: best` still
+    # saves only on an improvement of `metric_for_best_model`, the best
+    # checkpoint just has to be loaded explicitly (e.g. csi_slt.commands.evaluate).
+    save_only_model: true
     logging_steps: 50
     eval_strategy: "steps"
     eval_steps: 4000
-    load_best_model_at_end: True
     metric_for_best_model: "eval_overall_weighted_bleu4"
     greater_is_better: True
     learning_rate: 1e-4
