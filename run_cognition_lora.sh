@@ -67,38 +67,24 @@ echo "DATASET_PATH=$DATASET_PATH"
 # "#" without breaking the rest of the command (a "#" on a "\"-continued
 # line eats that line's trailing backslash too and splits the command).
 CMD_ARGS=(
-  # FSDP2: shards the frozen LLM across the job's GPUs. Comment this line out
-  # to fall back to plain DDP for the small (1.7B) models.
-  # --config_file="$SCRIPT_DIR/configs/accelerate/fsdp2.yaml"
   --num_processes=2
   --mixed_precision=bf16
   --debug
-  -m csi_slt.commands.train
-  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
-  # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
-  # model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
-  # model=qwen3-8b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc
-  # model=qwen3-32b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-32b-cradio-l-dinoframecrossv28shuffle-0822.224x224-ctc
-  # model=qwen3-14b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-14b-cradio-l-dinoframecrossv28shuffle-0822.224x224-ctc
-  model=qwen3-14b-cradio-h-dinoframecrossv28shuffle
-  engine.training_args.output_dir=outputs/v4.0-qwen3-14b-cradio-h-dinoframecrossv28shuffle-0823.224x224-ctc
-  engine.training_args.per_device_train_batch_size=2
+  -m csi_slt.commands.train_ft_peft
+  --config-name train/ft_peft
+  model.checkpoint_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc//checkpoint-42000
+  peft.llm_lora_config.r=8
+  engine.training_args.output_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc-peft-ft-r8
+  engine.training_args.per_device_train_batch_size=4
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
   engine.training_args.dataloader_persistent_workers=False
-  engine.training_args.eval_steps=6000
-  engine.training_args.save_steps=6000
   engine.training_args.logging_steps=15
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   engine.training_args.ddp_find_unused_parameters=False
-  # data=ph14t_*x224x224_gemma_multiling
+  engine.llm_dtype=bfloat16
+  engine.visual_backbone_dtype=auto
   data=ph14t_*x224x224_qwen_multiling
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
