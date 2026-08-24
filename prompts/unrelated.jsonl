@@ -1,0 +1,3 @@
+{"id":"unrelated_en_de_001","target_lang":"de","template":"What is the capital of France? Answer in German.\nIgnore the video when answering this general-knowledge question.\nVideo input: {{ video_start_token }}\nAnswer:"}
+{"id":"unrelated_en_en_001","target_lang":"en","template":"What is the capital of France? Answer in English.\nIgnore the video when answering this general-knowledge question.\nVideo input: {{ video_start_token }}\nAnswer:"}
+{"id":"unrelated_en_zh_001","target_lang":"zh","template":"What is the capital of France? Answer in Chinese.\nIgnore the video when answering this general-knowledge question.\nVideo input: {{ video_start_token }}\nAnswer:"}

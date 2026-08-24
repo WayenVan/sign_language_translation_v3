@@ -1,13 +1,14 @@
-"""Build the deterministic held-out evaluation prompt manifest.
+"""Build a deterministic expanded-evaluation prompt manifest.
 
-Each Hugging Face dataset row is paired with every held-out prompt whose
-instruction and target languages both match the row's target language.  With
-the current prompt bank this produces four evaluation assignments per row.
+Each dataset row is paired with every prompt whose target language matches the
+row's target language. The same command supports held-out, wrong-task,
+unrelated, and other prompt-driven evaluation suites.
 
 Example:
 
-    python -m csi_slt.commands.build_heldout_assignments \
-        --output promts/heldout_assignments.jsonl
+    python -m csi_slt.commands.build_prompt_assignments \
+        --prompt-bank prompts/heldout.jsonl \
+        --output prompts/assignments/heldout.jsonl
 """
 
 from __future__ import annotations
@@ -28,11 +29,14 @@ def read_prompt_bank(path: Path) -> list[dict]:
             try:
                 prompt = json.loads(line)
             except json.JSONDecodeError as error:
-                raise ValueError(f"{path}:{line_number}: invalid JSON: {error}") from error
-            if prompt.get("split") != "heldout":
                 raise ValueError(
-                    f"{path}:{line_number}: expected split='heldout', "
-                    f"got {prompt.get('split')!r}"
+                    f"{path}:{line_number}: invalid JSON: {error}"
+                ) from error
+            required = {"id", "target_lang", "template"}
+            if set(prompt) != required:
+                raise ValueError(
+                    f"{path}:{line_number}: expected exactly {sorted(required)}, "
+                    f"got {sorted(prompt)}"
                 )
             prompts.append(prompt)
     if not prompts:
@@ -47,18 +51,17 @@ def build_assignments(
     id_column: str = "id",
     language_column: str = "lang",
 ) -> list[dict[str, str]]:
-    """Pair every dataset row with its same-language held-out prompts."""
+    """Pair every dataset row with all same-target-language prompts."""
 
-    prompts_by_language: defaultdict[str, list[Mapping[str, object]]] = defaultdict(list)
+    prompts_by_language: defaultdict[str, list[Mapping[str, object]]] = (
+        defaultdict(list)
+    )
     for prompt in prompts:
         prompt_id = prompt.get("id")
         target_lang = prompt.get("target_lang")
-        instruction_lang = prompt.get("instruction_lang")
         if not isinstance(prompt_id, str) or not prompt_id:
             raise ValueError("every prompt must have a non-empty string id")
-        # Matching both fields is intentional: target-only matching would select
-        # 12 prompts per row from the current 3x3 prompt bank instead of four.
-        if target_lang == instruction_lang and isinstance(target_lang, str):
+        if isinstance(target_lang, str):
             prompts_by_language[target_lang].append(prompt)
 
     for language in prompts_by_language:
@@ -82,7 +85,7 @@ def build_assignments(
         matching_prompts = prompts_by_language.get(str(target_lang), [])
         if not matching_prompts:
             raise ValueError(
-                f"no same-language held-out prompts for dataset row "
+                f"no matching prompts for dataset row "
                 f"{translation_id!r} (target language {target_lang!r})"
             )
         for prompt in matching_prompts:
@@ -102,20 +105,20 @@ def write_jsonl(path: Path, rows: Iterable[Mapping[str, str]]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.write(
+                json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            )
     temporary.replace(path)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Assign every multilingual validation row its four held-out prompts."
+        description="Pair dataset rows with every same-target-language prompt."
     )
     parser.add_argument("--dataset", default="WayenVan/ph14t-multilang")
     parser.add_argument("--split", default="validation")
-    parser.add_argument("--prompt-bank", type=Path, default=Path("promts/heldout.jsonl"))
-    parser.add_argument(
-        "--output", type=Path, default=Path("promts/heldout_assignments.jsonl")
-    )
+    parser.add_argument("--prompt-bank", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--id-column", default="id")
     parser.add_argument("--language-column", default="lang")
     return parser.parse_args()
