@@ -1,10 +1,5 @@
 data_root: dataset/PHOENIX-2014-T-release-v3
 
-prompt_templates:
-  zh: jinjas/zh_prompt.md.j2
-  de: jinjas/de_prompt.md.j2
-  en: jinjas/en_prompt.md.j2
-
 assemble: True
 
 processor:
@@ -35,7 +30,6 @@ train:
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
-    mode: train
 
 val:
   dataset:
@@ -45,7 +39,6 @@ val:
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
-    mode: eval
 
 test:
   dataset:
@@ -55,4 +48,3 @@ test:
   collator:
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: False
-    mode: test

@@ -6,6 +6,8 @@ from csi_slt.data.processors.sign_video_processor import SignVideoProcessor
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
 from csi_slt.data.ph14t.ph14t_torch_dataset import Ph14TGeneralDataset
 from csi_slt.data.collators.general_collator import GeneralSLTCollator
+from csi_slt.engine.prompt_resolver import FixedPromptResolver
+from csi_slt.engine.prompt_sampler import PromptSampler
 from transformers import (
     AutoTokenizer,
     AutoVideoProcessor,
@@ -25,18 +27,12 @@ def test_processor_save_load():
 
 def test_slt_processor_save_load():
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
-    prompt_paths_per_language = {
-        "en": "jinjas/en_prompt.md.j2",
-        "de": "jinjas/de_prompt.md.j2",
-        "zh": "jinjas/zh_prompt.md.j2",
-    }
     ctc_tokenizer = PreTrainedTokenizerFast.from_pretrained("outputs/ctc_tokenizer")
     video_processor = SignVideoProcessor()
     processor = SignTranslationProcessor(
         video_processor=video_processor,
         tokenizer=tokenizer,
         ctc_tokenizer=ctc_tokenizer,
-        prompt_paths_per_language=prompt_paths_per_language,
     )
     processor.save_pretrained("outputs/slt_processor_test")
     processor = AutoProcessor.from_pretrained(
@@ -46,11 +42,6 @@ def test_slt_processor_save_load():
 
 
 def test_slt_processor():
-    prompt_paths_per_language = {
-        "en": "jinjas/en_prompt.md.j2",
-        "de": "jinjas/de_prompt.md.j2",
-        "zh": "jinjas/zh_prompt.md.j2",
-    }
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B", trust_remote_code=True)
     video_processor = SignVideoProcessor(
         # image_mean=[0.6, 0.6, 0.6], image_std=[0.2, 0.2, 0.2]
@@ -58,13 +49,24 @@ def test_slt_processor():
     processor = SignTranslationProcessor(
         video_processor=video_processor,
         tokenizer=tokenizer,
-        prompt_paths_per_language=prompt_paths_per_language,
     )
     dataset = Ph14TGeneralDataset(
         data_root="dataset/PHOENIX-2014-T-release-v3",
         mode="train",
     )
-    collator = GeneralSLTCollator(processor=processor, mode="train")
+    prompt_resolver = FixedPromptResolver(
+        PromptSampler("prompts/train.jsonl"),
+        {
+            "de": "canonical_en_de_001",
+            "en": "canonical_en_en_001",
+            "zh": "canonical_en_zh_001",
+        },
+    )
+    collator = GeneralSLTCollator(
+        processor=processor,
+        prompt_resolver=prompt_resolver,
+        training=True,
+    )
     # collator.debug = True
     dataloader = DataLoader(
         dataset, batch_size=2, shuffle=True, num_workers=0, collate_fn=collator

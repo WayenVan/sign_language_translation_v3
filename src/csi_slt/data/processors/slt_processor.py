@@ -12,7 +12,7 @@ import numpy as np
 from transformers.tokenization_utils_base import TextInput, PreTrainedTokenizerBase
 from transformers import AutoTokenizer
 
-from typing import Mapping, Sequence, Union
+from typing import Sequence, Union
 
 from csi_slt.data.processors.sign_video_processor import (
     SignVideoKwargs,
@@ -21,10 +21,9 @@ from csi_slt.data.processors.sign_video_processor import (
 from csi_slt.modeling_slt.misc import padded_to_packed
 
 import torch
-import json
 import os
 from jinja2 import Environment, StrictUndefined
-from csi_slt.constants import LANGUAGE_MAP, LANGUAGE_NAME_MAP
+from csi_slt.constants import LANGUAGE_MAP
 
 
 class SignTranslationProcessingKwargs(ProcessingKwargs, total=False):
@@ -92,8 +91,6 @@ class SignTranslationProcessor(ProcessorMixin):
         video_processor: SignVideoProcessor,
         tokenizer,
         chat_template=None,
-        prompt_paths_per_language: Mapping[str, str] | None = None,
-        prompt_templates_per_language: Mapping[str, str] | None = None,
         video_soft_token="<|video_pad|>",
         video_start_token="<|vision_start|>",
         video_token_scale=0.5,
@@ -119,15 +116,6 @@ class SignTranslationProcessor(ProcessorMixin):
         # matches on the substring "tokenizer"), which is why get_attributes() is
         # overridden below to pin the attribute list explicitly.
         self.ctc_tokenizer = ctc_tokenizer
-        if (
-            prompt_paths_per_language is not None
-            and prompt_templates_per_language is not None
-        ):
-            raise ValueError(
-                "Specify either prompt_paths_per_language or "
-                "prompt_templates_per_language, not both."
-            )
-
         self.video_soft_token = video_soft_token
         self.video_start_token = video_start_token
         self.video_token_scale = video_token_scale
@@ -158,20 +146,6 @@ class SignTranslationProcessor(ProcessorMixin):
                 f"{self.video_soft_token!r} is not a valid single tokenizer token."
             )
 
-        # Keep template sources instead of Jinja Template instances. ProcessorMixin
-        # deep-copies __dict__ during save_pretrained(), while Template objects cannot
-        # be deep-copied. The sources are JSON serializable and restore cleanly.
-        if prompt_templates_per_language is not None:
-            self.prompt_templates_per_language = dict(prompt_templates_per_language)
-        else:
-            self.prompt_templates_per_language = {
-                lang: self._read_prompt_file(path)
-                for lang, path in (prompt_paths_per_language or {}).items()
-            }
-
-        # Cache rendered prompts. BOS handling is part of the cache key because
-        # callers may use the same processor in both modes.
-        self._prompt_cache: dict[str, str] = {}
         self._assistant_suffix_ids_cache: tuple[int, ...] | None = None
 
     @classmethod
@@ -221,52 +195,23 @@ class SignTranslationProcessor(ProcessorMixin):
             processor.ctc_tokenizer = AutoTokenizer.from_pretrained(ctc_tokenizer_dir)
         return processor
 
-    @staticmethod
-    def _read_prompt_file(path: str) -> str:
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Prompt file not found: {path}")
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # Support both plain text and JSON-encapsulated prompt templates.
-        # If the file is valid JSON containing a string, use that string as the template.
-        # Otherwise, treat the raw file content as the Jinja2 template.
-        try:
-            parsed = json.loads(content)
-            if isinstance(parsed, str):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        return content
-
     def inject_images(self, prompt: str, n: int) -> str:
         sentinel = self.video_start_token
         replacement = self.video_soft_token * n
         return prompt.replace(sentinel, replacement)
 
-    def _get_rendered_prompt_for_lang(self, lang: str, add_bos_token: bool) -> str:
-        """Return a rendered prompt that still contains the source sentinel."""
-        cache = self._prompt_cache  # type: ignore[has-type]
-        # Keep cache keys JSON-compatible because ProcessorMixin may include
-        # processor attributes while building a save_pretrained() config.
-        cache_key = f"{lang}:bos={int(add_bos_token)}"
-        if cache_key in cache:
-            return cache[cache_key]
-
-        template_source = self.prompt_templates_per_language.get(lang)
-        if template_source is None:
-            raise ValueError(f"No prompt template found for language: {lang}")
-        language_name = LANGUAGE_NAME_MAP.get(lang)
-        if language_name is None:
-            raise ValueError(f"Language '{lang}' not found in LANGUAGE_MAP.")
-
+    def _render_prompt_template(
+        self,
+        template_source: str,
+        *,
+        add_bos_token: bool,
+    ) -> str:
+        """Render one template and wrap it in the model's chat format."""
         rendered = (
             Environment(undefined=StrictUndefined)
             .from_string(template_source)
             .render(
                 video_start_token=self.video_start_token,
-                language=language_name,
             )
         )
         message = [
@@ -285,21 +230,21 @@ class SignTranslationProcessor(ProcessorMixin):
 
         if add_bos_token:
             prompt = self.tokenizer.bos_token + prompt
-
-        cache[cache_key] = prompt
         return prompt
 
-    def _get_prompt_parts_for_lang(
-        self, lang: str, add_bos_token: bool
+    def _get_prompt_parts_for_template(
+        self, template_source: str, add_bos_token: bool
     ) -> _PromptParts:
-        """Split a rendered prompt around its one source-content sentinel."""
-        prompt = self._get_rendered_prompt_for_lang(lang, add_bos_token)
+        """Render and split an explicitly resolved per-sample prompt template."""
+        prompt = self._render_prompt_template(
+            template_source,
+            add_bos_token=add_bos_token,
+        )
         sentinel_count = prompt.count(self.video_start_token)
         if sentinel_count != 1:
             raise ValueError(
                 "A rendered prompt must contain exactly one source sentinel "
-                f"{self.video_start_token!r}; found {sentinel_count} for language "
-                f"{lang!r}."
+                f"{self.video_start_token!r}; found {sentinel_count}."
             )
         before_source, _, after_source = prompt.partition(self.video_start_token)
         return _PromptParts(before_source, after_source)
@@ -672,15 +617,23 @@ class SignTranslationProcessor(ProcessorMixin):
         *,
         add_bos_token: bool,
         add_eos_token: bool,
+        prompt_templates: Sequence[str],
     ) -> tuple[list[_EncodedPromptParts], list[list[int]], list[int]]:
         """Encode shared prompt boundaries and target IDs for all source paths."""
         prompt_parts: list[_PromptParts] = []
         target_texts: list[str] = []
         language_ids: list[int] = []
-        for target_text, language in zip(text, src_lang, strict=True):
-            prompt_parts.append(
-                self._get_prompt_parts_for_lang(language, add_bos_token)
+        if len(prompt_templates) != len(text):
+            raise ValueError(
+                "prompt_templates batch size must match the text batch size"
             )
+        for index, (target_text, language) in enumerate(
+            zip(text, src_lang, strict=True)
+        ):
+            parts = self._get_prompt_parts_for_template(
+                prompt_templates[index], add_bos_token
+            )
+            prompt_parts.append(parts)
             target_texts.append(target_text)
             language_ids.append(LANGUAGE_MAP[language])
 
@@ -702,12 +655,14 @@ class SignTranslationProcessor(ProcessorMixin):
         src_lang: Union[list[str], str],
         pseudo_gloss: Union[list[str], str] | None,
         semantic_ids: Union[list[str | int], str, int] | None,
+        prompt_templates: Union[list[str], str] | None,
     ) -> tuple[
         list[np.ndarray],
         list[TextInput],
         list[str],
         list[str] | None,
         list[str | int] | None,
+        list[str],
     ]:
         """Validate processor inputs and normalize single samples to batches."""
 
@@ -746,6 +701,15 @@ class SignTranslationProcessor(ProcessorMixin):
         elif semantic_ids is not None:
             raise TypeError("semantic_ids must be a string, integer, list, or None")
 
+        if isinstance(prompt_templates, str):
+            prompt_templates = [prompt_templates]
+        elif isinstance(prompt_templates, (list, tuple)):
+            prompt_templates = list(prompt_templates)
+        else:
+            raise TypeError(
+                "prompt_templates must be a string or a list of strings"
+            )
+
         batch_size = len(videos)
         if batch_size == 0:
             raise ValueError("videos must contain at least one sample")
@@ -755,6 +719,7 @@ class SignTranslationProcessor(ProcessorMixin):
             batch_fields["pseudo_gloss"] = pseudo_gloss
         if semantic_ids is not None:
             batch_fields["semantic_ids"] = semantic_ids
+        batch_fields["prompt_templates"] = prompt_templates
         for name, values in batch_fields.items():
             if len(values) != batch_size:
                 raise ValueError(
@@ -772,18 +737,21 @@ class SignTranslationProcessor(ProcessorMixin):
             isinstance(value, str) for value in pseudo_gloss
         ):
             raise TypeError("every item in pseudo_gloss must be a string")
+        if not all(isinstance(value, str) for value in prompt_templates):
+            raise TypeError("every item in prompt_templates must be a string")
 
         if semantic_ids is not None:
             for value in semantic_ids:
                 _stable_semantic_id(value)
 
-        return videos, text, src_lang, pseudo_gloss, semantic_ids
+        return videos, text, src_lang, pseudo_gloss, semantic_ids, prompt_templates
 
     def __call__(
         self,
         videos: Union[list[np.ndarray], np.ndarray],
         text: Union[list[TextInput], TextInput],
         src_lang: Union[list[str], str],
+        prompt_templates: Union[list[str], str],
         pseudo_gloss: Union[list[str], str] | None = None,
         semantic_ids: Union[list[str | int], str, int] | None = None,
         training: bool = True,
@@ -804,12 +772,14 @@ class SignTranslationProcessor(ProcessorMixin):
             src_lang,
             pseudo_gloss,
             semantic_ids,
+            prompt_templates,
         ) = self._validate_and_batch_inputs(
             videos,
             text,
             src_lang,
             pseudo_gloss,
             semantic_ids,
+            prompt_templates,
         )
 
         if training:
@@ -830,6 +800,7 @@ class SignTranslationProcessor(ProcessorMixin):
             self._encode_prompts_and_targets(
                 text,
                 src_lang,
+                prompt_templates=prompt_templates,
                 add_bos_token=add_bos_token,
                 add_eos_token=add_eos_token,
             )

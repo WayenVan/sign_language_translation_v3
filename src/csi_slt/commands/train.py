@@ -13,6 +13,7 @@ from ..utils.generation_config import merge_generation_config
 from csi_slt.engine.sft.metrics import SLTMetric
 from csi_slt.engine.sft.priodic_metrics import XCometLiteMetric
 from huggingface_hub import login
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 
 login(token=os.getenv("HF_TOKEN"))
 
@@ -74,7 +75,14 @@ def main(cfg: DictConfig):
     llm_name = cfg.model.config.llm_model_name_or_path
     tokenizer = AutoTokenizer.from_pretrained(llm_name)
 
-    datamodule = DataModule(cfg.data, cfg.datamodule, tokenizer=tokenizer)
+    datamodule = DataModule(
+        cfg.data,
+        cfg.datamodule,
+        tokenizer=tokenizer,
+        prompt_resolvers=instantiate_prompt_resolvers(
+            cfg.prompt, ("train", "val", "test")
+        ),
+    )
     datamodule.setup()
 
     # generation config

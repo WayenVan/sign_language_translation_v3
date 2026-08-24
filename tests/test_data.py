@@ -8,6 +8,7 @@ from transformers import AutoTokenizer
 sys.path.append("./src")
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 
 
 def test_datamodule():
@@ -31,6 +32,9 @@ def test_datamodule():
         cfg.data,
         cfg.datamodule,
         tokenizer=tokenizer,
+        prompt_resolvers=instantiate_prompt_resolvers(
+            cfg.prompt, ("train", "val", "test")
+        ),
     )
     datamodule.setup("fit")
     train_dataset = datamodule.train_dataset

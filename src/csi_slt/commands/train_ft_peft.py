@@ -14,6 +14,7 @@ from peft import (
     TaskType,
 )
 from csi_slt.engine.sft.metrics import SLTMetric
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
@@ -100,7 +101,14 @@ def main(cfg: DictConfig):
     # create datamodule
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)
 
-    datamodule = DataModule(cfg.data, cfg.datamodule, tokenizer=tokenizer)
+    datamodule = DataModule(
+        cfg.data,
+        cfg.datamodule,
+        tokenizer=tokenizer,
+        prompt_resolvers=instantiate_prompt_resolvers(
+            cfg.prompt, ("train", "val", "test")
+        ),
+    )
     datamodule.setup()
 
     # generation config

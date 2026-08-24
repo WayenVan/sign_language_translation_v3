@@ -11,6 +11,7 @@ from ..modeling_slt.slt import SltModel
 from ..utils.generation_config import merge_generation_config
 import re
 from accelerate import Accelerator
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
@@ -31,7 +32,14 @@ def main(cfg: DictConfig):
     # create datamodule
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.checkpoint_dir)
 
-    datamodule = DataModule(cfg.data, tokenizer=tokenizer)
+    datamodule = DataModule(
+        cfg.data,
+        cfg.datamodule,
+        tokenizer=tokenizer,
+        prompt_resolvers=instantiate_prompt_resolvers(
+            cfg.prompt, ("train", "val", "test")
+        ),
+    )
     datamodule.setup("train")
 
     # generation config

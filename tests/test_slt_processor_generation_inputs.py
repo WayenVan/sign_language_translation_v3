@@ -129,8 +129,10 @@ def _make_processor(ctc_tokenizer=None) -> SignTranslationProcessor:
     processor.video_processor = _FakeVideoProcessor()
     processor._merge_kwargs = lambda *args, **kwargs: {"videos_kwargs": {}}
     processor._assistant_suffix_ids_cache = (processor.tokenizer.eos_token_id,)
-    processor._get_rendered_prompt_for_lang = (
-        lambda lang, add_bos_token: f"prompt-{lang}:<video-start>:"
+    processor._render_prompt_template = (
+        lambda template, add_bos_token: template.replace(
+            "{{ video_start_token }}", processor.video_start_token
+        )
     )
     return processor
 
@@ -141,6 +143,7 @@ def test_eval_keeps_supervised_inputs_and_adds_prompt_only_generation_fields():
         "videos": videos,
         "text": ["answer"],
         "src_lang": ["en"],
+        "prompt_templates": ["prompt-en:{{ video_start_token }}:"],
     }
     train_processor = _make_processor()
     eval_processor = _make_processor()
@@ -185,6 +188,7 @@ def test_real_eos_label_is_not_masked_when_it_shares_the_padding_id():
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
         text=["answer"],
         src_lang=["en"],
+        prompt_templates=["prompt-en:{{ video_start_token }}:"],
         training=True,
     )
 
@@ -201,6 +205,7 @@ def test_labels_are_copied_from_the_actual_target_suffix_without_boundary_merges
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
         text=["answer"],
         src_lang=["en"],
+        prompt_templates=["prompt-en:{{ video_start_token }}:"],
         training=True,
     )
 
@@ -222,6 +227,10 @@ def test_variable_length_batch_keeps_each_label_aligned_with_its_input_suffix():
         ],
         text=["short", "a considerably longer answer"],
         src_lang=["en", "en"],
+        prompt_templates=[
+            "prompt-en:{{ video_start_token }}:",
+            "prompt-en:{{ video_start_token }}:",
+        ],
         training=True,
     )
 
@@ -234,15 +243,12 @@ def test_variable_length_batch_keeps_each_label_aligned_with_its_input_suffix():
 
 def test_rendered_prompt_requires_exactly_one_source_sentinel():
     processor = _make_processor()
-    processor._get_rendered_prompt_for_lang = (
-        lambda lang, add_bos_token: f"prompt-{lang}-without-source"
-    )
-
     with pytest.raises(ValueError, match="exactly one source sentinel"):
         processor(
             videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
             text=["answer"],
             src_lang=["en"],
+            prompt_templates=["prompt-en-without-source"],
             training=True,
         )
 
@@ -253,6 +259,7 @@ def test_training_keeps_standalone_pseudo_gloss_without_teacher_paths():
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
         text=["answer"],
         src_lang=["en"],
+        prompt_templates=["prompt-en:{{ video_start_token }}:"],
         pseudo_gloss=["GLOSS"],
         training=True,
     )
@@ -268,6 +275,7 @@ def test_evaluation_omits_training_only_teacher_paths():
         videos=[np.zeros((4, 1, 1, 3), dtype=np.uint8)],
         text=["answer"],
         src_lang=["en"],
+        prompt_templates=["prompt-en:{{ video_start_token }}:"],
         pseudo_gloss=["GLOSS"],
         training=False,
     )
@@ -285,6 +293,10 @@ def test_processor_encodes_dataset_semantic_ids_deterministically():
         ],
         "text": ["first", "second"],
         "src_lang": ["en", "en"],
+        "prompt_templates": [
+            "prompt-en:{{ video_start_token }}:",
+            "prompt-en:{{ video_start_token }}:",
+        ],
         "pseudo_gloss": ["A", "B"],
         "semantic_ids": ["shared-name", "shared-name"],
         "training": True,

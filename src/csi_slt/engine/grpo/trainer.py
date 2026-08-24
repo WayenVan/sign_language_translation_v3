@@ -43,6 +43,7 @@ except ImportError as error:  # pragma: no cover - depends on an optional packag
 
 from csi_slt.constants import LANGUAGE_MAP
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
+from csi_slt.engine.prompt_resolver import PromptResolver
 from csi_slt.engine.sft.callbacks import (
     ModelInfoCallback,
     SltTrainerCallbackHandler,
@@ -77,6 +78,8 @@ class SltGRPOTrainer(GRPOTrainer):
         model: SltModel,
         *args: Any,
         processing_class: SignTranslationProcessor,
+        train_prompt_resolver: PromptResolver,
+        eval_prompt_resolver: PromptResolver,
         **kwargs: Any,
     ) -> None:
         grpo_args = kwargs.get("args")
@@ -97,6 +100,8 @@ class SltGRPOTrainer(GRPOTrainer):
                 "model in a second PEFT layer."
             )
         self._validate_slt_setup(model, processing_class, grpo_args)
+        self.train_prompt_resolver = train_prompt_resolver
+        self.eval_prompt_resolver = eval_prompt_resolver
 
         # This adapter computes processor-aligned sentence BLEU internally, but
         # upstream TRL requires at least one reward source during construction.
@@ -203,10 +208,21 @@ class SltGRPOTrainer(GRPOTrainer):
         videos = [example["video"] for example in examples]
         source_languages = [example["lang"] for example in examples]
         texts = [example["text"] for example in examples]
+        prompt_resolver = (
+            self.train_prompt_resolver
+            if self.model.training
+            else self.eval_prompt_resolver
+        )
+        epoch = int(self.state.epoch or 0)
+        prompt_templates = [
+            prompt_resolver.resolve(example, epoch=epoch).template
+            for example in examples
+        ]
         batch = self.slt_processor(
             videos=videos,
             text=texts,
             src_lang=source_languages,
+            prompt_templates=prompt_templates,
             training=training,
             add_eos_token=training,
             return_tensors="pt",

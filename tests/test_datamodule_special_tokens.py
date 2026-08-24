@@ -17,6 +17,7 @@ def _make_datamodule(data_cfg, tokenizer):
         data_cfg=OmegaConf.create(data_cfg),
         datamodule_cfg=OmegaConf.create({}),
         tokenizer=tokenizer,
+        prompt_resolvers={},
     )
 
 

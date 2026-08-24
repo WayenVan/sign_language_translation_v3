@@ -3,6 +3,7 @@
 defaults:
   - /data: ph14t_*x224x224_qwen_multiling
   - /datamodule: standard
+  - /prompt: fixed_prompt
   - override /hydra/hydra_logging: none
   - override /hydra/job_logging: none
   - _self_

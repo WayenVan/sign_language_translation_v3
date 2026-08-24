@@ -15,6 +15,7 @@ from transformers import AutoTokenizer
 
 from csi_slt.data.collators import DSIDCalibrationCollator
 from csi_slt.data.datamodule import DataModule
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 from csi_slt.data.dsid_calibration import DSIDCalibrationDataset
 from csi_slt.engine.sft.dsid_calibration import (
     DSIDTauCalibrator,
@@ -93,7 +94,14 @@ def main(cfg: DictConfig) -> None:
     # forwarded directly through the frozen base LLM to obtain q_g and q_0.
     # DataModule.setup() is intentionally skipped because calibration also does
     # not need video lengths or length-bucket preparation.
-    datamodule = DataModule(cfg.data, cfg.datamodule, tokenizer=tokenizer)
+    datamodule = DataModule(
+        cfg.data,
+        cfg.datamodule,
+        tokenizer=tokenizer,
+        prompt_resolvers=instantiate_prompt_resolvers(
+            cfg.prompt, ("train", "val", "test")
+        ),
+    )
     source_dataset = instantiate(cfg.data.train.dataset)
     dataset_size = len(source_dataset)
     calibration_dataset = DSIDCalibrationDataset(source_dataset)

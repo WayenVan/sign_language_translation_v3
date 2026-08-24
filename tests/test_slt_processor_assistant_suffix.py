@@ -1,13 +1,8 @@
-from pathlib import Path
-
 import pytest
 from transformers import AutoTokenizer
 
 from csi_slt.data.processors.sign_video_processor import SignVideoProcessor
 from csi_slt.data.processors.slt_processor import SignTranslationProcessor
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 
 @pytest.mark.parametrize(
     (
@@ -54,9 +49,6 @@ def test_real_chat_template_suffix_preserves_decoded_target_text(
     processor = SignTranslationProcessor(
         video_processor=SignVideoProcessor(),
         tokenizer=tokenizer,
-        prompt_paths_per_language={
-            "de": str(PROJECT_ROOT / "jinjas/de_prompt.md.j2"),
-        },
         video_soft_token=video_soft_token,
         video_start_token=video_start_token,
     )
@@ -68,6 +60,9 @@ def test_real_chat_template_suffix_preserves_decoded_target_text(
         ["de"],
         add_bos_token=False,
         add_eos_token=True,
+        prompt_templates=[
+            "Translate the signing into German. {{ video_start_token }}"
+        ],
     )
 
     assert suffix_ids == [expected_suffix_id]

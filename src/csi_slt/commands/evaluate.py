@@ -10,6 +10,7 @@ from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer, set_seed
 
 from csi_slt.data.datamodule import DataModule
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 from csi_slt.engine.sft.metrics import SLTMetric
 from csi_slt.engine.sft.trainer import SltTrainer, apply_fsdp2_autocast
 from csi_slt.engine.sft.training_args import SltTrainingArguments
@@ -89,6 +90,7 @@ def main(cfg: DictConfig) -> None:
         cfg.data,
         cfg.datamodule,
         tokenizer=tokenizer,
+        prompt_resolvers=instantiate_prompt_resolvers(cfg.prompt, ("test",)),
     )
     datamodule.setup("predict")
 

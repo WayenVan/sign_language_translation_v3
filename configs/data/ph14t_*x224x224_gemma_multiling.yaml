@@ -1,10 +1,5 @@
 data_root: dataset/PHOENIX-2014-T-release-v3
 
-prompt_templates:
-  zh: jinjas/zh_prompt.md.j2
-  de: jinjas/de_prompt.md.j2
-  en: jinjas/en_prompt.md.j2
-
 ctc_tokenizer_dir: outputs/ctc_tokenizer
 
 processor:
@@ -39,7 +34,6 @@ train:
   collator: &collator
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: false
-    mode: train
 
 val:
   dataset:
@@ -47,7 +41,6 @@ val:
     mode: validation
   collator:
     <<: *collator
-    mode: eval
 
 test:
   dataset:
@@ -55,4 +48,3 @@ test:
     mode: test
   collator:
     <<: *collator
-    mode: test

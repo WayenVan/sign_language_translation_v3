@@ -10,6 +10,8 @@ from omegaconf import DictConfig
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
+from csi_slt.engine.prompt_resolver import PromptResolver
+
 from .datamodule_strategies import DatasetMap, Split, Stage
 
 
@@ -26,12 +28,21 @@ class DataModule:
         data_cfg: DictConfig,
         datamodule_cfg: DictConfig,
         tokenizer,
+        prompt_resolvers: Mapping[str, PromptResolver],
         accelerator=None,
     ) -> None:
         self.data_cfg = data_cfg
         self.datamodule_cfg = datamodule_cfg
         self.tokenizer = tokenizer
+        self.prompt_resolvers = dict(prompt_resolvers)
         self.accelerator = accelerator
+        unknown_resolvers = set(self.prompt_resolvers).difference(
+            {"train", "val", "test"}
+        )
+        if unknown_resolvers:
+            raise ValueError(
+                "Unknown prompt resolver splits: " f"{sorted(unknown_resolvers)}"
+            )
 
         self._register_processor_special_tokens()
 
@@ -77,20 +88,6 @@ class DataModule:
 
         with open(path, "r", encoding="utf-8") as template_file:
             return template_file.read()
-
-    @property
-    def _prompt_paths(self) -> dict[str, str]:
-        """Resolve prompt-template paths relative to the current working directory."""
-        prompt_templates = self.data_cfg.get("prompt_templates")
-        if prompt_templates is None:
-            return {}
-
-        return {
-            language: (
-                path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
-            )
-            for language, path in prompt_templates.items()
-        }
 
     def setup(self, stage: Stage = None) -> None:
         """Create datasets required by the requested execution stage.
@@ -165,7 +162,6 @@ class DataModule:
             self.data_cfg.processor,
             tokenizer=self.tokenizer,
             chat_template=self.chat_template,
-            prompt_paths_per_language=self._prompt_paths,
             **processor_kwargs,
             _convert_="all",
         )
@@ -186,8 +182,15 @@ class DataModule:
         split_cfg = self.data_cfg.get(split)
         if split_cfg is None or split_cfg.get("collator") is None:
             raise ValueError(f"Missing data.{split}.collator configuration.")
+        if split not in self.prompt_resolvers:
+            raise ValueError(f"Missing prompt resolver for split {split!r}.")
 
-        return instantiate(split_cfg.collator, processor=self.processor)
+        return instantiate(
+            split_cfg.collator,
+            processor=self.processor,
+            prompt_resolver=self.prompt_resolvers[split],
+            training=split == "train",
+        )
 
     def print_batch(
         self,
