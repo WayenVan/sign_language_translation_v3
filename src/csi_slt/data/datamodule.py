@@ -197,14 +197,27 @@ class DataModule:
         batch_size: int,
         num_workers: int = 1,
         random: bool = False,
+        split: Literal["train", "val", "test"] = "train",
     ) -> None:
-        if self.train_dataset is None:
-            raise RuntimeError("Train dataset is not set up; call setup('fit') first.")
+        """Decode and print one batch of the requested split."""
+        supported_splits = ("train", "val", "test")
+        if split not in supported_splits:
+            raise ValueError(
+                f"Unsupported split {split!r}; expected one of {supported_splits}."
+            )
+
+        dataset = getattr(self, f"{split}_dataset")
+        if dataset is None:
+            stage = "fit" if split in ("train", "val") else "test"
+            raise RuntimeError(
+                f"Dataset for split {split!r} is not set up; "
+                f"call setup({stage!r}) first."
+            )
 
         dataloader = torch.utils.data.DataLoader(
-            self.train_dataset,
+            dataset,
             batch_size=batch_size,
-            collate_fn=self.train_collator,
+            collate_fn=getattr(self, f"{split}_collator"),
             num_workers=num_workers,
             shuffle=random,
         )
