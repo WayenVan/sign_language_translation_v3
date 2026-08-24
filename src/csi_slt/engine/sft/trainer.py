@@ -715,6 +715,13 @@ class SltTrainer(Seq2SeqTrainer):
         """
         Returns the test [`~torch.utils.data.DataLoader`].
 
+        Prediction arrays are positionally aligned with ``test_dataset`` when
+        the evaluation sampler remains sequential (no length grouping or
+        custom shuffled sampler), ``test_dataset`` is not iterable, and
+        ``dataloader_drop_last`` is false. Under those conditions Accelerate
+        preserves/restores dataset order when gathering distributed results,
+        so prediction item ``i`` corresponds to ``test_dataset[i]``.
+
         Subclass and override this method if you want to inject some custom behavior.
 
         Args:
