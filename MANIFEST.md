@@ -33,3 +33,5 @@
 | 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_PLAN.md | implementation | latest revised experiment plan |
 | 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_TRACKER_20260824_140356.md | implementation | revised timestamped execution tracker |
 | 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_TRACKER.md | implementation | latest revised execution tracker |
+| 2026-08-24 19:04 | /experiment-plan | refine-logs/PROMPT_PROTOCOL_20260824_190426.md | implementation | frozen four-asset prompt protocol and evaluation design |
+| 2026-08-24 19:04 | /experiment-plan | refine-logs/PROMPT_PROTOCOL.md | implementation | latest prompt protocol pointer and decisions |
