@@ -12,149 +12,101 @@ def _write_jsonl(path, rows):
     )
 
 
-def _prompt(prompt_id, instruction_lang, target_lang, split="train"):
+def _prompt(prompt_id, target_lang):
     return {
         "id": prompt_id,
-        "split": split,
-        "intent": "sign_translation",
-        "instruction_lang": instruction_lang,
         "target_lang": target_lang,
         "template": f"{prompt_id}: {{{{ video_start_token }}}}",
     }
 
 
-def test_random_sampling_is_stable_within_epoch_and_changes_across_epochs(tmp_path):
-    prompt_path = tmp_path / "train.jsonl"
+def test_random_draws_are_reproducible_but_can_vary_per_call(tmp_path):
+    path = tmp_path / "train.jsonl"
+    _write_jsonl(path, [_prompt(f"de_{index}", "de") for index in range(16)])
+    first = PromptSampler(path, seed=7)
+    second = PromptSampler(path, seed=7)
+
+    first_sequence = [first.random("de").id for _ in range(20)]
+    second_sequence = [second.random("de").id for _ in range(20)]
+
+    assert first_sequence == second_sequence
+    assert len(set(first_sequence)) > 1
+
+    first.set_epoch(3)
+    epoch_sequence = [first.random("de").id for _ in range(10)]
+    first.set_epoch(3)
+    assert [first.random("de").id for _ in range(10)] == epoch_sequence
+
+
+def test_random_stays_inside_target_language_group(tmp_path):
+    path = tmp_path / "train.jsonl"
     _write_jsonl(
-        prompt_path,
-        [_prompt(f"en_de_{index}", "en", "de") for index in range(16)],
+        path,
+        [_prompt("de_1", "de"), _prompt("de_2", "de"), _prompt("en_1", "en")],
     )
-    sampler = PromptSampler(prompt_path, strategy="random", seed=7)
+    sampler = PromptSampler(path, seed=3)
 
-    first = sampler.sample("de", "sample-a", instruction_lang="en")
-    assert sampler.sample("de", "sample-a", instruction_lang="en") == first
-
-    observed = {first.id}
-    for epoch in range(1, 12):
-        sampler.set_epoch(epoch)
-        observed.add(
-            sampler.sample("de", "sample-a", instruction_lang="en").id
-        )
-    assert len(observed) > 1
+    assert sampler.random("de").target_lang == "de"
+    assert sampler.random("en").id == "en_1"
 
 
-def test_random_sampling_can_choose_any_instruction_language(tmp_path):
-    prompt_path = tmp_path / "train.jsonl"
-    _write_jsonl(
-        prompt_path,
-        [
-            _prompt("de_de", "de", "de"),
-            _prompt("en_de", "en", "de"),
-            _prompt("zh_de", "zh", "de"),
-        ],
-    )
-    sampler = PromptSampler(prompt_path, strategy="random", seed=3)
+def test_by_id_resolves_and_validates_target_language(tmp_path):
+    path = tmp_path / "prompts.jsonl"
+    _write_jsonl(path, [_prompt("canonical_de", "de"), _prompt("heldout_en", "en")])
+    sampler = PromptSampler(path)
 
-    record = sampler.sample("de", "sample-a")
-    assert record.target_lang == "de"
-    assert record.instruction_lang in {"de", "en", "zh"}
+    assert sampler.by_id("canonical_de", target_lang="de").id == "canonical_de"
+    with pytest.raises(KeyError, match="Unknown prompt id"):
+        sampler.by_id("missing")
+    with pytest.raises(ValueError, match="sample targets 'en'"):
+        sampler.by_id("canonical_de", target_lang="en")
 
 
-def test_fixed_sampling_uses_first_matching_id_and_allows_override(tmp_path):
-    prompt_path = tmp_path / "train.jsonl"
-    _write_jsonl(
-        prompt_path,
-        [
-            _prompt("en_de_002", "en", "de"),
-            _prompt("en_de_001", "en", "de"),
-        ],
-    )
-    sampler = PromptSampler(prompt_path, strategy="fixed")
+def test_loads_multiple_non_overlapping_banks(tmp_path):
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    _write_jsonl(first, [_prompt("de_1", "de")])
+    _write_jsonl(second, [_prompt("en_1", "en")])
 
-    assert sampler.sample("de", instruction_lang="en").id == "en_de_001"
-    assert (
-        sampler.sample(
-            "de", instruction_lang="en", prompt_id="en_de_002"
-        ).id
-        == "en_de_002"
-    )
+    sampler = PromptSampler([first, second])
+
+    assert {record.id for record in sampler.records} == {"de_1", "en_1"}
 
 
-def test_manifest_sampling_resolves_and_validates_assignment(tmp_path):
-    prompt_path = tmp_path / "heldout.jsonl"
-    manifest_path = tmp_path / "manifest.jsonl"
-    _write_jsonl(
-        prompt_path,
-        [
-            _prompt("zh_de_heldout", "zh", "de", split="heldout"),
-            _prompt("en_zh_heldout", "en", "zh", split="heldout"),
-        ],
-    )
-    _write_jsonl(
-        manifest_path,
-        [
-            {
-                "eval_id": "sample-de:prompt-1",
-                "translation_id": "sample-de",
-                "prompt_id": "zh_de_heldout",
-            },
-            {
-                "eval_id": "sample-de:prompt-2",
-                "translation_id": "sample-de",
-                "prompt_id": "zh_de_heldout",
-            },
-            {
-                "eval_id": "sample-zh:prompt-1",
-                "translation_id": "sample-zh",
-                "prompt_id": "en_zh_heldout",
-            },
-        ],
-    )
-    sampler = PromptSampler(
-        prompt_path,
-        strategy="manifest",
-        manifest_path=manifest_path,
-        expected_split="heldout",
-    )
+def test_rejects_duplicate_ids_across_banks(tmp_path):
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    _write_jsonl(first, [_prompt("duplicate", "de")])
+    _write_jsonl(second, [_prompt("duplicate", "en")])
 
-    record = sampler.sample(
-        "de", instruction_lang="zh", eval_id="sample-de:prompt-1"
-    )
-    assert record.id == "zh_de_heldout"
-    assignment = sampler.get_assignment("sample-de:prompt-2")
-    assert assignment.translation_id == "sample-de"
-    with pytest.raises(KeyError, match="No prompt assignment for eval_id"):
-        sampler.sample("de", eval_id="missing")
-    with pytest.raises(ValueError, match="targets 'de'"):
-        sampler.sample("zh", eval_id="sample-de:prompt-1")
+    with pytest.raises(ValueError, match="Duplicate prompt id"):
+        PromptSampler([first, second])
 
 
-def test_rejects_wrong_split_and_bad_sentinel(tmp_path):
-    prompt_path = tmp_path / "bad.jsonl"
-    row = _prompt("bad", "en", "de", split="heldout")
+def test_rejects_unused_fields_and_bad_sentinel(tmp_path):
+    extra = tmp_path / "extra.jsonl"
+    row = _prompt("extra", "de")
+    row["split"] = "train"
+    _write_jsonl(extra, [row])
+    with pytest.raises(ValueError, match="unsupported fields"):
+        PromptSampler(extra)
+
+    bad = tmp_path / "bad.jsonl"
+    row = _prompt("bad", "de")
     row["template"] = "missing sentinel"
-    _write_jsonl(prompt_path, [row])
-
-    with pytest.raises(ValueError, match="expected 'train'"):
-        PromptSampler(prompt_path, expected_split="train")
+    _write_jsonl(bad, [row])
     with pytest.raises(ValueError, match="exactly one"):
-        PromptSampler(prompt_path, expected_split="heldout")
+        PromptSampler(bad)
 
 
 def test_real_prompt_banks_load():
-    train = PromptSampler(
-        "promts/train.jsonl", strategy="random", expected_split="train"
-    )
-    heldout = PromptSampler(
-        "promts/heldout.jsonl", strategy="fixed", expected_split="heldout"
-    )
-    adversarial = PromptSampler(
-        "promts/adversarial.jsonl",
-        strategy="fixed",
-        expected_split="adversarial",
-    )
+    train = PromptSampler("prompts/train.jsonl")
+    heldout = PromptSampler("prompts/heldout.jsonl")
+    wrong_task = PromptSampler("prompts/wrong_task.jsonl")
+    unrelated = PromptSampler("prompts/unrelated.jsonl")
 
-    assert len(train.records) == 54
-    assert len(heldout.records) == 36
-    assert len(adversarial.records) == 30
-    assert adversarial.sample(None, instruction_lang="zh").target_lang is None
+    assert len(train.records) == 24
+    assert len(heldout.records) == 12
+    assert len(wrong_task.records) == 3
+    assert len(unrelated.records) == 3
+    assert train.by_id("canonical_en_de_001", target_lang="de")
