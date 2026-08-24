@@ -25,3 +25,11 @@
 | 2026-08-13 23:55 | /research-refine | refine-logs/FINAL_PROPOSAL.md | implementation | latest copy with standard Markdown math formatting |
 | 2026-08-14 00:26 | /research-refine | refine-logs/D_SID_DISCUSSION_NOTES_20260814_002657.md | implementation | timestamped D-SID discussion notes |
 | 2026-08-14 00:26 | /research-refine | refine-logs/D_SID_DISCUSSION_NOTES.md | implementation | transferable latest D-SID discussion notes |
+| 2026-08-24 13:09 | /experiment-plan | refine-logs/EXPERIMENT_PLAN_20260824_130947.md | implementation | detailed plan for credible evaluation under limited monolingual performance |
+| 2026-08-24 13:09 | /experiment-plan | refine-logs/EXPERIMENT_PLAN.md | implementation | latest experiment plan |
+| 2026-08-24 13:09 | /experiment-plan | refine-logs/EXPERIMENT_TRACKER_20260824_130947.md | implementation | timestamped execution tracker |
+| 2026-08-24 13:09 | /experiment-plan | refine-logs/EXPERIMENT_TRACKER.md | implementation | latest execution tracker |
+| 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_PLAN_20260824_140356.md | implementation | revised plan centered on near-zero-cost unified instruction capability and prompt generalization |
+| 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_PLAN.md | implementation | latest revised experiment plan |
+| 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_TRACKER_20260824_140356.md | implementation | revised timestamped execution tracker |
+| 2026-08-24 14:03 | /experiment-plan | refine-logs/EXPERIMENT_TRACKER.md | implementation | latest revised execution tracker |
