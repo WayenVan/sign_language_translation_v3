@@ -42,6 +42,12 @@ class Ph14TMultiLinglDataset(Dataset):
             split=mode,
         )
 
+    @property
+    def cache_namespace(self) -> str:
+        """Directory namespace for this dataset variant's prepared artifacts."""
+
+        return "ph14t_multilingual"
+
     def __len__(self):
         return len(self.hg_dataset)
 
@@ -93,7 +99,7 @@ class Ph14TMultiLinglDataset(Dataset):
         """Use Datasets' native fingerprint/cache system for token lengths."""
 
         cache_root = Path(cache_dir or datasets_config.HF_DATASETS_CACHE)
-        cache_root = cache_root / "csi_slt" / "ph14t_multilingual"
+        cache_root = cache_root / "csi_slt" / self.cache_namespace
         cache_root.mkdir(parents=True, exist_ok=True)
         assembled_path = cache_root / (
             f"assembled-{self.mode}-{self.hg_dataset._fingerprint}"
