@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 from transformers import AutoTokenizer
 
-from csi_slt.engine.sft.metrics import SLTMetric
+from csi_slt.engine.sft.metrics import DecodedBatch, SLTMetric
 from csi_slt.constants import LANGUAGE_MAP
 
 
@@ -14,6 +14,16 @@ class _FakeBertScoreMetric:
     def compute(self, **kwargs):
         self.calls.append(kwargs)
         return {"f1": [0.8] * len(kwargs["predictions"])}
+
+
+class _FakeLanguageDetector:
+    def __init__(self, labels):
+        self.labels = labels
+        self.calls = []
+
+    def __call__(self, predictions, **kwargs):
+        self.calls.append((predictions, kwargs))
+        return [{"label": label, "score": 1.0} for label in self.labels]
 
 
 def _get_language_id(language: str) -> int:
@@ -55,6 +65,34 @@ def test_bert_score_skips_backend_when_all_text_is_empty():
 
     assert score == 0.0
     assert metric._bert_score_metric.calls == []
+
+
+def test_lacc_reports_language_and_overall_scores_and_counts_empty_as_wrong():
+    detector = _FakeLanguageDetector(["en", "de", "en"])
+    metric = object.__new__(SLTMetric)
+    metric._language_detector = detector
+    metric.language_detector_batch_size = 16
+    batch = DecodedBatch(
+        predictions=["hello", "hallo", "wrong language", ""],
+        references=["", "", "", ""],
+        languages=["en", "de", "de", "zh"],
+        total_token_counts=[1, 1, 2, 0],
+        generated_token_counts=[1, 1, 2, 0],
+    )
+
+    results = metric._calculate_lacc(batch)
+
+    assert results["en_lacc"] == 1.0
+    assert results["de_lacc"] == 0.5
+    assert results["zh_lacc"] == 0.0
+    assert results["overall_macro_lacc"] == 0.5
+    assert results["overall_weighted_lacc"] == 0.5
+    assert detector.calls == [
+        (
+            ["hello", "hallo", "wrong language"],
+            {"batch_size": 16, "truncation": True},
+        )
+    ]
 
 
 def test_slt_metric_quick():

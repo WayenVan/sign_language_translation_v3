@@ -10,6 +10,7 @@ from typing import Any, Protocol
 import evaluate
 import numpy as np
 from sacrebleu.metrics import BLEU
+from transformers import pipeline
 
 from ...constants import LANGUAGE_MAP
 
@@ -93,6 +94,13 @@ class SLTMetric:
         zh_bert_score_f1
         overall_macro_bert_score_f1
 
+    输出语言准确率（LAcc）：
+
+        en_lacc
+        zh_lacc
+        overall_macro_lacc
+        overall_weighted_lacc
+
     注意：两个 overall BLEU 都由各语言的 BLEU-4 聚合得到，
     不会把不同目标语言混合后直接计算 corpus BLEU。
 
@@ -132,6 +140,10 @@ class SLTMetric:
         default_bleu_tokenizer: str = "13a",
         bleu_tokenizer_by_language: Mapping[str, str] | None = None,
         bert_score_model_type: str = "bert-base-multilingual-cased",
+        language_detector_model_type: str = (
+            "papluca/xlm-roberta-base-language-detection"
+        ),
+        language_detector_batch_size: int = 32,
         priodic_metrics: Sequence[PriodicMetric] | None = None,
     ) -> None:
         self.tokenizer = processor.tokenizer
@@ -139,6 +151,9 @@ class SLTMetric:
         self.lowercase_bleu = lowercase_bleu
         self.default_bleu_tokenizer = default_bleu_tokenizer
         self.bert_score_model_type = bert_score_model_type
+        self.language_detector_model_type = language_detector_model_type
+        self.language_detector_batch_size = language_detector_batch_size
+        self._language_detector = None
         self.priodic_metrics = tuple(priodic_metrics or ())
         self._evaluation_count = 0
 
@@ -193,6 +208,73 @@ class SLTMetric:
         # 所有语言使用同一个多语言模型，使不同语言的分数可按语言聚合，
         # 同时避免 BERTScore 根据语言代码选择模型时不支持部分语言代码。
         self._bert_score_metric = evaluate.load("bertscore")
+
+    # ------------------------------------------------------------------
+    # Output-language accuracy
+    # ------------------------------------------------------------------
+
+    def _get_language_detector(self):
+        """Load the language detector lazily and reuse it across evaluations."""
+
+        if self._language_detector is None:
+            self._language_detector = pipeline(
+                "text-classification",
+                model=self.language_detector_model_type,
+                device=-1,
+            )
+        return self._language_detector
+
+    def _calculate_lacc(self, batch: DecodedBatch) -> dict[str, float]:
+        """Calculate per-language and aggregate output-language accuracy."""
+
+        if not batch.predictions:
+            return {
+                "overall_macro_lacc": 0.0,
+                "overall_weighted_lacc": 0.0,
+            }
+
+        detected_languages: list[str | None] = [None] * len(batch)
+        nonempty_indices = [
+            index
+            for index, prediction in enumerate(batch.predictions)
+            if prediction.strip()
+        ]
+        if nonempty_indices:
+            results = self._get_language_detector()(
+                [batch.predictions[index] for index in nonempty_indices],
+                batch_size=self.language_detector_batch_size,
+                truncation=True,
+            )
+            if len(results) != len(nonempty_indices):
+                raise ValueError(
+                    "Language detector returned an unexpected number of results: "
+                    f"{len(results)}, expected {len(nonempty_indices)}."
+                )
+            for index, result in zip(nonempty_indices, results, strict=True):
+                detected_languages[index] = self._normalize_language_code(
+                    str(result["label"])
+                )
+
+        language_groups = self._group_indices_by_language(batch.languages)
+        metrics: dict[str, float] = {}
+        language_scores: list[float] = []
+        correct_count = 0
+
+        for language in sorted(language_groups):
+            indices = language_groups[language]
+            normalized_language = self._normalize_language_code(language)
+            num_correct = sum(
+                detected_languages[index] == normalized_language for index in indices
+            )
+            score = num_correct / len(indices)
+            metric_language = normalized_language.replace("-", "_")
+            metrics[f"{metric_language}_lacc"] = float(score)
+            language_scores.append(score)
+            correct_count += num_correct
+
+        metrics["overall_macro_lacc"] = float(np.mean(language_scores))
+        metrics["overall_weighted_lacc"] = float(correct_count / len(batch))
+        return metrics
 
     # ------------------------------------------------------------------
     # Basic utilities
@@ -794,6 +876,8 @@ class SLTMetric:
                 "overall_macro_bleu4": 0.0,
                 "overall_weighted_bleu4": 0.0,
                 "overall_macro_bert_score_f1": 0.0,
+                "overall_macro_lacc": 0.0,
+                "overall_weighted_lacc": 0.0,
                 "avg_n_tokens": 0.0,
                 "avg_n_tokens_generated": 0.0,
                 "all_n_tokens_generated": 0,
@@ -868,6 +952,8 @@ class SLTMetric:
         metrics.update(
             self._aggregate_bert_score_f1(language_bert_score_f1_scores)
         )
+
+        metrics.update(self._calculate_lacc(batch))
 
         metrics.update(
             {
