@@ -5,6 +5,7 @@ dataset
 *.mp4
 download-ripgrepBnnefY/
 *.svg
+outputs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

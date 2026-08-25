@@ -6,6 +6,7 @@ from csi_slt.data.datamodule_strategies import (
     SharedSubsetStrategy,
     SplitSubsetStrategy,
     StandardSplitStrategy,
+    TrainWithValAndTestStrategy,
 )
 
 
@@ -51,6 +52,33 @@ def test_standard_strategy_can_append_validation_to_training():
     assert isinstance(datasets["train"], ConcatDataset)
     assert len(datasets["train"]) == 5
     assert datasets["val"] is val
+
+
+def test_train_with_val_and_test_strategy_appends_both_to_training():
+    train = TensorDataset(torch.arange(3))
+    val = TensorDataset(torch.arange(2))
+    test = TensorDataset(torch.arange(4))
+
+    datasets = TrainWithValAndTestStrategy().arrange(
+        {"train": train, "val": val, "test": test}, stage="fit"
+    )
+
+    assert isinstance(datasets["train"], ConcatDataset)
+    assert datasets["train"].datasets == [train, val, test]
+    assert len(datasets["train"]) == 9
+    assert datasets["val"] is val
+    assert datasets["test"] is test
+
+
+def test_train_with_val_and_test_strategy_keeps_evaluation_splits_unchanged():
+    val = TensorDataset(torch.arange(2))
+    test = TensorDataset(torch.arange(4))
+
+    datasets = TrainWithValAndTestStrategy().arrange(
+        {"val": val, "test": test}, stage="test"
+    )
+
+    assert datasets == {"val": val, "test": test}
 
 
 def test_split_subset_samples_each_split_by_its_percentage():

@@ -74,6 +74,10 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
+  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle
+  prompt=fixed_prompt
+  datamodule=train_with_val_and_test
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
@@ -100,6 +104,8 @@ CMD_ARGS=(
   engine.training_args.ddp_find_unused_parameters=False
   # data=ph14t_*x224x224_gemma_multiling
   data=ph14t_*x224x224_qwen_multiling
+  # data=ph14t_*x224x224_qwen_single_language
+  # data.language=zh
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2

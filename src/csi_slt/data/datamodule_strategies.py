@@ -37,6 +37,32 @@ class StandardSplitStrategy:
         return arranged
 
 
+class TrainWithValAndTestStrategy:
+    """Append the validation and test splits to the training dataset."""
+
+    def required_splits(self, stage: Stage) -> tuple[Split, ...]:
+        if stage == "fit":
+            return ("train", "val", "test")
+        if stage in ("test", "predict"):
+            return ("val", "test")
+        return ("train", "val", "test")
+
+    def arrange(self, datasets: Mapping[Split, Dataset], stage: Stage) -> DatasetMap:
+        arranged = dict(datasets)
+        if "train" in arranged:
+            missing_splits = {"val", "test"}.difference(arranged)
+            if missing_splits:
+                missing = ", ".join(sorted(missing_splits))
+                raise ValueError(
+                    "TrainWithValAndTestStrategy requires the validation and test "
+                    f"datasets; missing: {missing}."
+                )
+            arranged["train"] = ConcatDataset(
+                [arranged["train"], arranged["val"], arranged["test"]]
+            )
+        return arranged
+
+
 class SplitSubsetStrategy:
     """Select deterministic percentages of the train, val, and test splits."""
 

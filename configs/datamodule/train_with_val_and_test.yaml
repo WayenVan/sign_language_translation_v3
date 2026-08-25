@@ -1,0 +1,2 @@
+strategy:
+  _target_: csi_slt.data.datamodule_strategies.TrainWithValAndTestStrategy
