@@ -2,6 +2,10 @@
 
 defaults:
   - base
+  # Fine-tuning uses varied language-matched prompts for training and the
+  # canonical fixed prompt for validation/test; keep this explicit instead of
+  # silently inheriting whichever prompt policy base.yaml happens to select.
+  - override /prompt: diverse_train
   - override /peft: lora
   - _self_
 

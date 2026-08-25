@@ -1,7 +1,8 @@
 import pytest
+import torch
 from torch import nn
 
-from csi_slt.commands.train_ft_peft import freeze_except_lora_adapters
+from csi_slt.commands.train_ft_peft import cast_module_dtype, freeze_except_lora_adapters
 
 
 class _ModelWithLoRA(nn.Module):
@@ -31,3 +32,24 @@ def test_freeze_except_lora_adapters_only_keeps_lora_trainable():
 def test_freeze_except_lora_adapters_rejects_model_without_lora():
     with pytest.raises(ValueError, match="No LoRA adapter parameters"):
         freeze_except_lora_adapters(nn.Linear(3, 4))
+
+
+def test_cast_module_dtype_casts_floating_parameters():
+    module = nn.Linear(3, 4)
+
+    cast_module_dtype(module, "bfloat16")
+
+    assert all(parameter.dtype == torch.bfloat16 for parameter in module.parameters())
+
+
+def test_cast_module_dtype_auto_preserves_checkpoint_dtype():
+    module = nn.Linear(3, 4).to(dtype=torch.float64)
+
+    cast_module_dtype(module, "auto")
+
+    assert all(parameter.dtype == torch.float64 for parameter in module.parameters())
+
+
+def test_cast_module_dtype_rejects_unknown_dtype():
+    with pytest.raises(ValueError, match="Unsupported dtype"):
+        cast_module_dtype(nn.Linear(3, 4), "not_a_dtype")

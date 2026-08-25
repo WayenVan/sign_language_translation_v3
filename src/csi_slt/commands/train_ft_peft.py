@@ -7,6 +7,7 @@ from ..engine.sft.training_args import SltTrainingArguments
 from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
+import torch
 from ..modeling_slt.slt import SltConfig, SltModel
 from ..utils.generation_config import merge_generation_config
 from peft import (
@@ -20,6 +21,22 @@ from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 
 set_seed(42)
+
+
+def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None:
+    """Cast one loaded checkpoint component, treating ``auto`` as no-op."""
+    if dtype == "auto":
+        return
+    if isinstance(dtype, str):
+        resolved_dtype = getattr(torch, dtype, None)
+        if not isinstance(resolved_dtype, torch.dtype):
+            raise ValueError(f"Unsupported dtype: {dtype!r}")
+        dtype = resolved_dtype
+    if not isinstance(dtype, torch.dtype):
+        raise TypeError("dtype must be a torch.dtype or dtype name")
+    if not (dtype.is_floating_point or dtype.is_complex):
+        raise ValueError(f"dtype must be floating point or complex, got {dtype}")
+    module.to(dtype=dtype)
 
 
 def freeze_except_lora_adapters(
@@ -93,6 +110,8 @@ def main(cfg: DictConfig):
     slt_model = SltModel.from_pretrained_with_new_lora(
         peft_config, cfg.model.checkpoint_dir
     )
+    cast_module_dtype(slt_model.llm, cfg.engine.llm_dtype)
+    cast_module_dtype(slt_model.visual_backbone, cfg.engine.visual_backbone_dtype)
     freeze_except_lora_adapters(
         slt_model,
         unfreeze_visual_adapter=cfg.peft.unfreeze_adapter,
