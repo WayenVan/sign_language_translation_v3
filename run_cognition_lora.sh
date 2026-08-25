@@ -72,9 +72,13 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train_ft_peft
   --config-name train/ft_peft
-  model.checkpoint_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc//checkpoint-42000
+  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
+  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en//checkpoint-30000
   peft.llm_lora_config.r=8
-  engine.training_args.output_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc-peft-ft-r8
+  prompt=fixed_prompt
+  datamodule=train_with_val_and_test
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-lora-r8
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
   engine.training_args.per_device_train_batch_size=4
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
