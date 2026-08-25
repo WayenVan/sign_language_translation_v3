@@ -69,14 +69,14 @@ echo "DATASET_PATH=$DATASET_PATH"
 CMD_ARGS=(
   # FSDP2: shards the frozen LLM across the job's GPUs. Comment this line out
   # to fall back to plain DDP for the small (1.7B) models.
-  --config_file="$SCRIPT_DIR/configs/accelerate/fsdp2.yaml"
+  # --config_file="$SCRIPT_DIR/configs/accelerate/fsdp2.yaml"
   --num_processes=2
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
   model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle
   prompt=fixed_prompt
-  datamodule=train_with_val_and_test
+  # datamodule=train_with_val_and_test
   engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
