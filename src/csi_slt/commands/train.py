@@ -23,16 +23,6 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
-def get_transform_layers_from_strategy(llm_num_layers, strategy_config):
-    if strategy_config.type == "none":
-        raise ValueError("No transform layers specified in strategy config.")
-    elif strategy_config.type == "last_n_layers":
-        n = strategy_config.n_layers
-        return list(range(llm_num_layers - n, llm_num_layers))
-    else:
-        raise ValueError(f"Unknown strategy type: {strategy_config.type}")
-
-
 @hydra.main(
     version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/base"
 )

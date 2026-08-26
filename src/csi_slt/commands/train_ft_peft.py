@@ -8,7 +8,7 @@ from ..data.datamodule import DataModule
 from transformers import set_seed
 from transformers import AutoTokenizer
 import torch
-from ..modeling_slt.slt import SltConfig, SltModel
+from ..modeling_slt.slt import SltModel
 from ..utils.generation_config import merge_generation_config
 from peft import (
     LoraConfig,
@@ -71,25 +71,6 @@ def freeze_except_lora_adapters(
     return trainable_parameter_count
 
 
-def get_transform_layers_from_strategy(llm_num_layers, strategy_config):
-    strategy_name = strategy_config.name
-    if strategy_name == "none":
-        raise ValueError("No transform layers specified in strategy config.")
-    elif strategy_name == "all_layers":
-        return list(range(llm_num_layers))
-    elif strategy_name == "last_n_layers":
-        n = strategy_config.n_layers
-        if isinstance(n, bool) or not isinstance(n, int):
-            raise TypeError("n_layers must be an integer")
-        if not 1 <= n <= llm_num_layers:
-            raise ValueError(
-                f"n_layers must be between 1 and {llm_num_layers}, got {n}"
-            )
-        return list(range(llm_num_layers - n, llm_num_layers))
-    else:
-        raise ValueError(f"Unknown strategy name: {strategy_name}")
-
-
 @hydra.main(
     version_base=None,
     config_path=DEFAULT_CONFIG_PATH,
@@ -98,17 +79,26 @@ def get_transform_layers_from_strategy(llm_num_layers, strategy_config):
 def main(cfg: DictConfig):
     # create model
     # peft confg
-    slt_config = SltConfig.from_pretrained(cfg.model.checkpoint_dir)
-    lora_args = OmegaConf.to_container(cfg.peft.llm_lora_config, resolve=True)
-    peft_config = LoraConfig(
-        **lora_args,
-        layers_to_transform=get_transform_layers_from_strategy(
-            slt_config.llm_config.num_hidden_layers, cfg.peft.llm_lora_strategy
-        ),
-        task_type=TaskType.CAUSAL_LM,
-    )
+    llm_lora_config = None
+    llm_lora_config_node = cfg.peft.get("llm_lora_config")
+    if llm_lora_config_node is not None:
+        lora_args = OmegaConf.to_container(llm_lora_config_node, resolve=True)
+        llm_lora_config = LoraConfig(
+            **lora_args,
+            task_type=TaskType.CAUSAL_LM,
+        )
+    visual_lora_config = None
+    visual_lora_config_node = cfg.peft.get("visual_lora_config")
+    if visual_lora_config_node is not None:
+        visual_lora_args = OmegaConf.to_container(
+            visual_lora_config_node, resolve=True
+        )
+        visual_lora_config = LoraConfig(**visual_lora_args)
+
     slt_model = SltModel.from_pretrained_with_new_lora(
-        peft_config, cfg.model.checkpoint_dir
+        checkpoint_dir=cfg.model.checkpoint_dir,
+        llm_lora_config=llm_lora_config,
+        visual_lora_config=visual_lora_config,
     )
     cast_module_dtype(slt_model.llm, cfg.engine.llm_dtype)
     cast_module_dtype(slt_model.visual_backbone, cfg.engine.visual_backbone_dtype)

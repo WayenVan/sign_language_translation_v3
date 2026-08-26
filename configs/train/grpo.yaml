@@ -24,7 +24,8 @@ model:
   checkpoint_dir: outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv3-0815-224x224/checkpoint-24000
 
 engine:
-  # With peft=lora, a fresh policy adapter is added to model.checkpoint_dir.
+  # With a model-bound LoRA peft config, a fresh policy adapter is added to
+  # model.checkpoint_dir.
   model_dtype: auto
   resume_from_checkpoint: null
 

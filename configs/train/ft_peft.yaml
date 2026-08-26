@@ -6,7 +6,7 @@ defaults:
   # canonical fixed prompt for validation/test; keep this explicit instead of
   # silently inheriting whichever prompt policy base.yaml happens to select.
   - override /prompt: diverse_train
-  - override /peft: lora
+  - override /peft: qwen3-1.7b-llm-last4
   - _self_
 
 model:
@@ -15,7 +15,7 @@ model:
 engine:
   training_args:
     output_dir: outputs/ft_peft
-    num_train_epochs: 5
+    num_train_epochs: 15
     learning_rate: 5e-5
     warmup_steps: 0.03
     weight_decay: 0.01
@@ -23,17 +23,3 @@ engine:
     eval_steps: 0.1
     save_strategy: steps
     save_steps: 0.1
-
-peft:
-  unfreeze_adapter: true
-  llm_lora_strategy:
-    name: all_layers
-    n_layers: 4
-  llm_lora_config:
-    r: 8
-    lora_alpha: 16
-    lora_dropout: 0.05
-    bias: "none"
-    target_modules:
-      - "q_proj"
-      - "v_proj"

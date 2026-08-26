@@ -2,7 +2,7 @@
 
 defaults:
   - base
-  - override /peft: lora
+  - override /peft: qwen3-1.7b-llm-last4
   - _self_
 
 hydra:

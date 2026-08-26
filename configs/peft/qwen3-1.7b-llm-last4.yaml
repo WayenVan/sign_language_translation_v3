@@ -1,8 +1,6 @@
 type: lora
 
-llm_lora_strategy:
-  name: last_n_layers
-  n_layers: 4
+unfreeze_adapter: true
 
 llm_lora_config:
   r: 8
@@ -12,3 +10,9 @@ llm_lora_config:
   target_modules:
     - "q_proj"
     - "v_proj"
+  layers_pattern: "layers"
+  layers_to_transform:
+    - 24
+    - 25
+    - 26
+    - 27
