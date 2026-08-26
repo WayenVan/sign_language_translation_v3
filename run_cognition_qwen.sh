@@ -75,9 +75,8 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train
   model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle
-  prompt=fixed_prompt
-  # datamodule=train_with_val_and_test
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed
+  prompt=diverse_train
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-diverse
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder

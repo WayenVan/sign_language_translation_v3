@@ -9,7 +9,7 @@
 #SBATCH --mem=256g
 
 set -euo pipefail
-
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL
 export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
 
 SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
@@ -72,13 +72,18 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train_ft_peft
   --config-name train/ft_peft
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
-  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en//checkpoint-30000
+  peft=qwen3-1.7b-cradio-v4-so400m-llm-last4-visual-last4
+  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
+  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en//checkpoint-30000
+  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh//checkpoint-24000
+  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed//checkpoint-90000
   peft.llm_lora_config.r=8
   prompt=fixed_prompt
-  datamodule=train_with_val_and_test
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-lora-r8
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
+  # datamodule=train_with_val_and_test
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-lora-r8-vlora-last4-qkv-r8
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh-cpt-lora-r8
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed-cpt-lora-r8
   engine.training_args.per_device_train_batch_size=4
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
@@ -89,7 +94,9 @@ CMD_ARGS=(
   engine.training_args.ddp_find_unused_parameters=False
   engine.llm_dtype=bfloat16
   engine.visual_backbone_dtype=auto
-  data=ph14t_*x224x224_qwen_multiling
+  # data=ph14t_*x224x224_qwen_multiling
+  data=ph14t_*x224x224_qwen_single_language
+  data.language=de
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2
