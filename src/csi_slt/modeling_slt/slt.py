@@ -17,7 +17,7 @@ from csi_slt.modeling_slt.info_utils import (
     InformationRequest,
     build_information_output,
 )
-from peft import get_peft_model, LoraConfig
+from peft import LoraConfig, get_peft_model, inject_adapter_in_model
 from ..configuration_slt.configuration import SltConfig
 from .output_utils import (
     PrepareForCausalLMOutput,
@@ -36,6 +36,14 @@ from .registry import (
 )
 
 logger = logging.get_logger(__name__)
+
+
+def _serialize_lora_config(config: LoraConfig) -> dict:
+    """Convert a PEFT config to values supported by JSON serialization."""
+    return {
+        key: list(value) if isinstance(value, set) else value
+        for key, value in config.to_dict().items()
+    }
 
 
 def get_llm_cls_by_model_name(model_name):
@@ -193,6 +201,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
             # outer SltModel.post_init() from replacing that initialization.
             mark_module_tree_as_initialized(self.llm)
 
+        if config.visual_lora:
+            if not config.visual_lora_config:
+                raise ValueError(
+                    "visual_lora_config must be provided when visual_lora is True."
+                )
+            self._inject_visual_lora(LoraConfig(**config.visual_lora_config))
+
         # Keep the existing attribute names for checkpoint compatibility.
         self.start_video_embds = nn.Parameter(
             torch.empty(
@@ -254,6 +269,41 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
 
         self.all_tied_weights_keys[f"{output_name}.weight"] = f"{input_name}.weight"
+
+    def _inject_visual_lora(self, peft_config: LoraConfig) -> None:
+        """Inject LoRA in-place without changing the visual encoder interface."""
+        visual_encoder = getattr(self.visual_backbone, "visual_encoder", None)
+        if visual_encoder is None:
+            raise TypeError(
+                f"{type(self.visual_backbone).__name__} does not expose "
+                "visual_encoder and cannot use visual LoRA"
+            )
+        inject_adapter_in_model(peft_config=peft_config, model=visual_encoder)
+        mark_module_tree_as_initialized(visual_encoder)
+
+    def inject_llm_lora(self, peft_config: LoraConfig) -> None:
+        """Inject a new LoRA adapter into the language model."""
+        if self.config.llm_lora:
+            raise ValueError(
+                "The checkpoint already contains LLM LoRA. "
+                "Use SltModel.from_pretrained() to load it."
+            )
+        self.llm = get_peft_model(self.llm, peft_config)
+        mark_module_tree_as_initialized(self.llm)
+        self.config.llm_lora = True
+        self.config.llm_lora_config = _serialize_lora_config(peft_config)
+        self._register_llm_tied_weights()
+
+    def inject_visual_lora(self, peft_config: LoraConfig) -> None:
+        """Inject a new LoRA adapter into the visual encoder in-place."""
+        if self.config.visual_lora:
+            raise ValueError(
+                "The checkpoint already contains visual LoRA. "
+                "Use SltModel.from_pretrained() to load it."
+            )
+        self._inject_visual_lora(peft_config)
+        self.config.visual_lora = True
+        self.config.visual_lora_config = _serialize_lora_config(peft_config)
 
     @classmethod
     def from_pretrained_components(
@@ -360,31 +410,33 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     @classmethod
     def from_pretrained_with_new_lora(
-        cls, peft_config: LoraConfig, checkpoint_dir: str, model_dtype="auto"
+        cls,
+        peft_config: LoraConfig | None = None,
+        checkpoint_dir: str | None = None,
+        model_dtype="auto",
+        *,
+        llm_lora_config: LoraConfig | None = None,
+        visual_lora_config: LoraConfig | None = None,
     ):
+        """Load an SLT checkpoint and inject new LLM and/or visual LoRA."""
+        if checkpoint_dir is None:
+            raise TypeError("checkpoint_dir must be provided")
+        if peft_config is not None and llm_lora_config is not None:
+            raise ValueError(
+                "Pass either the legacy peft_config argument or "
+                "llm_lora_config, not both"
+            )
+        if llm_lora_config is None:
+            llm_lora_config = peft_config
+        if llm_lora_config is None and visual_lora_config is None:
+            raise ValueError("At least one LoRA config must be provided")
+
         model: SltModel = cls.from_pretrained(checkpoint_dir, dtype=model_dtype)
 
-        for p in model.llm.parameters():
-            p.requires_grad = False
-
-        if model.config.llm_lora:
-            raise ValueError(
-                "The checkpoint already contains LoRA. "
-                "Use SltModel.from_pretrained() to load it."
-            )
-
-        model.llm = get_peft_model(model.llm, peft_config)
-        # The checkpoint weights were already loaded and PEFT initialized the
-        # newly injected LoRA modules; the complete wrapped LLM is now ready.
-        mark_module_tree_as_initialized(model.llm)
-
-        # setup config
-        model.config.llm_lora = True
-        model.config.llm_lora_config = {
-            key: list(value) if isinstance(value, set) else value
-            for key, value in peft_config.to_dict().items()
-        }
-        model._register_llm_tied_weights()
+        if llm_lora_config is not None:
+            model.inject_llm_lora(llm_lora_config)
+        if visual_lora_config is not None:
+            model.inject_visual_lora(visual_lora_config)
 
         return model
 

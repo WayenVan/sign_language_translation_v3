@@ -83,6 +83,18 @@ def test_frozen_encoder_stays_in_eval_while_fusion_trains():
     assert encoder.training is False
 
 
+def test_encoder_stays_in_train_mode_after_trainable_adapter_is_added():
+    encoder = _FakeEncoder()
+    backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=encoder)
+    encoder.radio_model.lora_adapter = nn.Linear(1, 1, bias=False)
+
+    backbone.train()
+
+    assert encoder.training is True
+    assert encoder.radio_model.weight.requires_grad is False
+    assert encoder.radio_model.lora_adapter.weight.requires_grad is True
+
+
 def test_single_output_layer_remains_supported():
     backbone = CRadioV4Backbone(
         {"id": "fake", "output_layer": -2}, c_radio_v4=_FakeEncoder()

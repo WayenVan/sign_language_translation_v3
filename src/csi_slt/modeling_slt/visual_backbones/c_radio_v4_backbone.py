@@ -128,9 +128,18 @@ class CRadioV4Backbone(nn.Module):
         mark_module_tree_as_initialized(self)
 
     def train(self, mode: bool = True):
-        """Train fusion modules while keeping a frozen encoder in eval mode."""
+        """Keep only a fully frozen visual encoder in eval mode.
+
+        Trainability may change after construction, notably when PEFT injects
+        visual LoRA parameters. Do not reapply the initial freeze policy here:
+        doing so would freeze those newly injected adapter parameters whenever
+        the Trainer calls ``model.train()``.
+        """
         super().train(mode)
-        self.apply_freeze_policy()
+        if mode and not any(
+            parameter.requires_grad for parameter in self.visual_encoder.parameters()
+        ):
+            self.visual_encoder.eval()
         return self
 
     def apply_freeze_policy(self) -> None:
