@@ -28,6 +28,115 @@ class _MeanReducedModelWithKwargs(nn.Module):
         return {"loss": self.weight * 0 + 8.0}
 
 
+class _ComponentLearningRateModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.llm = nn.Module()
+        self.llm.lora_A = nn.Linear(2, 2)
+        self.visual_backbone = nn.Module()
+        self.visual_backbone.lora_A = nn.Linear(2, 2)
+        self.visual_adapter = nn.Linear(2, 2)
+        self.config = SimpleNamespace()
+
+    def forward(self, **kwargs):
+        return {"loss": sum(parameter.sum() for parameter in self.parameters())}
+
+
+def test_optimizer_uses_separate_component_learning_rates(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+        learning_rate=1e-4,
+        llm_lora_learning_rate=2e-5,
+        visual_lora_learning_rate=3e-5,
+        visual_adapter_learning_rate=4e-5,
+        llm_lora_weight_decay=0.01,
+        visual_lora_weight_decay=0.02,
+        visual_adapter_weight_decay=0.03,
+        weight_decay=0.1,
+    )
+    trainer = SltTrainer(model=model, args=args)
+
+    optimizer = trainer.create_optimizer()
+    parameter_lrs = {
+        id(parameter): group["lr"]
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+    parameter_weight_decays = {
+        id(parameter): group["weight_decay"]
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    assert {
+        parameter_lrs[id(parameter)]
+        for parameter in model.llm.lora_A.parameters()
+    } == {2e-5}
+    assert {
+        parameter_lrs[id(parameter)]
+        for parameter in model.visual_backbone.lora_A.parameters()
+    } == {3e-5}
+    assert {
+        parameter_lrs[id(parameter)]
+        for parameter in model.visual_adapter.parameters()
+    } == {4e-5}
+    assert parameter_weight_decays[id(model.llm.lora_A.weight)] == 0.01
+    assert parameter_weight_decays[id(model.visual_backbone.lora_A.weight)] == 0.02
+    assert parameter_weight_decays[id(model.visual_adapter.weight)] == 0.03
+    assert parameter_weight_decays[id(model.llm.lora_A.bias)] == 0.0
+    assert parameter_weight_decays[id(model.visual_backbone.lora_A.bias)] == 0.0
+    assert parameter_weight_decays[id(model.visual_adapter.bias)] == 0.0
+
+
+def test_component_learning_rate_defaults_to_global_rate(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+        learning_rate=1e-4,
+        visual_adapter_learning_rate=4e-5,
+    )
+    trainer = SltTrainer(model=model, args=args)
+
+    optimizer = trainer.create_optimizer()
+    parameter_lrs = {
+        id(parameter): group["lr"]
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    assert parameter_lrs[id(model.llm.lora_A.weight)] == 1e-4
+    assert parameter_lrs[id(model.visual_backbone.lora_A.weight)] == 1e-4
+    assert parameter_lrs[id(model.visual_adapter.weight)] == 4e-5
+
+
+def test_component_weight_decay_defaults_to_global_value(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+        weight_decay=0.1,
+        visual_adapter_weight_decay=0.0,
+    )
+    trainer = SltTrainer(model=model, args=args)
+
+    optimizer = trainer.create_optimizer()
+    parameter_weight_decays = {
+        id(parameter): group["weight_decay"]
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    assert parameter_weight_decays[id(model.llm.lora_A.weight)] == 0.1
+    assert parameter_weight_decays[id(model.visual_backbone.lora_A.weight)] == 0.1
+    assert parameter_weight_decays[id(model.visual_adapter.weight)] == 0.0
+
+
 def test_trainer_does_not_claim_model_handles_num_items_in_batch(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),

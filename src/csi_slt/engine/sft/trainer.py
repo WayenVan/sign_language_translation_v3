@@ -86,6 +86,17 @@ def apply_fsdp2_autocast(accelerator, model: nn.Module) -> None:
 
 
 class SltTrainer(Seq2SeqTrainer):
+    _COMPONENT_LR_ARGUMENTS = {
+        "llm_lora": "llm_lora_learning_rate",
+        "visual_lora": "visual_lora_learning_rate",
+        "visual_adapter": "visual_adapter_learning_rate",
+    }
+    _COMPONENT_WEIGHT_DECAY_ARGUMENTS = {
+        "llm_lora": "llm_lora_weight_decay",
+        "visual_lora": "visual_lora_weight_decay",
+        "visual_adapter": "visual_adapter_weight_decay",
+    }
+
     def __init__(
         self,
         hydra_config=None,
@@ -193,6 +204,85 @@ class SltTrainer(Seq2SeqTrainer):
         self.hydra_config = hydra_config
         self._is_predicting = False
         self._is_train_probe = False
+
+    def create_optimizer(self, model=None) -> torch.optim.Optimizer:
+        """Create weight-decay groups with optional per-component PEFT LRs."""
+        component_lrs = {
+            component: getattr(self.args, argument, None)
+            for component, argument in self._COMPONENT_LR_ARGUMENTS.items()
+        }
+        component_weight_decays = {
+            component: getattr(self.args, argument, None)
+            for component, argument in self._COMPONENT_WEIGHT_DECAY_ARGUMENTS.items()
+        }
+        if not any(
+            value is not None
+            for value in (*component_lrs.values(), *component_weight_decays.values())
+        ):
+            return super().create_optimizer(model=model)
+        if self.optimizer is not None:
+            return self.optimizer
+
+        opt_model = self.model if model is None else model
+        unwrapped_model = self.accelerator.unwrap_model(opt_model)
+        component_parameter_ids = {
+            "llm_lora": {
+                id(parameter)
+                for name, parameter in unwrapped_model.llm.named_parameters()
+                if "lora_" in name
+            },
+            "visual_lora": {
+                id(parameter)
+                for name, parameter in unwrapped_model.visual_backbone.named_parameters()
+                if "lora_" in name
+            },
+            "visual_adapter": {
+                id(parameter)
+                for parameter in unwrapped_model.visual_adapter.parameters()
+            },
+        }
+        decay_parameters = self.get_decay_parameter_names(opt_model)
+        grouped_parameters: dict[tuple[str, bool], list[nn.Parameter]] = {}
+        for name, parameter in opt_model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            component = next(
+                (
+                    key
+                    for key, parameter_ids in component_parameter_ids.items()
+                    if id(parameter) in parameter_ids
+                ),
+                "default",
+            )
+            grouped_parameters.setdefault(
+                (component, name in decay_parameters), []
+            ).append(parameter)
+
+        optimizer_grouped_parameters = []
+        for (component, use_decay), parameters in grouped_parameters.items():
+            component_weight_decay = component_weight_decays.get(component)
+            group = {
+                "params": parameters,
+                "weight_decay": (
+                    (
+                        self.args.weight_decay
+                        if component_weight_decay is None
+                        else component_weight_decay
+                    )
+                    if use_decay
+                    else 0.0
+                ),
+            }
+            component_lr = component_lrs.get(component)
+            if component_lr is not None:
+                group["lr"] = component_lr
+            optimizer_grouped_parameters.append(group)
+
+        optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(
+            self.args, opt_model
+        )
+        self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+        return self.optimizer
 
     def _prepare_for_training(self, *args, **kwargs):
         """Prepare as usual, then restore autocast on the FSDP2 path."""
