@@ -147,9 +147,9 @@ def main(cfg: DictConfig):
         hydra_config=cfg,
         processing_class=datamodule.processor,
         train_dataset=datamodule.train_dataset,
-        eval_dataset=datamodule.val_dataset,
+        eval_dataset=datamodule.test_dataset,
         train_data_collator=datamodule.train_collator,
-        eval_data_collator=datamodule.val_collator,
+        eval_data_collator=datamodule.test_collator,
         compute_metrics=metrics,
         train_probe_compute_metrics=train_probe_metrics,
     )
