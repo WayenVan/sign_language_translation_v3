@@ -1,0 +1,29 @@
+type: lora
+
+# C-RADIO v4 SO400M has 27 ViT blocks (0-26). Apply visual LoRA to the latter
+# half: the final fourteen blocks. Keep the Qwen LLM and visual adapter frozen.
+unfreeze_adapter: false
+
+visual_lora_config:
+  r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  bias: "none"
+  target_modules:
+    - "qkv"
+  layers_pattern: "blocks"
+  layers_to_transform:
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
+    - 18
+    - 19
+    - 20
+    - 21
+    - 22
+    - 23
+    - 24
+    - 25
+    - 26
