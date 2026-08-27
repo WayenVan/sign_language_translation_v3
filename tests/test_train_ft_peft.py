@@ -30,8 +30,24 @@ def test_freeze_except_lora_adapters_only_keeps_lora_trainable():
 
 
 def test_freeze_except_lora_adapters_rejects_model_without_lora():
-    with pytest.raises(ValueError, match="No LoRA adapter parameters"):
+    with pytest.raises(ValueError, match="No LoRA parameters"):
         freeze_except_lora_adapters(nn.Linear(3, 4))
+
+
+def test_freeze_except_lora_adapters_supports_adapter_only_training():
+    model = _ModelWithLoRA()
+    del model.lora_A
+    del model.lora_B
+
+    trainable_count = freeze_except_lora_adapters(
+        model,
+        unfreeze_visual_adapter=True,
+    )
+
+    assert trainable_count == sum(
+        parameter.numel() for parameter in model.visual_adapter.parameters()
+    )
+    assert all(parameter.requires_grad for parameter in model.visual_adapter.parameters())
 
 
 def test_cast_module_dtype_casts_floating_parameters():

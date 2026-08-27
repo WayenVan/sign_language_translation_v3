@@ -55,9 +55,6 @@ def freeze_except_lora_adapters(
         if is_lora_parameter:
             trainable_parameter_count += parameter.numel()
 
-    if trainable_parameter_count == 0:
-        raise ValueError("No LoRA adapter parameters were found in the model")
-
     if unfreeze_visual_adapter:
         visual_adapter = getattr(model, "visual_adapter", None)
         if visual_adapter is None:
@@ -67,6 +64,11 @@ def freeze_except_lora_adapters(
         for parameter in visual_adapter.parameters():
             parameter.requires_grad_(True)
             trainable_parameter_count += parameter.numel()
+
+    if trainable_parameter_count == 0:
+        raise ValueError(
+            "No LoRA parameters were found and the visual adapter is frozen"
+        )
 
     return trainable_parameter_count
 
@@ -90,16 +92,17 @@ def main(cfg: DictConfig):
     visual_lora_config = None
     visual_lora_config_node = cfg.peft.get("visual_lora_config")
     if visual_lora_config_node is not None:
-        visual_lora_args = OmegaConf.to_container(
-            visual_lora_config_node, resolve=True
-        )
+        visual_lora_args = OmegaConf.to_container(visual_lora_config_node, resolve=True)
         visual_lora_config = LoraConfig(**visual_lora_args)
 
-    slt_model = SltModel.from_pretrained_with_new_lora(
-        checkpoint_dir=cfg.model.checkpoint_dir,
-        llm_lora_config=llm_lora_config,
-        visual_lora_config=visual_lora_config,
-    )
+    if llm_lora_config is None and visual_lora_config is None:
+        slt_model = SltModel.from_pretrained(cfg.model.checkpoint_dir)
+    else:
+        slt_model = SltModel.from_pretrained_with_new_lora(
+            checkpoint_dir=cfg.model.checkpoint_dir,
+            llm_lora_config=llm_lora_config,
+            visual_lora_config=visual_lora_config,
+        )
     cast_module_dtype(slt_model.llm, cfg.engine.llm_dtype)
     cast_module_dtype(slt_model.visual_backbone, cfg.engine.visual_backbone_dtype)
     freeze_except_lora_adapters(
