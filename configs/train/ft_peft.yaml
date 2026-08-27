@@ -20,4 +20,4 @@ engine:
     warmup_steps: 0.03
     weight_decay: 0.01
     eval_strategy: steps
-    eval_steps: 0.033
+    eval_steps: 0.04
