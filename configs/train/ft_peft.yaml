@@ -15,11 +15,9 @@ model:
 engine:
   training_args:
     output_dir: outputs/ft_peft
-    num_train_epochs: 15
+    num_train_epochs: 25
     learning_rate: 5e-5
     warmup_steps: 0.03
     weight_decay: 0.01
     eval_strategy: steps
-    eval_steps: 0.1
-    save_strategy: steps
-    save_steps: 0.1
+    eval_steps: 0.033

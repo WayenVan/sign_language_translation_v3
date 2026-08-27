@@ -39,6 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
+  export WANDB_TAGS=visual-llm-lora-ablation
   REPORT_TO=wandb
 fi
 
@@ -72,22 +73,26 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train_ft_peft
   --config-name train/ft_peft
-  peft=qwen3-1.7b-cradio-v4-so400m-llm-last4-visual-last4
+  # peft=qwen3-1.7b-cradio-v4-so400m-visual-last8
+  peft=qwen3-1.7b-cradio-v4-so400m-visual-last-half
   model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en//checkpoint-30000
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh//checkpoint-24000
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed//checkpoint-90000
-  peft.llm_lora_config.r=8
+  peft.visual_lora_config.r=8
+  peft.unfreeze_adapter=false
   prompt=fixed_prompt
   # datamodule=train_with_val_and_test
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-lora-r8-vlora-last4-qkv-r8
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-frozen
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last-half-qkv-r8-adapter-frozen
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh-cpt-lora-r8
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed-cpt-lora-r8
-  engine.training_args.per_device_train_batch_size=4
+  engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
   engine.training_args.dataloader_persistent_workers=False
+  engine.training_args.learning_rate=2e-4
   engine.training_args.logging_steps=15
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
