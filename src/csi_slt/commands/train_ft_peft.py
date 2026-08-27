@@ -39,36 +39,58 @@ def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None
     module.to(dtype=dtype)
 
 
-def freeze_except_lora_adapters(
+def apply_peft_trainability(
     model: SltModel,
     *,
-    unfreeze_visual_adapter: bool = False,
+    train_llm_lora: bool,
+    train_visual_lora: bool,
+    train_visual_adapter: bool,
 ) -> int:
-    """Freeze the SLT model except LoRA and, optionally, the visual adapter."""
-    if not isinstance(unfreeze_visual_adapter, bool):
-        raise TypeError("unfreeze_visual_adapter must be a boolean")
+    """Freeze the model, then enable the explicitly selected PEFT components."""
+    flags = {
+        "train_llm_lora": train_llm_lora,
+        "train_visual_lora": train_visual_lora,
+        "train_visual_adapter": train_visual_adapter,
+    }
+    for name, enabled in flags.items():
+        if not isinstance(enabled, bool):
+            raise TypeError(f"{name} must be a boolean")
+
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
 
     trainable_parameter_count = 0
-    for name, parameter in model.named_parameters():
-        is_lora_parameter = "lora_" in name
-        parameter.requires_grad_(is_lora_parameter)
-        if is_lora_parameter:
-            trainable_parameter_count += parameter.numel()
-
-    if unfreeze_visual_adapter:
-        visual_adapter = getattr(model, "visual_adapter", None)
-        if visual_adapter is None:
+    for component_name, module, enabled in (
+        ("LLM", model.llm, train_llm_lora),
+        ("visual", model.visual_backbone, train_visual_lora),
+    ):
+        lora_parameters = [
+            parameter
+            for name, parameter in module.named_parameters()
+            if "lora_" in name
+        ]
+        if enabled and not lora_parameters:
             raise ValueError(
-                "unfreeze_visual_adapter=True requires model.visual_adapter"
+                f"{component_name} LoRA training was requested, but the model "
+                "contains no matching LoRA parameters"
             )
-        for parameter in visual_adapter.parameters():
+        if enabled:
+            for parameter in lora_parameters:
+                parameter.requires_grad_(True)
+                trainable_parameter_count += parameter.numel()
+
+    if train_visual_adapter:
+        if model.visual_adapter is None:
+            raise ValueError(
+                "visual adapter training was requested, but the model has no "
+                "visual adapter"
+            )
+        for parameter in model.visual_adapter.parameters():
             parameter.requires_grad_(True)
             trainable_parameter_count += parameter.numel()
 
     if trainable_parameter_count == 0:
-        raise ValueError(
-            "No LoRA parameters were found and the visual adapter is frozen"
-        )
+        raise ValueError("The trainability policy selected no trainable parameters")
 
     return trainable_parameter_count
 
@@ -105,9 +127,12 @@ def main(cfg: DictConfig):
         )
     cast_module_dtype(slt_model.llm, cfg.engine.llm_dtype)
     cast_module_dtype(slt_model.visual_backbone, cfg.engine.visual_backbone_dtype)
-    freeze_except_lora_adapters(
+    trainability = cfg.peft.trainability
+    apply_peft_trainability(
         slt_model,
-        unfreeze_visual_adapter=cfg.peft.unfreeze_adapter,
+        train_llm_lora=trainability.llm_lora,
+        train_visual_lora=trainability.visual_lora,
+        train_visual_adapter=trainability.visual_adapter,
     )
 
     # create datamodule

@@ -1,6 +1,9 @@
 type: lora
 
-unfreeze_adapter: true
+trainability:
+  llm_lora: true
+  visual_lora: false
+  visual_adapter: true
 
 llm_lora_config:
   r: 8

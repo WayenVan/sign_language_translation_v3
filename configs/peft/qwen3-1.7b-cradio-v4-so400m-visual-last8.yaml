@@ -2,7 +2,10 @@ type: lora
 
 # Apply visual LoRA to the final eight C-RADIO ViT blocks only. Keep the Qwen
 # LLM and the multimodal visual adapter frozen.
-unfreeze_adapter: false
+trainability:
+  llm_lora: false
+  visual_lora: true
+  visual_adapter: false
 
 visual_lora_config:
   r: 8

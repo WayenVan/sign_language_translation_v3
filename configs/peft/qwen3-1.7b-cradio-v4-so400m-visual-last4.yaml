@@ -2,7 +2,10 @@ type: lora
 
 # Keep the multimodal projection adapter trainable while applying LoRA only to
 # the final four C-RADIO ViT blocks. The Qwen LLM remains fully frozen.
-unfreeze_adapter: true
+trainability:
+  llm_lora: false
+  visual_lora: true
+  visual_adapter: true
 
 visual_lora_config:
   r: 8

@@ -1,1 +1,6 @@
 type: none
+
+trainability:
+  llm_lora: false
+  visual_lora: false
+  visual_adapter: false
