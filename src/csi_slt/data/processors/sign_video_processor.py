@@ -20,6 +20,8 @@ class SignVideoKwargs(VideosKwargs, total=False):
     training: bool
     do_random_speed: bool
     random_speed_range: tuple[float, float]
+    do_random_erasing: bool
+    do_random_gaussian_blur: bool
 
 
 class SignVideoProcessor(BaseVideoProcessor):
@@ -36,6 +38,8 @@ class SignVideoProcessor(BaseVideoProcessor):
     do_resize = False
     do_random_speed = True  # random speed augmentation
     random_speed_range = (0.8, 1.25)
+    do_random_erasing = True
+    do_random_gaussian_blur = False
     input_data_format = "channels_last"
     size = {"height": 224, "width": 224}
 
@@ -50,7 +54,12 @@ class SignVideoProcessor(BaseVideoProcessor):
             RandomVideoSpeed(speed_range=kwargs["random_speed_range"])
             if kwargs["do_random_speed"]
             else v2.Identity(),
-            v2.RandomCrop((kwargs["crop_size"].height, kwargs["crop_size"].width)),
+            v2.RandomResizedCrop(
+                (kwargs["crop_size"].height, kwargs["crop_size"].width),
+                scale=(0.8, 1.0),
+                ratio=(0.95, 1.05),
+                antialias=True,
+            ),
             v2.RandomHorizontalFlip(p=0.5),
             v2.Resize((kwargs["size"].height, kwargs["size"].width))
             if kwargs["do_resize"]
@@ -66,7 +75,21 @@ class SignVideoProcessor(BaseVideoProcessor):
                 ],
                 p=0.75,
             ),
+            v2.RandomApply(
+                [v2.GaussianBlur(kernel_size=3, sigma=(0.1, 0.8))],
+                p=0.1,
+            )
+            if kwargs["do_random_gaussian_blur"]
+            else v2.Identity(),
             v2.ToDtype(torch.float32, scale=True),
+            v2.RandomErasing(
+                p=0.1,
+                scale=(0.02, 0.06),
+                ratio=(0.5, 2.0),
+                value=0,
+            )
+            if kwargs["do_random_erasing"]
+            else v2.Identity(),
             v2.Normalize(kwargs["image_mean"], kwargs["image_std"])
             if kwargs["do_normalize"]
             else v2.Identity(),
