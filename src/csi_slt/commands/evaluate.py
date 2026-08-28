@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import hydra
-import numpy as np
 from accelerate import Accelerator
 from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer, set_seed
@@ -19,25 +17,6 @@ from csi_slt.utils.generation_config import merge_generation_config
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
-
-
-def save_prediction_arrays(trainer: SltTrainer, prediction_output) -> None:
-    """Save gathered prediction and reference arrays on the main process."""
-    if not trainer.is_world_process_zero():
-        return
-
-    prediction_ids, sequence_lengths, prompt_lengths = prediction_output.predictions
-    label_ids, language_ids = prediction_output.label_ids
-    output_path = Path(trainer.args.output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output_path / "predictions.npz",
-        prediction_ids=prediction_ids,
-        sequence_lengths=sequence_lengths,
-        prompt_lengths=prompt_lengths,
-        label_ids=label_ids,
-        language_ids=language_ids,
-    )
 
 
 def prepare_model_for_fsdp2(trainer: SltTrainer) -> None:
@@ -128,7 +107,7 @@ def main(cfg: DictConfig) -> None:
     )
     trainer.log_metrics("test", predictions.metrics)
     trainer.save_metrics("test", predictions.metrics)
-    save_prediction_arrays(trainer, predictions)
+    trainer.save_predictions(predictions)
 
 
 if __name__ == "__main__":
