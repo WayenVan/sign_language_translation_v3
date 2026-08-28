@@ -39,6 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
+  export WANDB_TAGS=lite-with-lora-experiment
   REPORT_TO=wandb
 fi
 
@@ -74,9 +75,10 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle
-  prompt=diverse_train
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-diverse
+  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-lite
+  # prompt=diverse_train
+  prompt=fixed_prompt
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
@@ -94,9 +96,7 @@ CMD_ARGS=(
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
-  engine.training_args.dataloader_persistent_workers=False
   engine.training_args.eval_steps=6000
-  engine.training_args.save_steps=6000
   engine.training_args.logging_steps=15
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
@@ -117,7 +117,7 @@ accelerate launch "${CMD_ARGS[@]}"
 
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
-# engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train_ft_peft \
+# engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train \
 # engine.training_args.dataloader_num_workers=10 # accelerate launch --num_processes=2 --mixed_precision=bf16 \
 # model.config.visual_adapter_kwargs.num_layers=4 \
 # model.config.video_token_scale=0.25 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \

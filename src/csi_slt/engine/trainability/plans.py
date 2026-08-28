@@ -6,12 +6,15 @@ belong to trainability policies and model runtime state.
 """
 
 from dataclasses import dataclass, field
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 
 ComponentTrainabilityMode = Literal["frozen", "full"]
 LlmTrainabilityMode = Literal["frozen", "full", "lora"]
-VisualBackboneTrainabilityMode = Literal["frozen", "last_n_layers", "full"]
+VisualBackboneTrainabilityMode = Literal[
+    "frozen", "last_n_layers", "full", "lora"
+]
 
 
 @dataclass(frozen=True)
@@ -46,7 +49,7 @@ class VisualBackboneTrainabilityPlan:
     train_auxiliary_modules: bool = True
 
     def __post_init__(self) -> None:
-        if self.mode not in ("frozen", "last_n_layers", "full"):
+        if self.mode not in ("frozen", "last_n_layers", "full", "lora"):
             raise ValueError(
                 f"Unsupported visual backbone trainability mode: {self.mode!r}"
             )
@@ -86,3 +89,71 @@ class SltTrainabilityPlan:
     visual_semantic_encoder: ComponentTrainabilityPlan = field(
         default_factory=ComponentTrainabilityPlan
     )
+    ctc_head: ComponentTrainabilityPlan = field(
+        default_factory=ComponentTrainabilityPlan
+    )
+    visual_position_embedding: ComponentTrainabilityPlan = field(
+        default_factory=ComponentTrainabilityPlan
+    )
+    visual_boundary_embeddings: ComponentTrainabilityPlan = field(
+        default_factory=ComponentTrainabilityPlan
+    )
+    visual_scale: ComponentTrainabilityPlan = field(
+        default_factory=ComponentTrainabilityPlan
+    )
+
+    @classmethod
+    def from_mapping(cls, config: Mapping[str, Any]) -> "SltTrainabilityPlan":
+        """Build a complete plan from the colocated Hydra config."""
+        if not isinstance(config, Mapping):
+            raise TypeError("engine.trainability must be a mapping")
+
+        expected = {
+            "llm",
+            "visual_backbone",
+            "visual_adapter",
+            "visual_semantic_encoder",
+            "ctc_head",
+            "visual_position_embedding",
+            "visual_boundary_embeddings",
+            "visual_scale",
+        }
+        missing = expected.difference(config)
+        unknown = set(config).difference(expected)
+        if missing:
+            raise ValueError(
+                "engine.trainability is missing components: "
+                + ", ".join(sorted(missing))
+            )
+        if unknown:
+            raise ValueError(
+                "engine.trainability contains unknown components: "
+                + ", ".join(sorted(unknown))
+            )
+
+        def values(name: str) -> dict[str, Any]:
+            value = config[name]
+            if not isinstance(value, Mapping):
+                raise TypeError(f"engine.trainability.{name} must be a mapping")
+            return dict(value)
+
+        return cls(
+            llm=LlmTrainabilityPlan(**values("llm")),
+            visual_backbone=VisualBackboneTrainabilityPlan(
+                **values("visual_backbone")
+            ),
+            visual_adapter=ComponentTrainabilityPlan(
+                **values("visual_adapter")
+            ),
+            visual_semantic_encoder=ComponentTrainabilityPlan(
+                **values("visual_semantic_encoder")
+            ),
+            ctc_head=ComponentTrainabilityPlan(**values("ctc_head")),
+            visual_position_embedding=ComponentTrainabilityPlan(
+                **values("visual_position_embedding")
+            ),
+            visual_boundary_embeddings=ComponentTrainabilityPlan(
+                **values("visual_boundary_embeddings")
+            ),
+            visual_scale=ComponentTrainabilityPlan(**values("visual_scale")),
+        )

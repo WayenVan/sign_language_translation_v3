@@ -1,21 +1,24 @@
-from accelerate import Accelerator
-import hydra
+"""Unified SLT training entrypoint for full, connector, and PEFT training."""
 
-from omegaconf import DictConfig, OmegaConf
 import os
-from ..engine.sft.trainer import SltTrainer
-from ..engine.sft.training_args import SltTrainingArguments
-from ..data.datamodule import DataModule
-from transformers import set_seed
-from transformers import AutoTokenizer
-from ..modeling_slt.slt import SltConfig, SltModel
-from ..utils.generation_config import merge_generation_config
-from csi_slt.engine.sft.metrics import SLTMetric
-from csi_slt.engine.sft.priodic_metrics import XCometLiteMetric
-from huggingface_hub import login
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 
-login(token=os.getenv("HF_TOKEN"))
+import hydra
+import torch
+from omegaconf import DictConfig, OmegaConf
+from peft import LoraConfig, TaskType
+from transformers import AutoTokenizer, set_seed
+
+from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.data.datamodule import DataModule
+from csi_slt.engine.sft.metrics import SLTMetric
+from csi_slt.engine.sft.trainer import SltTrainer
+from csi_slt.engine.sft.training_args import SltTrainingArguments
+from csi_slt.engine.trainability import (
+    SltTrainabilityPlan,
+    apply_trainability_plan,
+)
+from csi_slt.modeling_slt.slt import SltConfig, SltModel
+from csi_slt.utils.generation_config import merge_generation_config
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
@@ -23,48 +26,104 @@ DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))
 set_seed(42)
 
 
-@hydra.main(
-    version_base=None, config_path=DEFAULT_CONFIG_PATH, config_name="train/base"
-)
-def main(cfg: DictConfig):
-    # accelerate initialize
-    acc = Accelerator()
+def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None:
+    """Cast one loaded checkpoint component, treating ``auto`` as no-op."""
+    if dtype == "auto":
+        return
+    if isinstance(dtype, str):
+        resolved_dtype = getattr(torch, dtype, None)
+        if not isinstance(resolved_dtype, torch.dtype):
+            raise ValueError(f"Unsupported dtype: {dtype!r}")
+        dtype = resolved_dtype
+    if not isinstance(dtype, torch.dtype):
+        raise TypeError("dtype must be a torch.dtype or dtype name")
+    if not (dtype.is_floating_point or dtype.is_complex):
+        raise ValueError(f"dtype must be floating point or complex, got {dtype}")
+    module.to(dtype=dtype)
 
-    # create model
-    slt_config = SltConfig(**OmegaConf.to_container(cfg.model.config, resolve=True))
 
-    if cfg.peft.type == "lora":
-        from peft import LoraConfig, TaskType
+def initialize_model(
+    model_cfg: DictConfig,
+    *,
+    llm_lora_config: LoraConfig | None,
+    visual_lora_config: LoraConfig | None,
+    llm_dtype: str | torch.dtype,
+    visual_backbone_dtype: str | torch.dtype,
+) -> tuple[SltModel, str]:
+    """Create an SLT model from a checkpoint or pretrained components."""
+    load_from_checkpoint = model_cfg.get("load_from_checkpoint", False)
+    if not isinstance(load_from_checkpoint, bool):
+        raise TypeError("model.load_from_checkpoint must be a boolean")
 
-        lora_args = OmegaConf.to_container(cfg.peft.llm_lora_config, resolve=True)
-        peft_config = LoraConfig(
-            **lora_args,
+    if load_from_checkpoint:
+        checkpoint_dir = model_cfg.get("checkpoint_dir")
+        if not checkpoint_dir:
+            raise ValueError(
+                "model.checkpoint_dir is required when model.load_from_checkpoint=true"
+            )
+        model = SltModel.from_pretrained(checkpoint_dir)
+        tokenizer_source = str(checkpoint_dir)
+    else:
+        config_node = model_cfg.get("config")
+        if config_node is None:
+            raise ValueError(
+                "model.config is required when model.load_from_checkpoint=false"
+            )
+        slt_config = SltConfig(**OmegaConf.to_container(config_node, resolve=True))
+        model = SltModel.from_pretrained_components(
+            config=slt_config,
+            llm_dtype=llm_dtype,
+            visual_backbone_dtype=visual_backbone_dtype,
+        )
+        tokenizer_source = str(slt_config.llm_model_name_or_path)
+
+    if llm_lora_config is not None:
+        model.inject_llm_lora(llm_lora_config)
+    if visual_lora_config is not None:
+        model.inject_visual_lora(visual_lora_config)
+
+    return model, tokenizer_source
+
+
+def build_lora_configs(
+    peft_cfg: DictConfig,
+) -> tuple[LoraConfig | None, LoraConfig | None]:
+    """Create optional language and visual LoRA configs."""
+    llm_lora_config = None
+    if (node := peft_cfg.get("llm_lora_config")) is not None:
+        llm_lora_config = LoraConfig(
+            **OmegaConf.to_container(node, resolve=True),
             task_type=TaskType.CAUSAL_LM,
         )
-        slt_model = SltModel.from_pretrained_components_with_lora(
-            slt_config,
-            peft_config,
-            cfg.engine.llm_dtype,
-            cfg.engine.visual_backbone_dtype,
-        )
-    elif cfg.peft.type == "none":
-        slt_model = SltModel.from_pretrained_components(
-            slt_config, cfg.engine.llm_dtype, cfg.engine.visual_backbone_dtype
-        )
-    else:
-        raise ValueError(f"Unknown peft type: {cfg.peft.type}")
 
-    # fix parameters
-    # for param in slt_model.llm.parameters():
-    #     param.requires_grad = False
+    visual_lora_config = None
+    if (node := peft_cfg.get("visual_lora_config")) is not None:
+        visual_lora_config = LoraConfig(**OmegaConf.to_container(node, resolve=True))
+    return llm_lora_config, visual_lora_config
 
-    # for param in slt_model.visual_backbone.backbone.parameters():
-    #     param.requires_grad = False
 
-    # create datamodule
-    llm_name = cfg.model.config.llm_model_name_or_path
-    tokenizer = AutoTokenizer.from_pretrained(llm_name)
+@hydra.main(
+    version_base=None,
+    config_path=DEFAULT_CONFIG_PATH,
+    config_name="train/base",
+)
+def main(cfg: DictConfig) -> None:
+    llm_lora_config, visual_lora_config = build_lora_configs(cfg.peft)
+    slt_model, tokenizer_source = initialize_model(
+        cfg.model,
+        llm_lora_config=llm_lora_config,
+        visual_lora_config=visual_lora_config,
+        llm_dtype=cfg.engine.llm_dtype,
+        visual_backbone_dtype=cfg.engine.visual_backbone_dtype,
+    )
+    cast_module_dtype(slt_model.llm, cfg.engine.llm_dtype)
+    cast_module_dtype(slt_model.visual_backbone, cfg.engine.visual_backbone_dtype)
+    apply_trainability_plan(
+        slt_model,
+        SltTrainabilityPlan.from_mapping(cfg.engine.trainability),
+    )
 
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
     datamodule = DataModule(
         cfg.data,
         cfg.datamodule,
@@ -75,12 +134,9 @@ def main(cfg: DictConfig):
     )
     datamodule.setup()
 
-    # generation config
-    #
     generation_config_args = OmegaConf.to_container(
         cfg.engine.generation_config, resolve=True
     )
-    # create trainer
     training_args = SltTrainingArguments(
         generation_config=merge_generation_config(
             slt_model.generation_config,
@@ -88,21 +144,12 @@ def main(cfg: DictConfig):
         ),
         **cfg.engine.training_args,
     )
-    metrics = SLTMetric(
-        processor=datamodule.processor,
-        priodic_metrics=[
-            XCometLiteMetric(
-                accelerator=acc,
-                every_n_evaluations=cfg.engine.metrics.xcomet_every_n_evaluations,
-            )
-        ],
-    )
+    metrics = SLTMetric(processor=datamodule.processor)
     train_probe_metrics = None
     train_probe_interval = OmegaConf.select(
         cfg, "engine.train_probe.every_n_evaluations", default=-1
     )
     if train_probe_interval != -1:
-        # Probe calls must not advance the state of the normal evaluation metric.
         train_probe_metrics = SLTMetric(processor=datamodule.processor)
 
     trainer = SltTrainer(
@@ -118,9 +165,10 @@ def main(cfg: DictConfig):
         train_probe_compute_metrics=train_probe_metrics,
     )
 
+    if OmegaConf.select(cfg, "engine.evaluate_before_training", default=False):
+        trainer.evaluate()
     if training_args.do_train:
         trainer.train()
-
     if training_args.do_predict:
         predictions = trainer.predict(
             test_dataset=datamodule.test_dataset,

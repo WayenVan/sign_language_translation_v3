@@ -1,8 +1,0 @@
-type: adapter_only
-
-# Do not inject LoRA into either the Qwen LLM or the C-RADIO visual encoder.
-# Train only the multimodal visual adapter already stored in the checkpoint.
-trainability:
-  llm_lora: false
-  visual_lora: false
-  visual_adapter: true

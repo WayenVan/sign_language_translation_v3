@@ -72,24 +72,19 @@ def _set_grpo_trainable_parameters(model: SltModel) -> None:
 def _load_policy(cfg: DictConfig) -> SltModel:
     """Load an SFT checkpoint, optionally adding a fresh LoRA policy adapter."""
     checkpoint_dir = str(cfg.model.checkpoint_dir)
+    model = SltModel.from_pretrained(
+        checkpoint_dir,
+        dtype=cfg.engine.model_dtype,
+        trust_remote_code=True,
+    )
     if cfg.peft.type == "lora":
         lora_args = OmegaConf.to_container(cfg.peft.lora_config, resolve=True)
         peft_config = LoraConfig(
             **lora_args,
             task_type=TaskType.CAUSAL_LM,
         )
-        model = SltModel.from_pretrained_with_new_lora(
-            peft_config,
-            checkpoint_dir,
-            model_dtype=cfg.engine.model_dtype,
-        )
-    elif cfg.peft.type == "none":
-        model = SltModel.from_pretrained(
-            checkpoint_dir,
-            dtype=cfg.engine.model_dtype,
-            trust_remote_code=True,
-        )
-    else:
+        model.inject_llm_lora(peft_config)
+    elif cfg.peft.type != "none":
         raise ValueError(f"Unknown peft type: {cfg.peft.type}")
 
     _set_grpo_trainable_parameters(model)

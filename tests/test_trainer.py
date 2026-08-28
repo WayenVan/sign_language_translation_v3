@@ -6,7 +6,6 @@ from omegaconf import OmegaConf
 from transformers import GenerationConfig, Seq2SeqTrainingArguments
 
 from csi_slt.engine.sft.callbacks import (
-    DSIDWeightSchedulerCallback,
     EvalInformationVisualizationCallback,
     TrainSubsetMetricsCallback,
 )
@@ -137,6 +136,27 @@ def test_component_weight_decay_defaults_to_global_value(tmp_path):
     assert parameter_weight_decays[id(model.visual_adapter.weight)] == 0.0
 
 
+def test_training_log_includes_each_trainable_component_learning_rate(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+        llm_lora_learning_rate=2e-5,
+        visual_lora_learning_rate=3e-5,
+        visual_adapter_learning_rate=4e-5,
+    )
+    trainer = SltTrainer(model=model, args=args)
+    trainer.create_optimizer()
+
+    trainer.log({"loss": 1.0, "learning_rate": 2e-5})
+
+    logged = trainer.state.log_history[-1]
+    assert logged["learning_rate/llm_lora"] == 2e-5
+    assert logged["learning_rate/visual_lora"] == 3e-5
+    assert logged["learning_rate/visual_adapter"] == 4e-5
+
+
 def test_trainer_does_not_claim_model_handles_num_items_in_batch(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),
@@ -180,29 +200,6 @@ def test_train_probe_test_dataloader_disables_persistent_workers(tmp_path, monke
 
     assert captured["persistent_workers"] is False
     assert trainer.args.dataloader_persistent_workers is True
-
-
-def test_trainer_builds_dsid_scheduler_callback_from_engine_config(tmp_path):
-    args = Seq2SeqTrainingArguments(
-        output_dir=str(tmp_path),
-        report_to="none",
-    )
-    hydra_config = OmegaConf.create(
-        {"engine": {"dsid_scheduler": {"warmup_ratio": 0.2, "decay_ratio": 0.4}}}
-    )
-    trainer = SltTrainer(
-        model=_MeanReducedModelWithKwargs(),
-        args=args,
-        hydra_config=hydra_config,
-    )
-
-    callback = next(
-        callback
-        for callback in trainer.callback_handler.callbacks
-        if isinstance(callback, DSIDWeightSchedulerCallback)
-    )
-    assert callback.warmup_ratio == 0.2
-    assert callback.decay_ratio == 0.4
 
 
 def test_trainer_builds_eval_information_callback_from_engine_config(tmp_path):

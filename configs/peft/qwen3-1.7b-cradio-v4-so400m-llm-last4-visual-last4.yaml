@@ -1,9 +1,7 @@
 type: lora
 
-trainability:
-  llm_lora: true
-  visual_lora: true
-  visual_adapter: true
+# Pair with engine.trainability: llm=lora, visual_backbone=lora,
+# visual_adapter=full, everything else frozen.
 
 llm_lora_config:
   r: 8

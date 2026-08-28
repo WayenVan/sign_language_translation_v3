@@ -24,6 +24,7 @@ class TemporalShuffleAdapter(nn.Module):
         scale_factor,  # how many consecutive frame tokens fuse into one; must divide every video length
         mlp_depth=1,  # NOTE: currently unused/dead, kept only for config compatibility (see comment below)
         motion_hidden_dim: int | None = None,  # SwiGLU gate branch's internal width; defaults to output_hidden_size
+        dropout: float = 0.1,  # dropout on the SwiGLU activation, inside the gated motion branch only
     ):
         """Fuse every ``s`` consecutive frame tokens into one token.
 
@@ -46,6 +47,8 @@ class TemporalShuffleAdapter(nn.Module):
             raise ValueError(
                 "Motion-aware temporal fusion requires scale_factor to be at least 2"
             )
+        if not 0.0 <= dropout < 1.0:
+            raise ValueError(f"dropout must be in [0, 1), got {dropout}")
 
         motion_hidden_dim = motion_hidden_dim or output_hidden_size
 
@@ -65,6 +68,10 @@ class TemporalShuffleAdapter(nn.Module):
         fusion_input_size = input_hidden_size * (2 * scale_factor - 1)
         self.fusion_norm = nn.LayerNorm(fusion_input_size)
         self.fusion_in_projection = nn.Linear(fusion_input_size, motion_hidden_dim * 2)
+        # NOTE: Dropout sits on the SwiGLU activation, i.e. strictly inside the
+        # gated motion branch.  The base path stays deterministic, so a window's
+        # pooled content is never dropped.
+        self.fusion_dropout = nn.Dropout(dropout)
         self.fusion_out_projection = nn.Linear(motion_hidden_dim, output_hidden_size)
 
         # Begin close to the stable base path, then learn how much motion
@@ -109,7 +116,7 @@ class TemporalShuffleAdapter(nn.Module):
         value, gate = self.fusion_in_projection(self.fusion_norm(fusion_input)).chunk(
             2, dim=-1
         )
-        motion = self.fusion_out_projection(value * F.silu(gate))
+        motion = self.fusion_out_projection(self.fusion_dropout(value * F.silu(gate)))
         hidden_states = base + torch.sigmoid(self.motion_gate) * motion
 
         if t_length is not None:
@@ -150,9 +157,12 @@ class DINOFrameAdapterCrossV2(nn.Module):
         temporal_gate_init: float = -2.0,  # will be passed through sigmoid to get initial gate value , sigmoid(-2) ~= 0.12
         spatial_window_radius: int | None = None,  # if set, only match patches within this Chebyshev-distance window; None = match against every next-frame patch
         spatial_grid_size: Sequence[int] | None = None,  # [height, width] of the patch grid; None = inferred as a square from patch count
+        proj_dropout: float = 0.1,  # dropout after the GELU of cls_mapper/fused_patch_mapper, before the shared output_projection
     ) -> None:
         super().__init__()
 
+        if not 0.0 <= proj_dropout < 1.0:
+            raise ValueError(f"proj_dropout must be in [0, 1), got {proj_dropout}")
         if temperature <= 0:
             raise ValueError(f"temperature must be positive, got {temperature}")
         if temporal_mlp_depth < 1:
@@ -226,15 +236,19 @@ class DINOFrameAdapterCrossV2(nn.Module):
         # NOTE: CLS summaries and spatial features may come from different
         # feature spaces and may not have the same width. Map them independently
         # into a common hidden space, then share only the final LLM projection.
+        # NOTE: Dropout goes after each mapper's GELU, so it regularizes the
+        # hidden projector space rather than the LLM-facing tokens themselves.
         self.cls_mapper = nn.Sequential(
             nn.LayerNorm(cls_input_dim),
             nn.Linear(cls_input_dim, hidden_dim),
             nn.GELU(),
+            nn.Dropout(proj_dropout),
         )
         self.fused_patch_mapper = nn.Sequential(
             nn.LayerNorm(input_dim),
             nn.Linear(input_dim, hidden_dim),
             nn.GELU(),
+            nn.Dropout(proj_dropout),
         )
         self.output_projection = nn.Linear(hidden_dim, output_dim)
 
@@ -587,6 +601,8 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
         spatial_grid_size: Sequence[int] | None = None,  # see DINOFrameAdapterCrossV2
         temporal_scale_factor: int = 2,  # how many frame-pair tokens each TemporalShuffleAdapter compresses into one; must be >= 2 and divide every video's frame count
         motion_hidden_dim: int | None = None,  # shared with both cls_/patch_temporal_shuffle; see TemporalShuffleAdapter; defaults to output_dim
+        proj_dropout: float = 0.1,  # see DINOFrameAdapterCrossV2
+        motion_dropout: float = 0.1,  # shared with both cls_/patch_temporal_shuffle; see TemporalShuffleAdapter
         use_short_temporal_conv: bool = False,  # if True, add an extra PackedShortTemporalConv after each shuffle stream
         short_temporal_kernel_size: int = 3,  # PackedShortTemporalConv kernel size, only used when use_short_temporal_conv=True
         short_temporal_gate_init: float = -2.0,  # PackedShortTemporalConv residual gate init, only used when use_short_temporal_conv=True
@@ -612,6 +628,7 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             temporal_gate_init=temporal_gate_init,
             spatial_window_radius=spatial_window_radius,
             spatial_grid_size=spatial_grid_size,
+            proj_dropout=proj_dropout,
         )
         # CLS and pooled-patch tokens have different distributions, so the
         # compression branches intentionally do not share parameters.
@@ -620,12 +637,14 @@ class DINOFrameAdapterCrossV2Shuffle(nn.Module):
             output_hidden_size=output_dim,
             scale_factor=temporal_scale_factor,
             motion_hidden_dim=motion_hidden_dim,
+            dropout=motion_dropout,
         )
         self.patch_temporal_shuffle = TemporalShuffleAdapter(
             input_hidden_size=output_dim,
             output_hidden_size=output_dim,
             scale_factor=temporal_scale_factor,
             motion_hidden_dim=motion_hidden_dim,
+            dropout=motion_dropout,
         )
         # Keep the semantic CLS stream and motion-oriented PATCH stream
         # independent when the optional post-shuffle temporal bias is enabled.

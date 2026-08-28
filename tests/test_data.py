@@ -18,6 +18,7 @@ def test_datamodule():
             overrides=[
                 # "data=ph14t_*x224x224_qwen_multiling",
                 "data=ph14t_*x224x224_qwen_single_language",
+                "data.language=zh",
                 # "prompt=fixed_prompt",
                 # "data=ph14t_*x224x224_gemma_multiling",
                 # "datamodule=shared_subset",

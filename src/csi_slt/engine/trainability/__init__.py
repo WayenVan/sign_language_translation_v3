@@ -6,10 +6,12 @@ from .plans import (
     SltTrainabilityPlan,
     VisualBackboneTrainabilityPlan,
 )
+from .policy import apply_trainability_plan
 
 __all__ = [
     "ComponentTrainabilityPlan",
     "LlmTrainabilityPlan",
     "SltTrainabilityPlan",
     "VisualBackboneTrainabilityPlan",
+    "apply_trainability_plan",
 ]

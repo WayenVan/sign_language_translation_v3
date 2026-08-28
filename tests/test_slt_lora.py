@@ -71,10 +71,8 @@ def test_create_save_and_reload_lora_checkpoint(tmp_path: Path):
         lora_dropout=0.0,
         target_modules=[target_module],
     )
-    model = SltModel.from_pretrained_with_new_lora(
-        peft_config=peft_config,
-        checkpoint_dir=str(base_checkpoint),
-    )
+    model = SltModel.from_pretrained(str(base_checkpoint))
+    model.inject_llm_lora(peft_config)
 
     assert model.config.llm_lora is True
     assert model.config.llm_lora_config

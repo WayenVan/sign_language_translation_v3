@@ -2,9 +2,7 @@
 
 defaults:
   - /model: base_model
-  # - model: pretrained_encoder_model
   - /data: ph14t_*x224x224_qwen_multiling
-  # - data: ph14t_*x224x224_qwen
   - /datamodule: standard
   - /prompt: diverse_train
   - /peft: none
@@ -20,52 +18,72 @@ hydra:
   output_subdir: null
 
 engine:
-  eval_information:
-    every_n_evaluations: -1
-    num_samples: 4
+  # Which parameters this run optimizes. Applied by
+  # `apply_trainability_plan`: everything is frozen first, then exactly the
+  # components selected here are re-enabled. All eight components must be
+  # listed. LoRA structure itself lives in the `peft` group; a `lora` mode here
+  # only unfreezes the adapters that group injected.
+  trainability:
+    llm: { mode: frozen }
+    visual_backbone: { mode: frozen }
+    visual_adapter: { mode: full }
+    visual_semantic_encoder: { mode: full }
+    ctc_head: { mode: full }
+    visual_position_embedding: { mode: full }
+    visual_boundary_embeddings: { mode: full }
+    visual_scale: { mode: full }
+  evaluate_before_training: false
   train_probe:
     every_n_evaluations: 1
     num_samples: 800
-    seed: 42
-    metric_key_prefix: train_probe
-  dsid_scheduler:
-    warmup_ratio: 0.01
-    decay_ratio: 0.3
   training_args:
     do_train: true
     do_predict: true
-    predict_with_teacher_forcing: false
-    num_train_epochs: 30
+    num_train_epochs: 50
     per_device_train_batch_size: 2
     per_device_eval_batch_size: 1
     report_to: wandb
     remove_unused_columns: False
     ddp_find_unused_parameters: True
     save_strategy: best
-    save_steps: 4000
     save_total_limit: 1
-    # Keep only the model in each checkpoint, dropping the optimizer, scheduler
-    # and RNG state -- and, under FSDP, the separate full-size
-    # `pytorch_model_fsdp.bin` that `save_fsdp_model` writes alongside them.
-    # Trades `resume_from_checkpoint` for roughly half the bytes per save.
-    # Transformers rejects this together with `load_best_model_at_end` under
-    # FSDP/DeepSpeed, so that option stays off; `save_strategy: best` still
-    # saves only on an improvement of `metric_for_best_model`, the best
-    # checkpoint just has to be loaded explicitly (e.g. csi_slt.commands.evaluate).
-    save_only_model: true
     logging_steps: 50
     eval_strategy: "steps"
     eval_steps: 4000
     metric_for_best_model: "eval_overall_weighted_bleu4"
     greater_is_better: True
     learning_rate: 1e-4
+    # --- Regularization / optimization stability ---
+    # Decoupled weight decay. Transformers excludes biases and LayerNorm
+    # parameters automatically, and SltTrainer's create_optimizer keeps that
+    # split when per-component decays are set, so 0.01 only hits real weight
+    # matrices. Per-component overrides live in the `*_weight_decay` args.
+    weight_decay: 0.05
+    # In transformers>=5 warmup_steps is a float: a value in [0, 1) is a ratio
+    # of total steps, >=1 is an exact step count. 3% of training ramps the LR
+    # from 0 before the cosine decay, which stops the freshly initialized
+    # adapter from taking large steps against a frozen LLM.
+    warmup_steps: 0.03
+    # Gradient clipping. This is already the transformers default; it is stated
+    # explicitly so a run's clipping threshold is visible in the config.
+    max_grad_norm: 1.0
+    # WARN: Keep this at 0.0. A non-zero factor makes Trainer.compute_loss pop
+    # `labels` out of the model inputs and compute cross entropy from logits
+    # itself. SltModel guards its auxiliary terms on `loss is not None`, so the
+    # CTC loss and the attention-diversity loss would be silently dropped from
+    # training with no error. Label smoothing needs a custom compute_loss_func
+    # before it can be turned on here.
+    label_smoothing_factor: 0.0
+    # NEFTune embedding noise. Null disables it. It hooks the LLM's input
+    # embedding layer, so it perturbs prompt/text tokens only and leaves the
+    # visual soft tokens untouched -- verify that is what you want before
+    # setting a value (typical range 5.0-15.0).
+    neftune_noise_alpha: null
     dataloader_num_workers: 6
     disable_tqdm: True
     auto_output_dir: False
     output_dir: outputs/test
     lr_scheduler_type: cosine
-    restore_callback_states_from_checkpoint: true
-    dataloader_persistent_workers: False
     dataloader_drop_last: true
   generation_config:
     max_new_tokens: 128
@@ -73,8 +91,5 @@ engine:
     # num_beams: 4
     # early_stopping: true
     # length_penalty: 1.0
-  metrics:
-    xcomet_every_n_evaluations: -1
-
-  llm_dtype: auto
+  llm_dtype: bfloat16
   visual_backbone_dtype: auto

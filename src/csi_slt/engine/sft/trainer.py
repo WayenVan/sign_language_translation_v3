@@ -9,7 +9,6 @@ from .callbacks import (
     SaveGitInfoCallback,
     SaveHydraConfigCallback,
     ETACallback,
-    DSIDWeightSchedulerCallback,
     EvalInformationVisualizationCallback,
     TrainSubsetMetricsCallback,
 )
@@ -34,6 +33,7 @@ from typing import Callable, Literal, Tuple
 from functools import partial
 import inspect
 import random
+import re
 
 from csi_slt.data.sampler import (
     GlobalLengthBucketSampler,
@@ -97,6 +97,17 @@ class SltTrainer(Seq2SeqTrainer):
         "visual_adapter": "visual_adapter_weight_decay",
     }
 
+    # NOTE: Parameters whose zero point is not "this path is switched off".
+    # Transformers only filters biases and normalization layers by name, which
+    # misses SLT's marker tokens, learned positions, and adapter token-type
+    # embeddings.  These all carry 2 or more dimensions, so the ndim rule below
+    # cannot catch them and they must be named explicitly.  Keep the terms
+    # specific: a broad pattern such as "gate" would wrongly exempt Qwen3's
+    # mlp.gate_proj.weight, which is an ordinary weight matrix.
+    _NO_DECAY_NAME_PATTERN = re.compile(
+        r"type_embedding|position_embedding|start_video_embds|end_video_embeds"
+    )
+
     def __init__(
         self,
         hydra_config=None,
@@ -139,19 +150,6 @@ class SltTrainer(Seq2SeqTrainer):
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
         self.add_callback(ETACallback())
-        dsid_scheduler_kwargs = {}
-        if hydra_config is not None:
-            dsid_scheduler_config = OmegaConf.select(
-                hydra_config,
-                "engine.dsid_scheduler",
-                default=None,
-            )
-            if dsid_scheduler_config is not None:
-                dsid_scheduler_kwargs = OmegaConf.to_container(
-                    dsid_scheduler_config,
-                    resolve=True,
-                )
-        self.add_callback(DSIDWeightSchedulerCallback(**dsid_scheduler_kwargs))
         eval_information_kwargs = {}
         if hydra_config is not None:
             eval_information_config = OmegaConf.select(
@@ -204,6 +202,37 @@ class SltTrainer(Seq2SeqTrainer):
         self.hydra_config = hydra_config
         self._is_predicting = False
         self._is_train_probe = False
+
+    def get_decay_parameter_names(self, model: nn.Module) -> list[str]:
+        """Narrow the decayed set to genuine weight matrices.
+
+        Weight decay only regularizes a parameter when shrinking it toward zero
+        simplifies the function it parameterizes.  On top of the base class's
+        bias/normalization filter this drops:
+
+        * every parameter with fewer than two dimensions -- residual gates such
+          as ``motion_gate`` and ``visual_scale`` live here.  Gates store a
+          pre-sigmoid logit, so decaying them does not close the branch, it
+          pulls it toward ``sigmoid(0) = 0.5`` and *opens* it.
+        * the explicitly named coordinate-like tensors in
+          ``_NO_DECAY_NAME_PATTERN``.
+
+        The rule is applied here rather than in ``create_optimizer`` so that it
+        also covers the base-class optimizer path taken when no per-component
+        learning rate or weight decay is configured.
+        """
+        decay_parameters = super().get_decay_parameter_names(model)
+        dimensions = {
+            name: parameter.ndim for name, parameter in model.named_parameters()
+        }
+        return [
+            name
+            for name in decay_parameters
+            # Default to 2 so an unexpectedly absent name keeps the base
+            # class's decision instead of being silently exempted.
+            if dimensions.get(name, 2) >= 2
+            and not self._NO_DECAY_NAME_PATTERN.search(name)
+        ]
 
     def create_optimizer(self, model=None) -> torch.optim.Optimizer:
         """Create weight-decay groups with optional per-component PEFT LRs."""
@@ -263,6 +292,7 @@ class SltTrainer(Seq2SeqTrainer):
             component_weight_decay = component_weight_decays.get(component)
             group = {
                 "params": parameters,
+                "slt_component": component,
                 "weight_decay": (
                     (
                         self.args.weight_decay
@@ -446,7 +476,12 @@ class SltTrainer(Seq2SeqTrainer):
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
-        """Add averaged model-provided scalars to training logs."""
+        """Add component LRs and averaged model scalars to training logs."""
+        if self.optimizer is not None and "learning_rate" in logs:
+            for group in self.optimizer.param_groups:
+                component = group.get("slt_component")
+                if component in self._COMPONENT_LR_ARGUMENTS:
+                    logs[f"learning_rate/{component}"] = float(group["lr"])
         if "loss" in logs and self._logging_scalar_totals:
             for name, total in self._logging_scalar_totals.items():
                 count = torch.tensor(

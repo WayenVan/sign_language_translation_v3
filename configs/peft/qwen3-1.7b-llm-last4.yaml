@@ -1,9 +1,7 @@
 type: lora
 
-trainability:
-  llm_lora: true
-  visual_lora: false
-  visual_adapter: true
+# Pair with engine.trainability: llm=lora, visual_adapter=full, everything
+# else frozen (that is the train/ft_peft.yaml default).
 
 llm_lora_config:
   r: 8

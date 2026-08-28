@@ -22,15 +22,6 @@ class PredictionOutput(Protocol):
     label_ids: Any
 
 
-class PriodicMetric(Protocol):
-    """A slow metric which is evaluated only at its configured cadence."""
-
-    every_n_evaluations: int
-
-    def compute(self, context: MetricContext) -> Mapping[str, float | int]:
-        ...
-
-
 @dataclass(slots=True)
 class DecodedBatch:
     """解码后的完整评估数据。"""
@@ -43,14 +34,6 @@ class DecodedBatch:
 
     def __len__(self) -> int:
         return len(self.predictions)
-
-
-@dataclass
-class MetricContext:
-    """评估指标计算的上下文。"""
-
-    batch: DecodedBatch
-    language_groups: dict[str, list[int]]
 
 
 class SLTMetric:
@@ -144,7 +127,6 @@ class SLTMetric:
             "papluca/xlm-roberta-base-language-detection"
         ),
         language_detector_batch_size: int = 32,
-        priodic_metrics: Sequence[PriodicMetric] | None = None,
     ) -> None:
         self.tokenizer = processor.tokenizer
         self.ignore_index = ignore_index
@@ -154,26 +136,6 @@ class SLTMetric:
         self.language_detector_model_type = language_detector_model_type
         self.language_detector_batch_size = language_detector_batch_size
         self._language_detector = None
-        self.priodic_metrics = tuple(priodic_metrics or ())
-        self._evaluation_count = 0
-
-        for metric in self.priodic_metrics:
-            interval = getattr(metric, "every_n_evaluations", None)
-            if (
-                not isinstance(interval, int)
-                or isinstance(interval, bool)
-                or interval == 0
-                or interval < -1
-            ):
-                raise ValueError(
-                    "Each priodic metric must define 'every_n_evaluations' "
-                    "as a positive integer, or -1 to disable it."
-                )
-            if not callable(getattr(metric, "compute", None)):
-                raise TypeError(
-                    "Each priodic metric must provide a callable compute(context)."
-                )
-
         if self.tokenizer.pad_token_id is None:
             raise ValueError("SLTMetric requires tokenizer.pad_token_id to be defined.")
 
@@ -835,39 +797,12 @@ class SLTMetric:
     # Public API
     # ------------------------------------------------------------------
 
-    def _calculate_priodic_metrics(
-        self,
-        context: MetricContext,
-    ) -> dict[str, float | int]:
-        """Run slow metrics whose cadence matches the current evaluation."""
-
-        metrics: dict[str, float | int] = {}
-
-        for priodic_metric in self.priodic_metrics:
-            interval = priodic_metric.every_n_evaluations
-            if interval == -1 or self._evaluation_count % interval != 0:
-                continue
-
-            result = priodic_metric.compute(context)
-            if not isinstance(result, Mapping):
-                raise TypeError(
-                    f"{type(priodic_metric).__name__}.compute() must return a mapping."
-                )
-            metrics.update(result)
-
-        return metrics
-
     def __call__(
         self,
         output: PredictionOutput,
     ) -> dict[str, float | int]:
-        self._evaluation_count += 1
         batch = self._decode_batch(output)
         language_groups = self._group_indices_by_language(batch.languages)
-        context = MetricContext(
-            batch=batch,
-            language_groups=language_groups,
-        )
 
         if len(batch) == 0:
             metrics: dict[str, float | int] = {
@@ -882,7 +817,6 @@ class SLTMetric:
                 "avg_n_tokens_generated": 0.0,
                 "all_n_tokens_generated": 0,
             }
-            metrics.update(self._calculate_priodic_metrics(context))
             return metrics
 
         metrics: dict[str, float | int] = {}
@@ -964,6 +898,4 @@ class SLTMetric:
                 "all_n_tokens_generated": int(np.sum(batch.generated_token_counts)),
             }
         )
-        metrics.update(self._calculate_priodic_metrics(context))
-
         return metrics

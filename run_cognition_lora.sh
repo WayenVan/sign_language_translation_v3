@@ -71,40 +71,41 @@ CMD_ARGS=(
   --num_processes=2
   --mixed_precision=bf16
   --debug
-  -m csi_slt.commands.train_ft_peft
+  -m csi_slt.commands.train
   --config-name train/ft_peft
+  # peft=qwen3-1.7b-llm-all
   peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
-  # peft=qwen3-1.7b-cradio-v4-so400m-visual-last-half
-  # peft=qwen3-1.7b-cradio-v4-so400m-adapter-only
+  # peft=none  # adapter-only: no LoRA, engine.trainability picks the parts
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-frozen//checkpoint-33672
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-vlora-r8-adapter-frozen
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last4-qkv-r8-adapter-frozen//checkpoint-10560
-  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
+  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en//checkpoint-30000
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh//checkpoint-24000
+  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh//checkpoint-24000
   # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed//checkpoint-90000
-  peft.visual_lora_config.r=8
-  peft.trainability.visual_lora=true
-  peft.trainability.visual_adapter=true
+  engine.trainability.llm.mode=frozen
+  engine.trainability.visual_backbone.mode=lora
+  engine.trainability.visual_adapter.mode=frozen
   prompt=fixed_prompt
   engine.training_args.num_train_epochs=30
   engine.training_args.learning_rate=1e-4
-  engine.training_args.visual_lora_learning_rate=1e-3
-  engine.training_args.visual_adapter_learning_rate=1e-5
-  engine.training_args.visual_adapter_weight_decay=0.05
+  engine.training_args.visual_lora_learning_rate=2e-4
+  engine.training_args.visual_lora_weight_decay=0.01
+  # engine.training_args.visual_adapter_learning_rate=1e-5
+  # engine.training_args.visual_adapter_weight_decay=0.05
+  engine.evaluate_before_training=true
   engine.training_args.eval_steps=0.08
   # datamodule=train_with_val_and_test
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0827.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-frozen-ep40
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0827.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-ft-from33672-ep25
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last-half-qkv-r8-adapter-frozen
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0827.224x224-ctc-de-cpt-vlora-last4-r8-adapter-ft-component-lr-vlora1e-3-adapter1e-5-ep30
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0828.224x224-ctc-zh-cpt-vlora-last4-r8a16-adapter-frozen-ep30
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh-cpt-lora-r8
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed-cpt-lora-r8
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
-  engine.training_args.dataloader_persistent_workers=False
   engine.training_args.logging_steps=15
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
@@ -113,7 +114,7 @@ CMD_ARGS=(
   engine.visual_backbone_dtype=auto
   # data=ph14t_*x224x224_qwen_multiling
   data=ph14t_*x224x224_qwen_single_language
-  data.language=de
+  data.language=zh
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2
@@ -126,7 +127,7 @@ accelerate launch "${CMD_ARGS[@]}"
 
 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
 # accelerate launch --num_processes=2 --mixed_precision=fp16 \
-# engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train_ft_peft \
+# engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train \
 # engine.training_args.dataloader_num_workers=10 # accelerate launch --num_processes=2 --mixed_precision=bf16 \
 # model.config.visual_adapter_kwargs.num_layers=4 \
 # model.config.video_token_scale=0.25 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \

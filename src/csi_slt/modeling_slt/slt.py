@@ -1,3 +1,4 @@
+import warnings
 from copy import deepcopy
 from typing import Callable, Optional
 
@@ -418,7 +419,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
         llm_lora_config: LoraConfig | None = None,
         visual_lora_config: LoraConfig | None = None,
     ):
-        """Load an SLT checkpoint and inject new LLM and/or visual LoRA."""
+        """Load a checkpoint and inject LoRA (deprecated compatibility API)."""
+        warnings.warn(
+            "SltModel.from_pretrained_with_new_lora() is deprecated; call "
+            "SltModel.from_pretrained() and then inject_llm_lora() and/or "
+            "inject_visual_lora() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if checkpoint_dir is None:
             raise TypeError("checkpoint_dir must be provided")
         if peft_config is not None and llm_lora_config is not None:

@@ -13,6 +13,15 @@ hydra:
   output_subdir: null
 
 engine:
+  trainability:
+    llm: {mode: lora}
+    visual_backbone: {mode: frozen}
+    visual_adapter: {mode: full}
+    visual_semantic_encoder: {mode: frozen}
+    ctc_head: {mode: frozen}
+    visual_position_embedding: {mode: frozen}
+    visual_boundary_embeddings: {mode: frozen}
+    visual_scale: {mode: frozen}
   training_args:
     do_train: true
     do_predict: true

@@ -2,8 +2,6 @@ config:
   hidden_size: 4096
   video_soft_token_id: 151656
   video_token_scale: 1.0
-  dsid_loss_weight: 0.0
-  dsid_js_tau: null
   llm_model_name_or_path: Qwen/Qwen3-8B
   visual_backbone_type: dinov2
   visual_backbone_config:

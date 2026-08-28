@@ -10,9 +10,24 @@ defaults:
   - _self_
 
 model:
+  # True resumes an SLT checkpoint; false creates a new SLT model from config.
+  load_from_checkpoint: true
   checkpoint_dir: "outputs/v3.0-qwen3-1.7b-cradio-l-dinoframecrossv2shuffle-0815-224x224//checkpoint-54000"
 
 engine:
+  # PEFT fine-tuning trains the injected LoRA adapters plus the multimodal
+  # visual adapter; every other component stays at the checkpoint's weights.
+  trainability:
+    llm: {mode: lora}
+    visual_backbone: {mode: frozen}
+    visual_adapter: {mode: full}
+    visual_semantic_encoder: {mode: frozen}
+    ctc_head: {mode: frozen}
+    visual_position_embedding: {mode: frozen}
+    visual_boundary_embeddings: {mode: frozen}
+    visual_scale: {mode: frozen}
+  # Log a step-0 baseline into the same eval_* series as periodic evaluation.
+  evaluate_before_training: true
   training_args:
     output_dir: outputs/ft_peft
     num_train_epochs: 25
