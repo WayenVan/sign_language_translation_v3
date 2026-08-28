@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
-  export WANDB_TAGS=lite-with-lora-experiment
+  export WANDB_TAGS="lite-visual-lora-adapter-ft"
   REPORT_TO=wandb
 fi
 
@@ -76,9 +76,25 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train
   model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-lite
+  peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
+  peft.visual_lora_config.r=4
+  peft.visual_lora_config.lora_alpha=4
+  engine.trainability.llm.mode=frozen
+  engine.trainability.visual_backbone.mode=lora
+  engine.trainability.visual_adapter.mode=full
+  engine.trainability.visual_semantic_encoder.mode=frozen
+  engine.trainability.ctc_head.mode=full
+  engine.trainability.visual_position_embedding.mode=full
+  engine.trainability.visual_boundary_embeddings.mode=full
+  engine.trainability.visual_scale.mode=full
+  engine.training_args.learning_rate=1e-4
+  +engine.training_args.visual_lora_learning_rate=1e-4
+  +engine.training_args.visual_lora_weight_decay=0.01
+  +engine.training_args.visual_adapter_learning_rate=1e-4
+  +engine.training_args.visual_adapter_weight_decay=0.05
   # prompt=diverse_train
   prompt=fixed_prompt
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de-vlora-last4-r4a4-adapter-join
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
@@ -102,9 +118,9 @@ CMD_ARGS=(
   engine.training_args.report_to="$REPORT_TO"
   engine.training_args.ddp_find_unused_parameters=False
   # data=ph14t_*x224x224_gemma_multiling
-  data=ph14t_*x224x224_qwen_multiling
-  # data=ph14t_*x224x224_qwen_single_language
-  # data.language=zh
+  # data=ph14t_*x224x224_qwen_multiling
+  data=ph14t_*x224x224_qwen_single_language
+  data.language=de
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2
