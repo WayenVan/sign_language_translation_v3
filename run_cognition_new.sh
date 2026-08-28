@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
-  export WANDB_TAGS="lite-visual-lora-adapter-ft"
+  export WANDB_TAGS="lite-lora-experiment"
   REPORT_TO=wandb
 fi
 
@@ -75,26 +75,20 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-lite
-  peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
-  peft.visual_lora_config.r=4
-  peft.visual_lora_config.lora_alpha=4
+  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-nano
+  peft=none
   engine.trainability.llm.mode=frozen
-  engine.trainability.visual_backbone.mode=lora
+  engine.trainability.visual_backbone.mode=frozen
   engine.trainability.visual_adapter.mode=full
-  engine.trainability.visual_semantic_encoder.mode=frozen
+  engine.trainability.visual_semantic_encoder.mode=full
   engine.trainability.ctc_head.mode=full
   engine.trainability.visual_position_embedding.mode=full
   engine.trainability.visual_boundary_embeddings.mode=full
   engine.trainability.visual_scale.mode=full
   engine.training_args.learning_rate=1e-4
-  +engine.training_args.visual_lora_learning_rate=1e-4
-  +engine.training_args.visual_lora_weight_decay=0.01
-  +engine.training_args.visual_adapter_learning_rate=1e-4
-  +engine.training_args.visual_adapter_weight_decay=0.05
   # prompt=diverse_train
   prompt=fixed_prompt
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de-vlora-last4-r4a4-adapter-join
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-nano-0828.224x224-ctc-de
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
