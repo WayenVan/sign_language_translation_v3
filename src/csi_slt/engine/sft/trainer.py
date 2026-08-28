@@ -21,7 +21,7 @@ from omegaconf import OmegaConf
 
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.integrations.fsdp import is_fsdp_managed_module
-from transformers.trainer_utils import seed_worker
+from transformers.trainer_utils import PredictionOutput, seed_worker
 from transformers.utils import is_datasets_available
 
 
@@ -32,8 +32,11 @@ from transformers.utils import logging
 from typing import Callable, Literal, Tuple
 from functools import partial
 import inspect
+import json
 import random
 import re
+import numpy as np
+from pathlib import Path
 
 from csi_slt.data.sampler import (
     GlobalLengthBucketSampler,
@@ -435,6 +438,113 @@ class SltTrainer(Seq2SeqTrainer):
             self.compute_metrics = previous_compute_metrics
             self.model.train(was_training)
         return dict(output.metrics)
+
+    def save_predictions(self, prediction_output: PredictionOutput) -> None:
+        """Write decoded predictions, their prompts, and metrics to ``output_dir``.
+
+        Three files are written on the main process, each overwritten on every
+        call:
+
+        * ``predictions.jsonl`` -- one decoded sample per line.
+        * ``prompts.jsonl`` -- the generation prompt of that same sample.
+        * ``predictions_metrics.json`` -- ``prediction_output.metrics``.
+
+        Line ``i`` of the two JSONL files always describes the same sample.
+        Both are written in a single pass over the gathered arrays and both
+        carry a matching ``index`` field, so the correspondence survives an
+        editor that reorders or filters one of the files.
+
+        Decoding is delegated to ``compute_metrics`` rather than repeated here,
+        so the saved text is exactly what the reported BLEU was computed from.
+        Prompts are the one exception: they are not part of the metric, and are
+        decoded here from ``prediction_ids[:prompt_length]`` -- the prompt that
+        ``prediction_step`` handed to ``generate``.
+        """
+        # ``predict`` gathers across ranks, so rank zero already holds every
+        # sample and the other ranks would only overwrite it with the same data.
+        if not self.is_world_process_zero():
+            return
+
+        decoder = self.compute_metrics
+        if decoder is None or not hasattr(decoder, "decode_batch"):
+            raise TypeError(
+                "save_predictions needs compute_metrics to expose decode_batch(), "
+                f"got {type(decoder).__name__}"
+            )
+        batch = decoder.decode_batch(prediction_output)
+
+        prediction_ids, _, prompt_lengths = prediction_output.predictions
+        prediction_ids = np.asarray(prediction_ids)
+        prompt_lengths = np.asarray(prompt_lengths).reshape(-1)
+        if prediction_ids.shape[0] != len(batch):
+            raise RuntimeError(
+                f"decoded {len(batch)} samples but received "
+                f"{prediction_ids.shape[0]} prediction rows"
+            )
+
+        # WARN: skip_special_tokens stays False on purpose. The prompt is worth
+        # saving precisely because of its structure -- chat template markers,
+        # the repeated video placeholder token, and the left padding that
+        # batched decoder-only generation inserts are all part of what the
+        # model actually saw.
+        prompts = self.processing_class.tokenizer.batch_decode(
+            [
+                prediction_ids[index, : int(prompt_lengths[index])].tolist()
+                for index in range(len(batch))
+            ],
+            skip_special_tokens=False,
+        )
+
+        output_path = Path(self.args.output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        predictions_path = output_path / "predictions.jsonl"
+        prompts_path = output_path / "prompts.jsonl"
+        metrics_path = output_path / "predictions_metrics.json"
+
+        with (
+            predictions_path.open("w", encoding="utf-8") as predictions_file,
+            prompts_path.open("w", encoding="utf-8") as prompts_file,
+        ):
+            for index in range(len(batch)):
+                # ensure_ascii=False keeps Chinese and German references
+                # readable instead of escaping them into \uXXXX.
+                predictions_file.write(
+                    json.dumps(
+                        {
+                            "index": index,
+                            "language": batch.languages[index],
+                            "prediction": batch.predictions[index],
+                            "reference": batch.references[index],
+                            "n_tokens": batch.total_token_counts[index],
+                            "n_tokens_generated": batch.generated_token_counts[index],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                prompts_file.write(
+                    json.dumps(
+                        {
+                            "index": index,
+                            "prompt_length": int(prompt_lengths[index]),
+                            "prompt": prompts[index],
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        metrics_path.write_text(
+            json.dumps(prediction_output.metrics or {}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(
+            "Saved %d predictions to %s, prompts to %s, metrics to %s",
+            len(batch),
+            predictions_path,
+            prompts_path,
+            metrics_path,
+        )
 
     def compute_loss(
         self,

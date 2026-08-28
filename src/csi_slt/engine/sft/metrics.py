@@ -369,10 +369,15 @@ class SLTMetric:
     # Decoding
     # ------------------------------------------------------------------
 
-    def _decode_batch(
+    def decode_batch(
         self,
         output: PredictionOutput,
     ) -> DecodedBatch:
+        """Decode one gathered prediction output into aligned text lists.
+
+        Public so that callers such as ``SltTrainer.save_predictions`` write
+        exactly the strings the reported metrics were computed from.
+        """
         (
             prediction_ids,
             sequence_lengths,
@@ -801,7 +806,7 @@ class SLTMetric:
         self,
         output: PredictionOutput,
     ) -> dict[str, float | int]:
-        batch = self._decode_batch(output)
+        batch = self.decode_batch(output)
         language_groups = self._group_indices_by_language(batch.languages)
 
         if len(batch) == 0:
