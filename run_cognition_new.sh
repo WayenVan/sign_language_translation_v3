@@ -76,19 +76,26 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train
   model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-nano
-  peft=none
+  # Visual LoRA: only the final four C-RADIO ViT blocks (23-26), qkv only.
+  peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
+  peft.visual_lora_config.r=4
+  peft.visual_lora_config.lora_alpha=4
   engine.trainability.llm.mode=frozen
-  engine.trainability.visual_backbone.mode=frozen
+  engine.trainability.visual_backbone.mode=lora
   engine.trainability.visual_adapter.mode=full
+  # Keep every other newly introduced SLT parameter trainable as well.
   engine.trainability.visual_semantic_encoder.mode=full
   engine.trainability.ctc_head.mode=full
   engine.trainability.visual_position_embedding.mode=full
   engine.trainability.visual_boundary_embeddings.mode=full
   engine.trainability.visual_scale.mode=full
+  # Default/new-parameter LR, with dedicated rates for the joint-trained parts.
   engine.training_args.learning_rate=1e-4
+  +engine.training_args.visual_adapter_learning_rate=1e-4
+  +engine.training_args.visual_lora_learning_rate=1e-3
   # prompt=diverse_train
   prompt=fixed_prompt
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-nano-0828.224x224-ctc-de
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-nano-0829.224x224-ctc-de-vlora-last4-r4a4-adapter-joint
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
