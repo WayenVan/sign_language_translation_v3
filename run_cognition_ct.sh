@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
-  export WANDB_TAGS=visual-llm-lora-ablation
+  export WANDB_TAGS=lite-lora-experiment
   REPORT_TO=wandb
 fi
 
@@ -75,19 +75,14 @@ CMD_ARGS=(
   --config-name train/ft_peft
   # peft=qwen3-1.7b-llm-all
   peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
-  # peft=none  # adapter-only: no LoRA, engine.trainability picks the parts
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-frozen//checkpoint-33672
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-vlora-r8-adapter-frozen
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last4-qkv-r8-adapter-frozen//checkpoint-10560
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de//checkpoint-30000
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en//checkpoint-30000
-  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh//checkpoint-24000
-  # model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed//checkpoint-90000
+  peft.visual_lora_config.r=4
+  peft.visual_lora_config.lora_alpha=4
+  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de//checkpoint-42000
   engine.trainability.llm.mode=frozen
   engine.trainability.visual_backbone.mode=lora
   engine.trainability.visual_adapter.mode=frozen
   prompt=fixed_prompt
-  engine.training_args.num_train_epochs=30
+  engine.training_args.num_train_epochs=50
   engine.training_args.learning_rate=1e-4
   engine.training_args.visual_lora_learning_rate=2e-3
   engine.training_args.visual_lora_weight_decay=0.01
@@ -99,7 +94,7 @@ CMD_ARGS=(
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0827.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-frozen-ep40
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0827.224x224-ctc-de-cpt-vlora-last8-qkv-r8-adapter-ft-from33672-ep25
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-de-cpt-vlora-last-half-qkv-r8-adapter-frozen
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0828.224x224-ctc-zh-cpt-vlora-last4-r8a16-adapter-frozen-ep30
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de-cpt-vlora-last4-r4a4-adapter-frozen-ep50
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-en-cpt-lora-r8
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh-cpt-lora-r8
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-fixed-cpt-lora-r8
@@ -114,7 +109,7 @@ CMD_ARGS=(
   engine.visual_backbone_dtype=auto
   # data=ph14t_*x224x224_qwen_multiling
   data=ph14t_*x224x224_qwen_single_language
-  data.language=zh
+  data.language=de
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2

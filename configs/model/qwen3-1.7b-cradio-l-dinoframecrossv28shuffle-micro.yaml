@@ -1,0 +1,39 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+config:
+  hidden_size: 2048
+  video_soft_token_id: 151656
+  video_token_scale: 1.0
+  video_bidirectional_attention: true
+  # CTC head over visual tokens, supervised by outputs/ctc_tokenizer's
+  # word-level pseudo-gloss vocab. These values must match that tokenizer.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+  llm_model_name_or_path: Qwen/Qwen3-1.7B
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: [-1]
+  visual_adapter_type: dinoframe_cross_v28_shuffle
+  visual_adapter_kwargs:
+    input_dim: 1152
+    cls_input_dim: 2304
+    output_dim: 2048
+    # Micro provides a near-logarithmic midpoint between nano (12.28M) and
+    # lite (51.75M), with approximately 24.46M visual-adapter parameters.
+    hidden_dim: 640
+    temperature: 0.1
+    spatial_window_radius: 3
+    temporal_gate_init: -2.0
+    temporal_hidden_dim: 640
+    temporal_mlp_depth: 2
+    # Unused while patch_score_depth is 1; retained to document the intended
+    # width if the scorer is later changed back to a two-layer MLP.
+    patch_score_hidden_dim: 576
+    patch_score_depth: 1
+    motion_hidden_dim: 384
+    temporal_scale_factor: 2
+    use_short_temporal_conv: false

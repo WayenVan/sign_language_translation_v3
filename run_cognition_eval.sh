@@ -62,10 +62,10 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.evaluate
   --config-name eval/base
-  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh//checkpoint-24000
+  model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de/checkpoint-42000
   prompt=fixed_prompt
   engine.model_dtype=auto
-  engine.training_args.output_dir=outputs/eval/v4.0-qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-0825.224x224-ctc-zh
+  engine.training_args.output_dir=outputs/eval/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de-checkpoint-42000
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
   engine.training_args.dataloader_persistent_workers=False
@@ -76,7 +76,7 @@ CMD_ARGS=(
   engine.generation_config.do_sample=false
   experiment.permutation=false
   data=ph14t_*x224x224_qwen_single_language
-  data.language=zh
+  data.language=de
   data.processor.video_token_scale=1.0
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2
