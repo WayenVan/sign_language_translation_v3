@@ -46,6 +46,7 @@ engine:
     remove_unused_columns: False
     ddp_find_unused_parameters: True
     save_strategy: best
+    load_best_model_at_end: true
     save_total_limit: 1
     logging_steps: 50
     eval_strategy: "steps"
