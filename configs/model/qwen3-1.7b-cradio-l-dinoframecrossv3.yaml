@@ -3,6 +3,7 @@ config:
   video_soft_token_id: 151656
   # V3 emits 4 query tokens per stride-2 window: 4 / 2 = 2 tokens per frame.
   video_token_scale: 2.0
+  video_bidirectional_attention: true
   attention_diversity_loss_weight: 0.001
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: c_radio_v4

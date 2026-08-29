@@ -5,6 +5,7 @@ config:
   hidden_size: 2048
   video_soft_token_id: 151656
   video_token_scale: 1.0
+  video_bidirectional_attention: true
   # CTC head over visual tokens, supervised by outputs/ctc_tokenizer's
   # word-level pseudo-gloss vocab. These values must match that tokenizer.
   ctc_enabled: true

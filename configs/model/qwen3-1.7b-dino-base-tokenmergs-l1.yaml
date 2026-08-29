@@ -2,6 +2,7 @@ config:
   hidden_size: 2048
   video_soft_token_id: 151656
   video_token_scale: 0.125
+  video_bidirectional_attention: true
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: dinov2
   visual_backbone_config:

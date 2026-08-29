@@ -5,6 +5,10 @@ config:
   hidden_size: 2048
   video_soft_token_id: 151656
   video_token_scale: 0.5
+  # Video tokens attend to each other in both directions during prefill,
+  # on top of the causal mask. Requires an attention implementation that
+  # can carry a custom mask (sdpa or flex_attention, not flash_attention).
+  video_bidirectional_attention: true
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: dinov2
   visual_backbone_config:
