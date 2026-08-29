@@ -32,6 +32,13 @@ class SltConfig(PretrainedConfig):
     # Avoid constructing a default SltConfig (and therefore resolving a remote
     # fallback LLM) merely to compute the serialized config diff.
     has_no_defaults_at_init = True
+    # Declaring the embedded LLM configuration as a sub-config is what lets
+    # Transformers propagate runtime-resolved settings (notably
+    # ``_attn_implementation``, which is never serialized) from this config into
+    # ``llm_config``. Without it that propagation silently stops here and
+    # ``llm_config._attn_implementation`` stays ``None``, which makes
+    # ``create_causal_mask`` return no mask at all.
+    sub_configs = {"llm_config": AutoConfig}
 
     def __init__(
         self,
@@ -56,6 +63,7 @@ class SltConfig(PretrainedConfig):
         ctc_loss_weight: float = 0.0,
         ctc_vocab_size: Optional[int] = None,
         ctc_blank_id: Optional[int] = None,
+        video_bidirectional_attention: Optional[bool] = None,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -128,6 +136,15 @@ class SltConfig(PretrainedConfig):
                 ``[0, ctc_vocab_size)``. Required when ``ctc_enabled`` is
                 ``True``; it is dataset-tokenizer-specific and not assumed to
                 be ``0``.
+            video_bidirectional_attention: Whether video tokens attend to each
+                other in both directions during prefill, instead of only
+                causally. ``None`` means "not recorded by this checkpoint" and
+                resolves to ``False``: runs predating this field were trained
+                with the overlay silently disabled (``llm_config`` was never
+                attn-resolved, so ``create_causal_mask`` returned no mask), and
+                loading them with the overlay enabled would evaluate them under
+                an attention pattern they never saw. A freshly constructed
+                configuration defaults to ``True``.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -244,6 +261,16 @@ class SltConfig(PretrainedConfig):
         self.ctc_loss_weight = float(ctc_loss_weight)
         self.ctc_vocab_size = ctc_vocab_size
         self.ctc_blank_id = ctc_blank_id
+
+        if video_bidirectional_attention is None:
+            # A deserialized configuration always carries ``transformers_version``;
+            # a configuration built in code never does. Checkpoints written before
+            # this field existed therefore keep the behaviour they were trained
+            # with, while new experiments opt in by default.
+            video_bidirectional_attention = "transformers_version" not in kwargs
+        if not isinstance(video_bidirectional_attention, bool):
+            raise TypeError("video_bidirectional_attention must be a bool or None")
+        self.video_bidirectional_attention = video_bidirectional_attention
 
         text_hidden_size = self.get_text_config().hidden_size
         if hidden_size is not None and hidden_size != text_hidden_size:

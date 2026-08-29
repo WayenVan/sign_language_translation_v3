@@ -99,6 +99,18 @@ class SltModel(PreTrainedModel, GenerationMixin):
     # _tied_weights_keys = {"llm.lm_head.weight": "model.embed_tokens.weight"}
     _keep_in_fp32_modules = ["visual_adapter"]
 
+    # The bidirectional video-token overlay is an arbitrary 4D mask. SDPA and
+    # FlexAttention can express one; FlashAttention's kernel API only knows
+    # "causal + varlen padding", and its mask builder ignores the mask function
+    # outright (``masking_utils.flash_attention_mask``), which would silently
+    # degrade the model to plain causal attention. Declaring the capability here
+    # makes Transformers reject an unusable request at load time instead.
+    _supports_sdpa = True
+    _supports_flex_attn = True
+    _supports_flash_attn = False
+    # Attention implementations whose mask builder can carry the overlay.
+    _BIDIRECTIONAL_MASK_IMPLEMENTATIONS = ("sdpa", "eager", "flex_attention")
+
     def __init__(
         self,
         config: SltConfig,
@@ -184,6 +196,20 @@ class SltModel(PreTrainedModel, GenerationMixin):
             llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
             self.llm = llm_cls._from_config(config.llm_config)
 
+        # Keep exactly one configuration object for the language model.
+        # ``from_pretrained_components`` builds the LLM from its own hub config,
+        # which leaves ``config.llm_config`` as an object no model ever
+        # instantiated: runtime-resolved fields such as ``_attn_implementation``
+        # stay unset on it. Since ``forward`` builds the attention mask from
+        # ``config.get_text_config()`` while the LLM dispatches its kernel from
+        # ``llm.config``, two objects mean the mask and the kernel can disagree.
+        # Transformers itself compares these by identity (``modeling_utils``
+        # ``set_attn_implementation``), so bind them together here.
+        self.config.llm_config = self.llm.config
+        # Re-run the setter so this config and its sub-config agree on whatever
+        # the LLM actually resolved.
+        self.config._attn_implementation = self.llm.config._attn_implementation
+
         self._configure_generation()
 
         # Visual-backbone freezing is owned by each backbone implementation so
@@ -250,6 +276,110 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # NOTE: tie the weights when using LoRA initialization
         if config.llm_lora:
             self._register_llm_tied_weights()
+
+        # Set once by the first forward that checks the materialized mask.
+        self._bidirectional_mask_validated = False
+        self._validate_attention_support()
+
+    @property
+    def text_config(self):
+        """Config that drives both the LLM attention dispatch and mask creation.
+
+        ``__init__`` binds ``config.llm_config`` to ``llm.config``, so both
+        routes reach the same object. Reading it through the language model
+        keeps the invariant visible at the one place where a mismatch matters.
+        """
+        return self.llm.config.get_text_config()
+
+    def _validate_attention_support(self) -> None:
+        """Reject at construction an attention that cannot carry the overlay."""
+        if not self.config.video_bidirectional_attention:
+            return
+        implementation = self.text_config._attn_implementation
+        if implementation not in self._BIDIRECTIONAL_MASK_IMPLEMENTATIONS:
+            raise ValueError(
+                "video_bidirectional_attention=True needs an attention "
+                "implementation whose mask builder can carry a custom mask "
+                f"({', '.join(self._BIDIRECTIONAL_MASK_IMPLEMENTATIONS)}), but "
+                f"the language model resolved to {implementation!r}. Load with "
+                'attn_implementation="sdpa" (or "flex_attention"), or set '
+                "video_bidirectional_attention=False."
+            )
+
+    @staticmethod
+    def _mask_allows(causal_mask, batch_index, query_index, key_index, device):
+        """Read one entry of a materialized mask, whatever form it takes."""
+        # FlexAttention returns a BlockMask, which carries the predicate itself
+        # rather than a dense tensor.
+        if hasattr(causal_mask, "mask_mod"):
+            indices = [
+                torch.tensor(value, device=device)
+                for value in (batch_index, 0, query_index, key_index)
+            ]
+            return bool(causal_mask.mask_mod(*indices))
+        entry = causal_mask[batch_index, 0, query_index, key_index]
+        if entry.dtype == torch.bool:
+            return bool(entry)
+        # Eager masks are additive: blocked positions hold the dtype minimum.
+        return bool(entry > torch.finfo(entry.dtype).min / 2)
+
+    def _validate_bidirectional_mask(self, causal_mask, token_type_ids) -> None:
+        """Check the overlay actually survived into the materialized mask.
+
+        Only called for a prefill that requested the overlay. The ``None`` check
+        runs every time, because ``_attn_implementation`` can still be changed
+        after construction. The structural check runs once per model, in the
+        spirit of ``CRadioV4Backbone._validate_inputs``, since reading mask
+        entries synchronizes the accelerator.
+        """
+        if causal_mask is None:
+            raise RuntimeError(
+                "The bidirectional video attention mask was requested but "
+                "create_causal_mask() returned None, so the language model "
+                "would silently fall back to plain causal attention -- and to "
+                "no padding mask at all. Transformers early-exits mask creation "
+                "when the config driving it carries an attention implementation "
+                "it cannot build a custom mask for; here it resolved to "
+                f"{self.text_config._attn_implementation!r}."
+            )
+        if self._bidirectional_mask_validated:
+            return
+
+        # A non-None mask is not enough: the FlashAttention builder returns the
+        # 2D padding mask and drops the overlay entirely. Verify that a
+        # video -> later-video pair is open while video -> later-text is not.
+        for batch_index in range(token_type_ids.shape[0]):
+            row = token_type_ids[batch_index]
+            video_positions = (row == 1).nonzero(as_tuple=True)[0]
+            if video_positions.numel() < 2:
+                continue
+            query_index = int(video_positions[0])
+            key_index = int(video_positions[-1])
+            later_text = (row[key_index + 1 :] == 0).nonzero(as_tuple=True)[0]
+            if later_text.numel() == 0:
+                continue
+            text_index = key_index + 1 + int(later_text[0])
+
+            device = token_type_ids.device
+            sees_later_video = self._mask_allows(
+                causal_mask, batch_index, query_index, key_index, device
+            )
+            sees_later_text = self._mask_allows(
+                causal_mask, batch_index, query_index, text_index, device
+            )
+            if not sees_later_video or sees_later_text:
+                raise RuntimeError(
+                    "The materialized attention mask does not implement "
+                    "bidirectional video attention: video token "
+                    f"{query_index} -> video token {key_index} is "
+                    f"{'open' if sees_later_video else 'BLOCKED'} and video "
+                    f"token {query_index} -> text token {text_index} is "
+                    f"{'OPEN' if sees_later_text else 'blocked'}. Expected "
+                    "open/blocked. attn_implementation="
+                    f"{self.text_config._attn_implementation!r}."
+                )
+            self._bidirectional_mask_validated = True
+            return
 
     def _register_llm_tied_weights(self):
         """Register the actual embedding/head paths after PEFT wraps the LLM."""
@@ -924,7 +1054,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # Generation may have already converted the attention mask into a mapping.
         if not isinstance(causal_mask_mapping := attention_mask, dict):
             mask_kwargs = {
-                "config": self.config.get_text_config(),
+                "config": self.text_config,
                 "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
                 "past_key_values": past_key_values,
@@ -951,7 +1081,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
 
             # Allow bidirectional attention between video tokens during prefill.
-            if token_type_ids is not None and is_prefill:
+            # Decoding steps need no overlay: the single new query token only
+            # attends to the past, and the video block was already resolved
+            # bidirectionally when the cache was filled.
+            wants_bidirectional = (
+                token_type_ids is not None
+                and is_prefill
+                and self.config.video_bidirectional_attention
+            )
+            if wants_bidirectional:
                 mask_kwargs["or_mask_function"] = token_type_ids_mask_function(
                     token_type_ids.to(cache_position.device),
                 )
@@ -962,15 +1100,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
                         )
                     )
 
-            causal_mask_mapping = {
-                "full_attention": create_causal_mask(**mask_kwargs),
-            }
+            full_attention_mask = create_causal_mask(**mask_kwargs)
+            if wants_bidirectional:
+                self._validate_bidirectional_mask(full_attention_mask, token_type_ids)
+            causal_mask_mapping = {"full_attention": full_attention_mask}
             if self.has_sliding_layers:
-                causal_mask_mapping["sliding_attention"] = (
-                    create_sliding_window_causal_mask(
-                        **sliding_mask_kwargs,
-                    )
+                sliding_attention_mask = create_sliding_window_causal_mask(
+                    **sliding_mask_kwargs,
                 )
+                if wants_bidirectional:
+                    self._validate_bidirectional_mask(
+                        sliding_attention_mask, token_type_ids
+                    )
+                causal_mask_mapping["sliding_attention"] = sliding_attention_mask
 
         outputs = self.llm(
             inputs_embeds=inputs_embeds,
