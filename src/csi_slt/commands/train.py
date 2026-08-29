@@ -4,6 +4,7 @@ import os
 
 import hydra
 import torch
+from accelerate.utils import broadcast_object_list
 from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer, set_seed
@@ -18,6 +19,7 @@ from csi_slt.engine.trainability import (
     apply_trainability_plan,
 )
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
+from csi_slt.utils.checkpoint_verification import verify_model_checkpoint
 from csi_slt.utils.generation_config import merge_generation_config
 
 
@@ -169,6 +171,44 @@ def main(cfg: DictConfig) -> None:
         trainer.evaluate()
     if training_args.do_train:
         trainer.train()
+        if OmegaConf.select(
+            cfg, "engine.verify_checkpoint_roundtrip", default=False
+        ):
+            # All workers must remain alive while rank 0 reloads and compares.
+            trainer.accelerator.wait_for_everyone()
+            verification_error = None
+            if trainer.accelerator.is_main_process:
+                try:
+                    checkpoint_dir = os.path.join(
+                        training_args.output_dir,
+                        f"checkpoint-{trainer.state.global_step}",
+                    )
+                    if not os.path.isdir(checkpoint_dir):
+                        raise FileNotFoundError(
+                            "Checkpoint round-trip verification requested, but the "
+                            f"final checkpoint does not exist: {checkpoint_dir}"
+                        )
+                    report_path = os.path.join(
+                        training_args.output_dir,
+                        "checkpoint_roundtrip_verification.json",
+                    )
+                    report = verify_model_checkpoint(
+                        trainer.accelerator.unwrap_model(trainer.model),
+                        checkpoint_dir,
+                        report_path=report_path,
+                    )
+                    print(
+                        "PASS: checkpoint reload is bitwise identical to the "
+                        f"in-memory model ({report['tensors_checked']} tensors). "
+                        f"Report: {report_path}"
+                    )
+                except Exception as error:
+                    verification_error = f"{type(error).__name__}: {error}"
+
+            status = [verification_error]
+            broadcast_object_list(status, from_process=0)
+            if status[0] is not None:
+                raise RuntimeError(status[0])
     if training_args.do_predict:
         predictions = trainer.predict(
             test_dataset=datamodule.test_dataset,
