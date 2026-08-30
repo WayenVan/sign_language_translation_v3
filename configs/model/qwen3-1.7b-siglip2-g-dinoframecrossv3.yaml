@@ -7,7 +7,6 @@ config:
   # Adapter-side temporal position of each visual token, added before the
   # LLM applies its own RoPE: learned (trainable table) | none | sincos.
   visual_position_embedding_type: learned
-  attention_diversity_loss_weight: 0.001
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: siglip2
   visual_backbone_config:

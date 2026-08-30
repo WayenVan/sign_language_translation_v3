@@ -1,4 +1,3 @@
-import pytest
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from csi_slt.configuration_slt.configuration import SltConfig
@@ -52,32 +51,18 @@ def test_retired_dsid_config_keys_are_ignored():
         assert not hasattr(config, key)
 
 
-def test_attention_diversity_loss_weight_is_configurable():
+def test_retired_semantic_encoder_and_diversity_keys_are_ignored():
     config = SltConfig(
         llm_model_name_or_path="Qwen/Qwen3-test",
         llm_config=_llm_config(),
+        visual_semantic_encoder_type="labse",
+        visual_semantic_encoder_config={"encoder": {"id": "test"}},
         attention_diversity_loss_weight=0.01,
     )
 
-    assert config.attention_diversity_loss_weight == 0.01
-
-
-def test_visual_semantic_encoder_is_disabled_by_default():
-    config = SltConfig(
-        llm_model_name_or_path="Qwen/Qwen3-test",
-        llm_config=_llm_config(),
-    )
-
-    assert config.visual_semantic_encoder_type is None
-    assert config.visual_semantic_encoder_config == {}
-
-
-@pytest.mark.parametrize("weight", (-0.1, True, "0.001"))
-def test_attention_diversity_loss_weight_rejects_invalid_values(weight):
-    error = ValueError if weight == -0.1 else TypeError
-    with pytest.raises(error, match="attention_diversity_loss_weight"):
-        SltConfig(
-            llm_model_name_or_path="Qwen/Qwen3-test",
-            llm_config=_llm_config(),
-            attention_diversity_loss_weight=weight,
-        )
+    for key in (
+        "visual_semantic_encoder_type",
+        "visual_semantic_encoder_config",
+        "attention_diversity_loss_weight",
+    ):
+        assert not hasattr(config, key)

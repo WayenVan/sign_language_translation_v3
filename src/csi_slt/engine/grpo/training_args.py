@@ -48,12 +48,6 @@ class SltGRPOConfig(GRPOConfig):
             "help": "Preserve videos, language metadata, and reward columns."
         },
     )
-    slt_disable_auxiliary_losses: bool = field(
-        default=True,
-        metadata={
-            "help": "Require D-SID and attention-diversity losses to be disabled."
-        },
-    )
     slt_use_internal_lora_reference: bool = field(
         default=False,
         metadata={

@@ -6,9 +6,9 @@ from torch import nn
 import csi_slt.commands.train as train_command
 from csi_slt.commands.train import cast_module_dtype, initialize_model
 from csi_slt.engine.trainability import (
-    ComponentTrainabilityPlan,
     LlmTrainabilityPlan,
     SltTrainabilityPlan,
+    VisualAdapterTrainabilityPlan,
     VisualBackboneTrainabilityPlan,
     apply_trainability_plan,
 )
@@ -26,7 +26,6 @@ class _ModelWithLoRA(nn.Module):
         self.visual_backbone.lora_A = nn.Linear(4, 2, bias=False)
         self.visual_backbone.lora_B = nn.Linear(2, 4, bias=False)
         self.visual_adapter = nn.Linear(3, 4)
-        self.visual_semantic_encoder = nn.Linear(4, 4)
         self.ctc_head = nn.Linear(4, 8)
         self.visual_position_embedding = nn.Embedding(16, 4)
         self.start_video_embds = nn.Parameter(torch.zeros(1, 4))
@@ -73,7 +72,7 @@ def test_trainability_plan_can_select_only_visual_adapter():
     trainable_count = apply_trainability_plan(
         model,
         SltTrainabilityPlan(
-            visual_adapter=ComponentTrainabilityPlan(mode="full")
+            visual_adapter=VisualAdapterTrainabilityPlan(mode="full")
         ),
     )
 
@@ -86,6 +85,62 @@ def test_trainability_plan_can_select_only_visual_adapter():
         for name, parameter in model.named_parameters()
         if not name.startswith("visual_adapter.")
     )
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "expected_training"),
+    [("eval", False), ("train", True)],
+)
+def test_slt_model_applies_llm_runtime_mode_independently_of_gradients(
+    runtime_mode, expected_training
+):
+    model = object.__new__(train_command.SltModel)
+    nn.Module.__init__(model)
+    model.llm = nn.Sequential(nn.Dropout(0.5), nn.Linear(2, 2))
+    model.llm_runtime_mode = "eval"
+
+    model.set_llm_runtime_mode(runtime_mode)
+    model.train()
+
+    assert model.training
+    assert model.llm.training is expected_training
+
+    model.requires_grad_(False)
+    model.llm[-1].weight.requires_grad_(True)
+    model.llm(torch.ones(1, 2)).sum().backward()
+    assert model.llm[-1].weight.grad is not None
+
+    model.eval()
+    assert not model.llm.training
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "expected_training"),
+    [("eval", False), ("train", True)],
+)
+def test_slt_model_applies_visual_adapter_runtime_mode(
+    runtime_mode, expected_training
+):
+    model = object.__new__(train_command.SltModel)
+    nn.Module.__init__(model)
+    model.llm = nn.Linear(2, 2)
+    model.llm_runtime_mode = "eval"
+    model.visual_adapter = nn.Sequential(nn.Dropout(0.5), nn.Linear(2, 2))
+    model.visual_adapter_runtime_mode = "eval"
+
+    model.set_visual_adapter_runtime_mode(runtime_mode)
+    model.train()
+
+    assert model.training
+    assert model.visual_adapter.training is expected_training
+
+    model.visual_adapter.requires_grad_(False)
+    model.visual_adapter[-1].weight.requires_grad_(True)
+    model.visual_adapter(torch.ones(1, 2)).sum().backward()
+    assert model.visual_adapter[-1].weight.grad is not None
+
+    model.eval()
+    assert not model.visual_adapter.training
 
 
 def test_cast_module_dtype_casts_floating_parameters():

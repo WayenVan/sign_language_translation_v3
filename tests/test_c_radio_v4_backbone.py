@@ -4,6 +4,11 @@ import pytest
 import torch
 from torch import nn
 
+from csi_slt.engine.trainability import (
+    SltTrainabilityPlan,
+    VisualBackboneTrainabilityPlan,
+    apply_trainability_plan,
+)
 from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import (
     CRadioV4Backbone,
 )
@@ -51,12 +56,8 @@ def test_default_layers_start_as_uniform_attention_fusion():
             "aggregation": "sparse",
         }
     ]
-    torch.testing.assert_close(
-        output.visual_features, torch.full((2, 2, 3), -2.5)
-    )
-    torch.testing.assert_close(
-        output.pooled_visual_features, torch.full((2, 3), -2.5)
-    )
+    torch.testing.assert_close(output.visual_features, torch.full((2, 2, 3), -2.5))
+    torch.testing.assert_close(output.pooled_visual_features, torch.full((2, 3), -2.5))
     assert output.visual_length is lengths
     assert encoder.radio_model.weight.requires_grad is False
     assert backbone.summary_layer_fusion.layer_bias.requires_grad is True
@@ -83,16 +84,19 @@ def test_frozen_encoder_stays_in_eval_while_fusion_trains():
     assert encoder.training is False
 
 
-def test_encoder_stays_in_train_mode_after_trainable_adapter_is_added():
+def test_trainable_adapter_does_not_implicitly_change_runtime_mode():
     encoder = _FakeEncoder()
     backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=encoder)
     encoder.radio_model.lora_adapter = nn.Linear(1, 1, bias=False)
 
     backbone.train()
 
-    assert encoder.training is True
+    assert encoder.training is False
     assert encoder.radio_model.weight.requires_grad is False
     assert encoder.radio_model.lora_adapter.weight.requires_grad is True
+
+    backbone.set_runtime_mode("train")
+    assert encoder.training is True
 
 
 def test_single_output_layer_remains_supported():
@@ -106,39 +110,72 @@ def test_single_output_layer_remains_supported():
     assert backbone.summary_layer_fusion is None
     assert backbone.feature_layer_fusion is None
     assert output.extras is None
-    torch.testing.assert_close(
-        output.visual_features, torch.full((1, 2, 3), -2.0)
-    )
+    torch.testing.assert_close(output.visual_features, torch.full((1, 2, 3), -2.0))
 
 
-def test_encoder_can_be_unfrozen_by_backbone_config():
+def test_construction_starts_encoder_frozen_and_eval():
     encoder = _FakeEncoder()
-    backbone = CRadioV4Backbone(
-        {"id": "fake", "freeze_visual_encoder": False},
-        c_radio_v4=encoder,
-    )
-
-    assert encoder.radio_model.weight.requires_grad is True
-
-
-def test_apply_freeze_policy_is_idempotent_and_supports_policy_changes():
-    encoder = _FakeEncoder()
-    backbone = CRadioV4Backbone(
+    CRadioV4Backbone(
         {"id": "fake", "output_layer": [-1]},
         c_radio_v4=encoder,
     )
 
-    backbone.train()
-    backbone.apply_freeze_policy()
     assert not encoder.training
     assert all(not parameter.requires_grad for parameter in encoder.parameters())
 
-    backbone.freeze_visual_encoder = False
-    backbone.apply_freeze_policy()
-    assert encoder.training
-    assert all(parameter.requires_grad for parameter in encoder.parameters())
-    backbone.train()
-    assert encoder.training is True
+
+def test_retired_freeze_visual_encoder_config_is_ignored(caplog):
+    encoder = _FakeEncoder()
+
+    CRadioV4Backbone(
+        {"id": "fake", "freeze_visual_encoder": False},
+        c_radio_v4=encoder,
+    )
+
+    assert "Ignoring retired C-RADIO freeze_visual_encoder=False" in caplog.text
+    assert not encoder.training
+    assert all(not parameter.requires_grad for parameter in encoder.parameters())
+
+
+def test_runtime_mode_is_validated():
+    backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=_FakeEncoder())
+
+    with pytest.raises(ValueError, match="runtime_mode"):
+        backbone.set_runtime_mode("auto")
+
+
+@pytest.mark.parametrize(
+    ("runtime_mode", "expected_training"),
+    [("eval", False), ("train", True)],
+)
+def test_engine_plan_controls_lora_runtime_mode(runtime_mode, expected_training):
+    backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=_FakeEncoder())
+    backbone.visual_encoder.radio_model.lora_adapter = nn.Linear(1, 1, bias=False)
+
+    model = nn.Module()
+    model.llm = nn.Linear(1, 1)
+    model.visual_backbone = backbone
+    model.visual_adapter = nn.Linear(1, 1)
+    model.ctc_head = None
+    model.visual_position_embedding = None
+
+    apply_trainability_plan(
+        model,
+        SltTrainabilityPlan(
+            visual_backbone=VisualBackboneTrainabilityPlan(
+                mode="lora", runtime_mode=runtime_mode
+            )
+        ),
+    )
+    model.train()
+
+    encoder = backbone.visual_encoder
+    assert encoder.training is expected_training
+    assert not encoder.radio_model.weight.requires_grad
+    assert encoder.radio_model.lora_adapter.weight.requires_grad
+
+    encoder.radio_model.lora_adapter(torch.ones(1, 1)).sum().backward()
+    assert encoder.radio_model.lora_adapter.weight.grad is not None
 
 
 @pytest.mark.parametrize("output_layer", [[], [-1, -1], [-1, "-2"], True])

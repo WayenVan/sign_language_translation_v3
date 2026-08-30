@@ -77,4 +77,3 @@ engine:
     use_liger_kernel: false
     beta: 0.0
     disable_dropout: true
-    slt_disable_auxiliary_losses: true

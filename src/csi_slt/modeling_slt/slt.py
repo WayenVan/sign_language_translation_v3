@@ -34,7 +34,6 @@ from .misc import (
 from .registry import (
     VISUAL_ADAPTERS,
     VISUAL_BACKBONES,
-    VISUAL_SEMANTIC_ENCODERS,
 )
 
 logger = logging.get_logger(__name__)
@@ -117,7 +116,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         config: SltConfig,
         llm: Optional[nn.Module] = None,
         visual_backbone: Optional[nn.Module] = None,
-        visual_semantic_encoder: Optional[nn.Module] = None,
     ):
         super().__init__(config)
         for component_name, component in (
@@ -140,7 +138,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # Always construct the model structure here to support meta-device models.
         self.llm = llm
         self.visual_backbone = visual_backbone
-        self.visual_semantic_encoder = visual_semantic_encoder
+        # Training-time policy owns this value. Start from deterministic eval
+        # so standalone construction is safe before a plan is applied.
+        self.llm_runtime_mode = "eval"
+        self.visual_adapter_runtime_mode = "eval"
 
         # Initialize the visual backbone when it was not supplied by the caller.
         if self.visual_backbone is None:
@@ -162,35 +163,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 f"{list(VISUAL_ADAPTERS.keys())}"
             )
         self.visual_adapter = adapter_cls(**config.visual_adapter_kwargs)
-
-        semantic_encoder_type = config.visual_semantic_encoder_type
-        if semantic_encoder_type is None:
-            if self.visual_semantic_encoder is not None:
-                raise ValueError(
-                    "visual_semantic_encoder was supplied while "
-                    "visual_semantic_encoder_type is None"
-                )
-        else:
-            semantic_encoder_cls = VISUAL_SEMANTIC_ENCODERS.get(semantic_encoder_type)
-            if semantic_encoder_cls is None:
-                raise ValueError(
-                    f"Unsupported visual semantic encoder type: "
-                    f"{semantic_encoder_type}. Supported types are: "
-                    f"{list(VISUAL_SEMANTIC_ENCODERS.keys())}"
-                )
-            if self.visual_semantic_encoder is None:
-                self.visual_semantic_encoder = semantic_encoder_cls.from_encoder_config(
-                    config.visual_semantic_encoder_config
-                )
-            semantic_output_dim = getattr(
-                self.visual_semantic_encoder, "output_dim", None
-            )
-            if semantic_output_dim != config.hidden_size:
-                raise ValueError(
-                    "visual semantic encoder output_dim must match the LLM "
-                    f"hidden size ({config.hidden_size}), got "
-                    f"{semantic_output_dim}"
-                )
 
         # Initialize the language model when it was not supplied by the caller.
         if self.llm is None:
@@ -293,6 +265,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
         self.config.is_decoder = True
         self.post_init()
 
+        # ``post_init`` initializes parameters but does not own module runtime
+        # modes. Keep a frozen/default LLM deterministic until the engine's
+        # explicit trainability plan selects otherwise.
+        self.set_llm_runtime_mode("eval")
+        self.set_visual_adapter_runtime_mode("eval")
+
         # NOTE: tie the weights when using LoRA initialization
         if config.llm_lora:
             self._register_llm_tied_weights()
@@ -310,6 +288,38 @@ class SltModel(PreTrainedModel, GenerationMixin):
         keeps the invariant visible at the one place where a mismatch matters.
         """
         return self.llm.config.get_text_config()
+
+    def train(self, mode: bool = True):
+        """Apply engine-selected LLM and visual-adapter runtime modes."""
+        super().train(mode)
+        # Whole-model eval always wins. During training, runtime mode remains
+        # independent of which base or LoRA parameters receive gradients.
+        self.llm.train(mode and self.llm_runtime_mode == "train")
+        visual_adapter = getattr(self, "visual_adapter", None)
+        if isinstance(visual_adapter, nn.Module):
+            visual_adapter.train(
+                mode and self.visual_adapter_runtime_mode == "train"
+            )
+        return self
+
+    def set_llm_runtime_mode(self, runtime_mode: str) -> None:
+        """Set Qwen train/eval behavior without changing requires_grad."""
+        if runtime_mode not in ("eval", "train"):
+            raise ValueError(
+                f"LLM runtime_mode must be 'eval' or 'train', got {runtime_mode!r}"
+            )
+        self.llm_runtime_mode = runtime_mode
+        self.llm.train(self.training and runtime_mode == "train")
+
+    def set_visual_adapter_runtime_mode(self, runtime_mode: str) -> None:
+        """Set visual-adapter train/eval behavior without changing gradients."""
+        if runtime_mode not in ("eval", "train"):
+            raise ValueError(
+                "Visual adapter runtime_mode must be 'eval' or 'train', got "
+                f"{runtime_mode!r}"
+            )
+        self.visual_adapter_runtime_mode = runtime_mode
+        self.visual_adapter.train(self.training and runtime_mode == "train")
 
     def _validate_attention_support(self) -> None:
         """Reject at construction an attention that cannot carry the overlay."""
@@ -462,7 +472,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         config: SltConfig,
         llm_dtype="auto",
         visual_backbone_dtype="auto",
-        visual_semantic_encoder_dtype="auto",
     ):
         visual_backbone_cls = VISUAL_BACKBONES.get(config.visual_backbone_type, None)
         if visual_backbone_cls is None:
@@ -474,24 +483,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_backbone = visual_backbone_cls.from_pretrained_backbone(
             config.visual_backbone_config, dtype=visual_backbone_dtype
         )
-
-        visual_semantic_encoder = None
-        semantic_encoder_type = config.visual_semantic_encoder_type
-        if semantic_encoder_type is not None:
-            semantic_encoder_cls = VISUAL_SEMANTIC_ENCODERS.get(semantic_encoder_type)
-            if semantic_encoder_cls is None:
-                raise ValueError(
-                    f"Unsupported visual semantic encoder type: "
-                    f"{semantic_encoder_type}. Supported types are: "
-                    f"{list(VISUAL_SEMANTIC_ENCODERS.keys())}"
-                )
-            visual_semantic_encoder = semantic_encoder_cls.from_pretrained_encoder(
-                config.visual_semantic_encoder_config,
-                dtype=visual_semantic_encoder_dtype,
-            )
-            # Save the source architecture so SltModel.from_pretrained can
-            # reconstruct the semantic encoder without contacting its source.
-            config.visual_semantic_encoder_config = dict(visual_semantic_encoder.config)
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
         llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
@@ -511,7 +502,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             config=config,
             llm=llm,
             visual_backbone=visual_backbone,
-            visual_semantic_encoder=visual_semantic_encoder,
         )
 
         # fmt: on
@@ -523,20 +513,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
         peft_config: LoraConfig,
         llm_dtype="auto",
         visual_backbone_dtype="auto",
-        visual_semantic_encoder_dtype="auto",
     ):
         model = cls.from_pretrained_components(
             config=config,
             llm_dtype=llm_dtype,
             visual_backbone_dtype=visual_backbone_dtype,
-            visual_semantic_encoder_dtype=visual_semantic_encoder_dtype,
         )
-
-        # --------------------------
-        # appli freze policy for visual encoder, let the encoder itself decide which parameters to freeze,
-        # so that the trainable parameters are not frozen accidentally.
-        # -----------------------
-        model.visual_backbone.apply_freeze_policy()
 
         if model.config.llm_lora:
             raise ValueError(
@@ -772,8 +754,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         visual_adapter_output: VisualAdapterOutput = self.visual_adapter(
             visual_backbone_output, permute_video_tokens=permute_video_tokens
         )  # [BT,  D]
-        if self.visual_semantic_encoder is not None:
-            visual_adapter_output = self.visual_semantic_encoder(visual_adapter_output)
 
         if return_visual_backbone_extras:
             return visual_adapter_output, visual_backbone_output.extras
@@ -785,7 +765,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         video: torch.Tensor,  # [BT, C, H, W]
         video_length: torch.Tensor,  # [B], length of each video in the batch
         permute_video_tokens: Optional[bool] = False,
-        return_visual_adapter_extras: bool = False,
         return_visual_backbone_extras: bool = False,
     ):
         batch_size = video_length.shape[0]
@@ -886,76 +865,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
             ctc_visual_features=ctc_visual_features,  # [sum(Lv), D]
             ctc_visual_lengths=ctc_visual_lengths,  # [B]
         )
-        if return_visual_adapter_extras and return_visual_backbone_extras:
-            return prepare_output, visual_output.extras, visual_backbone_extras
-        if return_visual_adapter_extras:
-            return prepare_output, visual_output.extras
         if return_visual_backbone_extras:
             return prepare_output, visual_backbone_extras
         return prepare_output
-
-    @staticmethod
-    def _compute_branch_attention_diversity_loss(
-        attention_weights: torch.Tensor,
-    ) -> torch.Tensor:
-        """Penalize overlap between queries within one attention branch.
-
-        Args:
-            attention_weights: Per-head probabilities shaped ``[G, H, N, S]``.
-        """
-        if attention_weights.ndim != 4:
-            raise ValueError(
-                "attention_weights must have shape [G, H, N, S], got "
-                f"{tuple(attention_weights.shape)}"
-            )
-        if attention_weights.shape[0] == 0 or attention_weights.shape[-1] == 0:
-            raise ValueError("attention batch and source dimensions must be non-empty")
-
-        num_queries = attention_weights.shape[2]
-        if num_queries < 2:
-            return attention_weights.sum() * 0.0
-
-        # [G, H, N, S] -> [G, N, S], then normalize each query distribution.
-        mean_attention = attention_weights.mean(dim=1)
-        normalized_attention = nn.functional.normalize(
-            mean_attention, p=2, dim=-1, eps=1e-12
-        )
-        query_similarity = torch.bmm(
-            normalized_attention, normalized_attention.transpose(1, 2)
-        )  # [G, N, N]
-        diagonal = query_similarity.diagonal(dim1=1, dim2=2).sum()
-        off_diagonal = query_similarity.sum() - diagonal
-        denominator = attention_weights.shape[0] * num_queries * (num_queries - 1)
-        return off_diagonal / denominator
-
-    @classmethod
-    def _compute_adapter_attention_diversity_loss(
-        cls,
-        adapter_extras: Optional[dict],
-    ) -> Optional[torch.Tensor]:
-        """Sum diversity loss over every attention branch exposed by an adapter."""
-        if not adapter_extras:
-            return None
-        attention_weights = [
-            adapter_extras[key]
-            for key in (
-                "temporal_attention_weights",
-                "patch_attention_weights",
-            )
-            if adapter_extras.get(key) is not None
-        ]
-        if not attention_weights:
-            return None
-        if not all(isinstance(weights, torch.Tensor) for weights in attention_weights):
-            raise TypeError("adapter attention weights must be torch.Tensor values")
-
-        return sum(
-            (
-                cls._compute_branch_attention_diversity_loss(weights)
-                for weights in attention_weights
-            ),
-            start=attention_weights[0].new_zeros(()),
-        )
 
     @staticmethod
     def _compute_causal_lm_loss(
@@ -1077,7 +989,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
         prepare_output = None
-        visual_adapter_extras = None
         visual_backbone_extras = None
         if inputs_embeds is None:
             if pixel_values is not None:
@@ -1086,19 +997,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     pixel_values,
                     pixel_values_length,
                     permute_video_tokens=permute_video_tokens,
-                    return_visual_adapter_extras=True,
                     return_visual_backbone_extras=(
                         information_request.visual_backbone_extras
                     ),
                 )
                 if information_request.visual_backbone_extras:
-                    (
-                        prepare_output,
-                        visual_adapter_extras,
-                        visual_backbone_extras,
-                    ) = visual_prepare_result
+                    prepare_output, visual_backbone_extras = visual_prepare_result
                 else:
-                    prepare_output, visual_adapter_extras = visual_prepare_result
+                    prepare_output = visual_prepare_result
                 inputs_embeds = prepare_output.inputs_embeds
             else:
                 assert input_ids.shape[1] == 1, (
@@ -1199,22 +1105,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
         loss = ce_loss
 
-        attention_diversity_loss = None
-        if (
-            loss is not None
-            and self.training
-            and self.config.attention_diversity_loss_weight > 0.0
-        ):
-            attention_diversity_loss = self._compute_adapter_attention_diversity_loss(
-                visual_adapter_extras
-            )
-            if attention_diversity_loss is not None:
-                loss = (
-                    loss
-                    + self.config.attention_diversity_loss_weight
-                    * attention_diversity_loss
-                )
-
         ctc_loss = None
         if (
             loss is not None
@@ -1251,32 +1141,17 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         logging_scalars = (
             {
-                # Final objective: CE + attention diversity (+ CTC).
+                # Final objective: CE (+ CTC).
                 "main_loss": loss.detach(),
                 "ce_loss": ce_loss.detach(),
                 # CE has no configurable weight (implicitly 1.0), unlike the
-                # attention-diversity/CTC terms below, so this equals ce_loss.
-                # Logged anyway for parity with those terms' raw/weighted pairs.
+                # CTC term below, so this equals ce_loss. Logged anyway for
+                # parity with that term's raw/weighted pair.
                 "ce_weighted_loss": ce_loss.detach(),
             }
             if loss is not None
             else None
         )
-        if attention_diversity_loss is not None:
-            weighted_attention_diversity_loss = (
-                self.config.attention_diversity_loss_weight * attention_diversity_loss
-            )
-            logging_scalars.update(
-                {
-                    "attention_diversity_loss": attention_diversity_loss.detach(),
-                    "attention_diversity_weighted_loss": (
-                        weighted_attention_diversity_loss.detach()
-                    ),
-                    "attention_diversity_loss_weight": loss.new_tensor(
-                        self.config.attention_diversity_loss_weight
-                    ),
-                }
-            )
         if ctc_loss is not None:
             weighted_ctc_loss = self.config.ctc_loss_weight * ctc_loss
             logging_scalars.update(

@@ -62,9 +62,6 @@ class SltConfig(PretrainedConfig):
         visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
-        visual_semantic_encoder_type: Optional[str] = None,
-        visual_semantic_encoder_config: Optional[Dict[str, Any]] = None,
-        attention_diversity_loss_weight: float = 0.000,
         ctc_enabled: bool = False,
         ctc_loss_weight: float = 0.0,
         ctc_vocab_size: Optional[int] = None,
@@ -120,14 +117,6 @@ class SltConfig(PretrainedConfig):
                 adapter constructor. Its output width must match ``hidden_size``
                 and its temporal downsampling must agree with
                 ``video_token_scale``.
-            visual_semantic_encoder_type: Optional semantic-encoder registry
-                key. ``None`` preserves the direct adapter-to-LLM path.
-            visual_semantic_encoder_config: Configuration for the optional
-                semantic encoder and its output projector.
-            attention_diversity_loss_weight: Coefficient applied to the sum of
-                static- and motion-branch query attention diversity losses.
-                It is active only when the visual adapter returns both sets of
-                attention weights. A value of zero disables its contribution.
             ctc_enabled: Whether the model builds and trains a CTC head over
                 the visual tokens. When ``False`` (the default) no CTC head is
                 constructed and ``ctc_loss_weight``/``ctc_vocab_size`` are
@@ -189,6 +178,9 @@ class SltConfig(PretrainedConfig):
             "dsid_js_tau",
             "dsid_warmup_ratio",
             "dsid_decay_ratio",
+            "visual_semantic_encoder_type",
+            "visual_semantic_encoder_config",
+            "attention_diversity_loss_weight",
         ):
             kwargs.pop(retired_key, None)
 
@@ -226,28 +218,6 @@ class SltConfig(PretrainedConfig):
         self.visual_adapter_kwargs = (
             visual_adapter_kwargs if visual_adapter_kwargs is not None else {}
         )
-        if visual_semantic_encoder_type is not None and not isinstance(
-            visual_semantic_encoder_type, str
-        ):
-            raise TypeError("visual_semantic_encoder_type must be a string or None")
-        if visual_semantic_encoder_config is not None and not isinstance(
-            visual_semantic_encoder_config, dict
-        ):
-            raise TypeError("visual_semantic_encoder_config must be a dictionary")
-        self.visual_semantic_encoder_type = visual_semantic_encoder_type
-        self.visual_semantic_encoder_config = (
-            dict(visual_semantic_encoder_config)
-            if visual_semantic_encoder_config is not None
-            else {}
-        )
-        if isinstance(attention_diversity_loss_weight, bool) or not isinstance(
-            attention_diversity_loss_weight, (int, float)
-        ):
-            raise TypeError("attention_diversity_loss_weight must be a real number")
-        if attention_diversity_loss_weight < 0.0:
-            raise ValueError("attention_diversity_loss_weight must be non-negative")
-        self.attention_diversity_loss_weight = float(attention_diversity_loss_weight)
-
         if not isinstance(ctc_enabled, bool):
             raise TypeError("ctc_enabled must be a bool")
         if isinstance(ctc_loss_weight, bool) or not isinstance(

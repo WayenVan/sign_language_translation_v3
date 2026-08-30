@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen
+#SBATCH --job-name=slt_qwen3_4b_stpool_baseline
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
-  export WANDB_TAGS="visual-pe-ablation"
+  export WANDB_TAGS="spatiotemporal-pooled-baseline,backbone-layer-probe"
   REPORT_TO=wandb
 fi
 
@@ -69,56 +69,43 @@ echo "DATASET_PATH=$DATASET_PATH"
 # line eats that line's trailing backslash too and splits the command).
 CMD_ARGS=(
   # FSDP2: shards the frozen LLM across the job's GPUs. Comment this line out
-  # to fall back to plain DDP for the small (1.7B) models.
+  # to fall back to plain DDP. Qwen3-4B fits on each L40S for this frozen-base
+  # probe, while DDP keeps the execution path simpler than FSDP2.
   # --config_file="$SCRIPT_DIR/configs/accelerate/fsdp2.yaml"
   --num_processes=2
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-micro
-  # Plain causal attention: video tokens attend only to the past, exactly like
-  # every run before the mask fix (205ede8).
+  model=qwen3-4b-cradio-l-spatiotemporal-pooled-linear
+  # Keep these two ablation choices explicit in the launch command even though
+  # the model config already sets them, so a run log records them unambiguously.
+  # Plain causal attention: visual tokens attend only to the past in Qwen.
   model.config.video_bidirectional_attention=false
-  # Drop the adapter-side learned position table entirely and leave the temporal
-  # order of the visual tokens to the LLM's own RoPE. The alternatives are
-  # "learned" (the default, a trainable 1024 x 2048 table) and "sincos" (a fixed
-  # sinusoidal table with unit-norm rows).
+  # Construct no adapter-side visual-position module. Temporal order between
+  # pooled windows is represented only by Qwen's own RoPE.
   model.config.visual_position_embedding_type=none
-  # No LLM or visual-backbone LoRA is injected in this adapter-only run.
+  # Layer-probe policy: no LoRA is injected; freeze both pretrained towers and
+  # train only the new baseline adapter plus the randomly initialized CTC head.
   peft=none
   engine.trainability.llm.mode=frozen
+  engine.trainability.llm.runtime_mode=eval
   engine.trainability.visual_backbone.mode=frozen
+  engine.trainability.visual_backbone.runtime_mode=eval
   engine.trainability.visual_adapter.mode=full
-  # Keep every other newly introduced SLT parameter trainable as well.
-  engine.trainability.visual_semantic_encoder.mode=full
+  engine.trainability.visual_adapter.runtime_mode=train
   engine.trainability.ctc_head.mode=full
-  # A no-op while visual_position_embedding_type=none: that mode constructs no
-  # position module at all. Kept so the plan stays complete and portable.
-  engine.trainability.visual_position_embedding.mode=full
-  engine.trainability.visual_boundary_embeddings.mode=full
-  engine.trainability.visual_scale.mode=full
-  # The adapter and all newly introduced SLT parameters use the same LR.
+  # These components are frozen to prevent them from absorbing layer-specific
+  # differences. visual_position_embedding is absent in "none" mode, but its
+  # explicit frozen plan keeps all seven required plan entries unambiguous.
+  engine.trainability.visual_position_embedding.mode=frozen
+  engine.trainability.visual_boundary_embeddings.mode=frozen
+  engine.trainability.visual_scale.mode=frozen
+  # The adapter receives an explicit LR; the CTC head uses the default LR.
   engine.training_args.learning_rate=1e-4
   +engine.training_args.visual_adapter_learning_rate=1e-4
   # prompt=diverse_train
   prompt=fixed_prompt
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-micro-0830.224x224-ctc-de-causal-nopos
-  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-lite
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0829.224x224-ctc-de-causal
-  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
-  # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
-  # model=gemma4-12b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-gemma4-12b-cradio-l-dinoframecrossv28shuffle-0818.224x224-ctc
-  # model=qwen3-8b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-8b-cradio-l-dinoframecrossv28shuffle-0821.224x224-ctc
-  # model=qwen3-32b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-32b-cradio-l-dinoframecrossv28shuffle-0822.224x224-ctc
-  # model=qwen3-14b-cradio-l-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-14b-cradio-l-dinoframecrossv28shuffle-0822.224x224-ctc
-  # model=qwen3-14b-cradio-h-dinoframecrossv28shuffle
-  # engine.training_args.output_dir=outputs/v4.0-qwen3-14b-cradio-h-dinoframecrossv28shuffle-0823.224x224-ctc
+  engine.training_args.output_dir=outputs/v4.0-qwen3-4b-cradio-l-stpool-baseline-lm1-0830.224x224-ctc-de-causal-nopos
   engine.training_args.per_device_train_batch_size=2
   engine.training_args.per_device_eval_batch_size=1
   engine.training_args.dataloader_num_workers=6
@@ -131,7 +118,9 @@ CMD_ARGS=(
   # data=ph14t_*x224x224_qwen_multiling
   data=ph14t_*x224x224_qwen_single_language
   data.language=de
-  data.processor.video_token_scale=1.0
+  # The adapter averages every two frames and therefore emits T/2 tokens. This
+  # must match model.config.video_token_scale=0.5 exactly.
+  data.processor.video_token_scale=0.5
   data.data_root="$DATASET_PATH"
   data.processor.num_extra_video_tokens=2
   data.processor.video_processor.padding_to_multiple_of=4
@@ -140,11 +129,3 @@ CMD_ARGS=(
 )
 
 accelerate launch "${CMD_ARGS[@]}"
-
-# model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
-# accelerate launch --num_processes=2 --mixed_precision=fp16 \
-# engine.training_args.auto_output_root=./outputs/peft_ft # -m csi_slt.commands.train \
-# engine.training_args.dataloader_num_workers=10 # accelerate launch --num_processes=2 --mixed_precision=bf16 \
-# model.config.visual_adapter_kwargs.num_layers=4 \
-# model.config.video_token_scale=0.25 # model.config.visual_adapter_kwargs.use_temporal_shuffle=False \
-# model=qwen3-1.7b-cradio-l-dinoframecrossv2global \

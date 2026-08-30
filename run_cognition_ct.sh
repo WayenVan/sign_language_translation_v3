@@ -77,10 +77,16 @@ CMD_ARGS=(
   peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
   peft.visual_lora_config.r=4
   peft.visual_lora_config.lora_alpha=4
+  # C-RADIO stays in deterministic eval mode while LoRA receives gradients;
+  # make the disabled-dropout intent agree with the PEFT configuration.
+  peft.visual_lora_config.lora_dropout=0.0
   model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de//checkpoint-42000
   engine.trainability.llm.mode=frozen
+  engine.trainability.llm.runtime_mode=eval
   engine.trainability.visual_backbone.mode=lora
+  engine.trainability.visual_backbone.runtime_mode=eval
   engine.trainability.visual_adapter.mode=frozen
+  engine.trainability.visual_adapter.runtime_mode=eval
   prompt=fixed_prompt
   engine.training_args.num_train_epochs=50
   engine.training_args.learning_rate=1e-4

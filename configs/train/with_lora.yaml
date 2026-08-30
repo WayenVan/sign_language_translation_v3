@@ -14,10 +14,10 @@ hydra:
 
 engine:
   trainability:
-    llm: {mode: lora}
+    # Preserve standard LoRA training behavior, including configured dropout.
+    llm: {mode: lora, runtime_mode: train}
     visual_backbone: {mode: frozen}
-    visual_adapter: {mode: full}
-    visual_semantic_encoder: {mode: frozen}
+    visual_adapter: {mode: full, runtime_mode: train}
     ctc_head: {mode: frozen}
     visual_position_embedding: {mode: frozen}
     visual_boundary_embeddings: {mode: frozen}

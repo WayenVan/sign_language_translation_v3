@@ -1,7 +1,6 @@
 import torch
 
 from csi_slt.modeling_slt.output_utils import VisualBackboneOutput
-from csi_slt.modeling_slt.slt import SltModel
 from csi_slt.modeling_slt.visual_adapters.dinoframe_adapter_cross_v3 import (
     DINOFrameAdapterCrossV3,
 )
@@ -49,17 +48,6 @@ def test_v3_uses_one_patch_attention_pathway():
     assert adapter.query_bank.queries.shape == (1, 2, 12)
     assert not hasattr(adapter, "temporal_cross_attention")
     assert hasattr(adapter, "patch_cross_attention")
-
-
-def test_v3_patch_attention_supports_single_branch_diversity_loss():
-    attention = torch.softmax(torch.randn(2, 2, 3, 5), dim=-1)
-
-    loss = SltModel._compute_adapter_attention_diversity_loss(
-        {"patch_attention_weights": attention}
-    )
-
-    expected = SltModel._compute_branch_attention_diversity_loss(attention)
-    torch.testing.assert_close(loss, expected)
 
 
 def test_v3_even_window_uses_two_middle_cls_frames_as_residual():

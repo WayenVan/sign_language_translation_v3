@@ -168,17 +168,6 @@ class SltGRPOTrainer(GRPOTrainer):
             )
         if args is not None and getattr(args, "beta", 0.0) != 0.0:
             raise ValueError("The first SLT GRPO version requires beta=0.0")
-        if args is not None and getattr(args, "slt_disable_auxiliary_losses", True):
-            previous_diversity_weight = float(
-                model.config.attention_diversity_loss_weight
-            )
-            model.config.attention_diversity_loss_weight = 0.0
-            logger.warning(
-                "⚠️ slt_disable_auxiliary_losses=True: forced all SltModel "
-                "auxiliary losses off for GRPO "
-                "(attention_diversity_loss_weight: %s -> 0.0).",
-                previous_diversity_weight,
-            )
 
     @property
     def slt_processor(self) -> SignTranslationProcessor:

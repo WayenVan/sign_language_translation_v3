@@ -75,7 +75,6 @@ CMD_ARGS=(
   engine.trainability.llm.mode=frozen
   engine.trainability.visual_backbone.mode=frozen
   engine.trainability.visual_adapter.mode=full
-  engine.trainability.visual_semantic_encoder.mode=full
   engine.trainability.ctc_head.mode=full
   engine.trainability.visual_position_embedding.mode=full
   engine.trainability.visual_boundary_embeddings.mode=full

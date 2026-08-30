@@ -12,9 +12,10 @@ from typing import Any, Literal
 
 ComponentTrainabilityMode = Literal["frozen", "full"]
 LlmTrainabilityMode = Literal["frozen", "full", "lora"]
-VisualBackboneTrainabilityMode = Literal[
-    "frozen", "last_n_layers", "full", "lora"
-]
+LlmRuntimeMode = Literal["eval", "train"]
+VisualBackboneTrainabilityMode = Literal["frozen", "last_n_layers", "full", "lora"]
+VisualBackboneRuntimeMode = Literal["eval", "train"]
+VisualAdapterRuntimeMode = Literal["eval", "train"]
 
 
 @dataclass(frozen=True)
@@ -30,20 +31,30 @@ class ComponentTrainabilityPlan:
 
 @dataclass(frozen=True)
 class LlmTrainabilityPlan:
-    """Trainability intent for the language model."""
+    """Gradient and runtime-mode intent for the language model."""
 
     mode: LlmTrainabilityMode = "frozen"
+    runtime_mode: LlmRuntimeMode = "eval"
 
     def __post_init__(self) -> None:
         if self.mode not in ("frozen", "full", "lora"):
             raise ValueError(f"Unsupported LLM trainability mode: {self.mode!r}")
+        if self.runtime_mode not in ("eval", "train"):
+            raise ValueError(f"Unsupported LLM runtime mode: {self.runtime_mode!r}")
 
 
 @dataclass(frozen=True)
 class VisualBackboneTrainabilityPlan:
-    """Trainability intent for a visual encoder and backbone-owned modules."""
+    """Gradient and runtime-mode intent for a visual backbone.
+
+    ``runtime_mode`` currently has an explicit implementation in C-RADIO. It
+    is deliberately independent of ``mode``: LoRA parameters can receive
+    gradients while the frozen base encoder remains in deterministic eval
+    mode.
+    """
 
     mode: VisualBackboneTrainabilityMode = "frozen"
+    runtime_mode: VisualBackboneRuntimeMode = "eval"
     n_layers: int | None = None
     train_final_norm: bool = True
     train_auxiliary_modules: bool = True
@@ -53,6 +64,10 @@ class VisualBackboneTrainabilityPlan:
             raise ValueError(
                 f"Unsupported visual backbone trainability mode: {self.mode!r}"
             )
+        if self.runtime_mode not in ("eval", "train"):
+            raise ValueError(
+                f"Unsupported visual backbone runtime mode: {self.runtime_mode!r}"
+            )
 
         if self.mode == "last_n_layers":
             if (
@@ -61,18 +76,33 @@ class VisualBackboneTrainabilityPlan:
                 or self.n_layers <= 0
             ):
                 raise ValueError(
-                    "n_layers must be a positive integer when mode is "
-                    "'last_n_layers'"
+                    "n_layers must be a positive integer when mode is 'last_n_layers'"
                 )
         elif self.n_layers is not None:
-            raise ValueError(
-                "n_layers can only be set when mode is 'last_n_layers'"
-            )
+            raise ValueError("n_layers can only be set when mode is 'last_n_layers'")
 
         if not isinstance(self.train_final_norm, bool):
             raise TypeError("train_final_norm must be a boolean")
         if not isinstance(self.train_auxiliary_modules, bool):
             raise TypeError("train_auxiliary_modules must be a boolean")
+
+
+@dataclass(frozen=True)
+class VisualAdapterTrainabilityPlan:
+    """Gradient and runtime-mode intent for the visual adapter."""
+
+    mode: ComponentTrainabilityMode = "frozen"
+    runtime_mode: VisualAdapterRuntimeMode = "eval"
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("frozen", "full"):
+            raise ValueError(
+                f"Unsupported visual adapter trainability mode: {self.mode!r}"
+            )
+        if self.runtime_mode not in ("eval", "train"):
+            raise ValueError(
+                f"Unsupported visual adapter runtime mode: {self.runtime_mode!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -83,11 +113,8 @@ class SltTrainabilityPlan:
     visual_backbone: VisualBackboneTrainabilityPlan = field(
         default_factory=VisualBackboneTrainabilityPlan
     )
-    visual_adapter: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
-    )
-    visual_semantic_encoder: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
+    visual_adapter: VisualAdapterTrainabilityPlan = field(
+        default_factory=VisualAdapterTrainabilityPlan
     )
     ctc_head: ComponentTrainabilityPlan = field(
         default_factory=ComponentTrainabilityPlan
@@ -112,7 +139,6 @@ class SltTrainabilityPlan:
             "llm",
             "visual_backbone",
             "visual_adapter",
-            "visual_semantic_encoder",
             "ctc_head",
             "visual_position_embedding",
             "visual_boundary_embeddings",
@@ -139,15 +165,8 @@ class SltTrainabilityPlan:
 
         return cls(
             llm=LlmTrainabilityPlan(**values("llm")),
-            visual_backbone=VisualBackboneTrainabilityPlan(
-                **values("visual_backbone")
-            ),
-            visual_adapter=ComponentTrainabilityPlan(
-                **values("visual_adapter")
-            ),
-            visual_semantic_encoder=ComponentTrainabilityPlan(
-                **values("visual_semantic_encoder")
-            ),
+            visual_backbone=VisualBackboneTrainabilityPlan(**values("visual_backbone")),
+            visual_adapter=VisualAdapterTrainabilityPlan(**values("visual_adapter")),
             ctc_head=ComponentTrainabilityPlan(**values("ctc_head")),
             visual_position_embedding=ComponentTrainabilityPlan(
                 **values("visual_position_embedding")

@@ -1,0 +1,49 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask. Visual tokens do not receive
+  # the special all-to-all bidirectional overlay.
+  video_bidirectional_attention: false
+
+  # Do not add an adapter-side visual positional embedding. Qwen still applies
+  # its normal RoPE to the resulting ordered visual-token sequence.
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output before visual_scale is applied. Its time
+  # length is therefore T/2, matching video_token_scale above.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: [-1]
+
+  visual_adapter_type: spatiotemporal_pooled_linear
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M spatial patch width.
+    input_dim: 1152
+    # Qwen3-4B embedding width.
+    output_dim: 2560
+
+    # Fixed, non-overlapping temporal mean over every two frames. Each video's
+    # input frame count must be divisible by this value.
+    temporal_scale_factor: 2
+
+    # null gives the minimal dense 1152 -> 2560 projection (2,953,984 trainable
+    # adapter parameters including affine LayerNorm). Set an integer R to use
+    # the still-linear 1152 -> R -> 2560 capacity-control projection.
+    projection_rank: null
+    use_layer_norm: true

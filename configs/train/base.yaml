@@ -20,14 +20,16 @@ hydra:
 engine:
   # Which parameters this run optimizes. Applied by
   # `apply_trainability_plan`: everything is frozen first, then exactly the
-  # components selected here are re-enabled. All eight components must be
+  # components selected here are re-enabled. All seven components must be
   # listed. LoRA structure itself lives in the `peft` group; a `lora` mode here
   # only unfreezes the adapters that group injected.
   trainability:
-    llm: { mode: frozen }
-    visual_backbone: { mode: frozen }
-    visual_adapter: { mode: full }
-    visual_semantic_encoder: { mode: full }
+    llm: { mode: frozen, runtime_mode: eval }
+    # runtime_mode is currently enforced by C-RADIO only. Keeping it separate
+    # from gradient mode allows visual LoRA to train with a deterministic base
+    # encoder in eval mode.
+    visual_backbone: { mode: frozen, runtime_mode: eval }
+    visual_adapter: { mode: full, runtime_mode: train }
     ctc_head: { mode: full }
     visual_position_embedding: { mode: full }
     visual_boundary_embeddings: { mode: full }
@@ -71,8 +73,7 @@ engine:
     # WARN: Keep this at 0.0. A non-zero factor makes Trainer.compute_loss pop
     # `labels` out of the model inputs and compute cross entropy from logits
     # itself. SltModel guards its auxiliary terms on `loss is not None`, so the
-    # CTC loss and the attention-diversity loss would be silently dropped from
-    # training with no error. Label smoothing needs a custom compute_loss_func
+    # CTC loss would be silently dropped from training with no error. Label smoothing needs a custom compute_loss_func
     # before it can be turned on here.
     label_smoothing_factor: 0.0
     # NEFTune embedding noise. Null disables it. It hooks the LLM's input

@@ -89,10 +89,15 @@ class CRadioV4Backbone(nn.Module):
         self.output_layer = self.output_layers
         self.config = config
         self._input_values_validated = False
-        freeze_visual_encoder = config.get("freeze_visual_encoder", True)
-        if not isinstance(freeze_visual_encoder, bool):
-            raise TypeError("freeze_visual_encoder must be a boolean")
-        self.freeze_visual_encoder = freeze_visual_encoder
+        if "freeze_visual_encoder" in config:
+            logger.warning(
+                "Ignoring retired C-RADIO freeze_visual_encoder=%r; configure "
+                "engine.trainability.visual_backbone.mode and runtime_mode instead",
+                config["freeze_visual_encoder"],
+            )
+        # Construction starts from the safest standalone state. The training
+        # engine later owns both requires_grad and runtime-mode decisions.
+        self.runtime_mode = "eval"
 
         if c_radio_v4 is None:
             self.c_radio_v4_config = AutoConfig.from_pretrained(
@@ -121,34 +126,31 @@ class CRadioV4Backbone(nn.Module):
             self.summary_layer_fusion = None
             self.feature_layer_fusion = None
 
-        self.apply_freeze_policy()
+        # Keep standalone construction safe until the engine applies the
+        # explicit visual-backbone trainability and runtime plan.
+        self.visual_encoder.requires_grad_(False)
+        self.set_runtime_mode("eval")
 
         # Preserve the encoder's initialization/checkpoint and the fusion
         # modules' uniform-mean initialization when attached to SltModel.
         mark_module_tree_as_initialized(self)
 
     def train(self, mode: bool = True):
-        """Keep only a fully frozen visual encoder in eval mode.
-
-        Trainability may change after construction, notably when PEFT injects
-        visual LoRA parameters. Do not reapply the initial freeze policy here:
-        doing so would freeze those newly injected adapter parameters whenever
-        the Trainer calls ``model.train()``.
-        """
+        """Apply the engine-selected encoder runtime mode explicitly."""
         super().train(mode)
-        if mode and not any(
-            parameter.requires_grad for parameter in self.visual_encoder.parameters()
-        ):
-            self.visual_encoder.eval()
+        # Whole-model eval always wins. During training, runtime_mode controls
+        # stochastic encoder behavior independently of parameter gradients.
+        self.visual_encoder.train(mode and self.runtime_mode == "train")
         return self
 
-    def apply_freeze_policy(self) -> None:
-        """Apply the configured encoder gradient and module-mode policy."""
-        self.visual_encoder.requires_grad_(not self.freeze_visual_encoder)
-        if self.freeze_visual_encoder:
-            self.visual_encoder.eval()
-        else:
-            self.visual_encoder.train(self.training)
+    def set_runtime_mode(self, runtime_mode: str) -> None:
+        """Set ``train``/``eval`` behavior without changing requires_grad."""
+        if runtime_mode not in ("eval", "train"):
+            raise ValueError(
+                f"C-RADIO runtime_mode must be 'eval' or 'train', got {runtime_mode!r}"
+            )
+        self.runtime_mode = runtime_mode
+        self.visual_encoder.train(self.training and runtime_mode == "train")
 
     def forward(self, x, t_lengths=None) -> VisualBackboneOutput:
         """
@@ -286,9 +288,7 @@ class CRadioV4Backbone(nn.Module):
         c_radio_v4 = AutoModel.from_pretrained(id, dtype=dtype, trust_remote_code=True)
         logger.info(f"Loaded pretrained CRadioV4 model from {id}")
 
-        backbone = cls(config=config, c_radio_v4=c_radio_v4)
-        backbone.apply_freeze_policy()
-        return backbone
+        return cls(config=config, c_radio_v4=c_radio_v4)
 
 
 if __name__ == "__main__":

@@ -18,9 +18,7 @@ def _set_module_trainable(module: nn.Module | None, trainable: bool) -> None:
 
 def _enable_lora(module: nn.Module, component_name: str) -> None:
     parameters = [
-        parameter
-        for name, parameter in module.named_parameters()
-        if "lora_" in name
+        parameter for name, parameter in module.named_parameters() if "lora_" in name
     ]
     if not parameters:
         raise ValueError(
@@ -53,8 +51,7 @@ def _resolve_visual_layers(visual_encoder: nn.Module) -> Sequence[nn.Module]:
         if isinstance(layers, (nn.ModuleList, nn.Sequential)):
             return layers
     raise TypeError(
-        "Could not locate transformer layers for visual_backbone "
-        "mode='last_n_layers'"
+        "Could not locate transformer layers for visual_backbone mode='last_n_layers'"
     )
 
 
@@ -73,9 +70,7 @@ def _apply_visual_backbone_plan(
 
     visual_encoder = getattr(module, "visual_encoder", None)
     if not isinstance(visual_encoder, nn.Module):
-        raise TypeError(
-            "visual_backbone mode='last_n_layers' requires visual_encoder"
-        )
+        raise TypeError("visual_backbone mode='last_n_layers' requires visual_encoder")
     layers = _resolve_visual_layers(visual_encoder)
     if plan.n_layers is None or plan.n_layers > len(layers):
         raise ValueError(
@@ -102,6 +97,21 @@ def _apply_visual_backbone_plan(
                 parameter.requires_grad_(True)
 
 
+def _apply_visual_backbone_runtime_mode(
+    module: nn.Module,
+    plan: VisualBackboneTrainabilityPlan,
+) -> None:
+    """Hand explicit runtime-mode control to backbones that support it.
+
+    C-RADIO currently implements this hook. Other visual backbones retain their
+    existing behavior until they opt in, so this change cannot silently alter
+    their train/eval semantics.
+    """
+    setter = getattr(module, "set_runtime_mode", None)
+    if setter is not None:
+        setter(plan.runtime_mode)
+
+
 def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
     """Freeze everything, then enable exactly the components selected by plan."""
     model.requires_grad_(False)
@@ -113,21 +123,31 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
         llm.requires_grad_(True)
     elif plan.llm.mode == "lora":
         _enable_lora(llm, "LLM")
+    llm_runtime_setter = getattr(model, "set_llm_runtime_mode", None)
+    if llm_runtime_setter is not None:
+        llm_runtime_setter(plan.llm.runtime_mode)
 
     visual_backbone = getattr(model, "visual_backbone", None)
     if not isinstance(visual_backbone, nn.Module):
         raise TypeError("SLT model must expose a visual_backbone module")
     _apply_visual_backbone_plan(visual_backbone, plan.visual_backbone)
+    _apply_visual_backbone_runtime_mode(visual_backbone, plan.visual_backbone)
+
+    visual_adapter = getattr(model, "visual_adapter", None)
+    _set_module_trainable(
+        visual_adapter, plan.visual_adapter.mode == "full"
+    )
+    visual_adapter_runtime_setter = getattr(
+        model, "set_visual_adapter_runtime_mode", None
+    )
+    if visual_adapter_runtime_setter is not None:
+        visual_adapter_runtime_setter(plan.visual_adapter.runtime_mode)
 
     for name, component_plan in (
-        ("visual_adapter", plan.visual_adapter),
-        ("visual_semantic_encoder", plan.visual_semantic_encoder),
         ("ctc_head", plan.ctc_head),
         ("visual_position_embedding", plan.visual_position_embedding),
     ):
-        _set_module_trainable(
-            getattr(model, name, None), component_plan.mode == "full"
-        )
+        _set_module_trainable(getattr(model, name, None), component_plan.mode == "full")
 
     for name in ("start_video_embds", "end_video_embeds"):
         parameter = getattr(model, name, None)
