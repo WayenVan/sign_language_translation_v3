@@ -3,6 +3,12 @@ from typing import Any, Dict, Optional, Union
 from transformers import AutoConfig
 
 
+# How the temporal position of each visual token is encoded before the token is
+# injected into the language model. The language model already applies RoPE over
+# the whole sequence, so this is a *second*, adapter-side position signal.
+VISUAL_POSITION_EMBEDDING_TYPES = ("learned", "none", "sincos")
+
+
 class SltConfig(PretrainedConfig):
     """Configuration for the packed-video sign-language translation models.
 
@@ -64,6 +70,7 @@ class SltConfig(PretrainedConfig):
         ctc_vocab_size: Optional[int] = None,
         ctc_blank_id: Optional[int] = None,
         video_bidirectional_attention: Optional[bool] = None,
+        visual_position_embedding_type: Optional[str] = None,
         **kwargs: Any,
     ):
         """Initialize the serializable SLT configuration.
@@ -145,6 +152,18 @@ class SltConfig(PretrainedConfig):
                 loading them with the overlay enabled would evaluate them under
                 an attention pattern they never saw. A freshly constructed
                 configuration defaults to ``True``.
+            visual_position_embedding_type: How the temporal position of a
+                visual token is encoded before injection into the language
+                model, which applies its own RoPE on top of it. ``"learned"``
+                (the default, and what ``None`` resolves to, so existing
+                checkpoints are unaffected) adds a trainable
+                ``MAX_TOKEN_LENGTH x hidden_size`` table. ``"none"`` adds
+                nothing and leaves the temporal order entirely to RoPE.
+                ``"sincos"`` adds a fixed sinusoidal table, whose rows are
+                L2-normalized so its magnitude matches the learned table at
+                initialization; it owns no parameters, so unlike the learned
+                table its tail cannot stay at initialization for positions the
+                training set rarely reaches.
             **kwargs: Standard Hugging Face ``PretrainedConfig`` fields, such
                 as serialization and generation metadata.
         """
@@ -271,6 +290,22 @@ class SltConfig(PretrainedConfig):
         if not isinstance(video_bidirectional_attention, bool):
             raise TypeError("video_bidirectional_attention must be a bool or None")
         self.video_bidirectional_attention = video_bidirectional_attention
+
+        if visual_position_embedding_type is None:
+            # Unlike ``video_bidirectional_attention``, the default here is the
+            # historical behaviour for old and new configurations alike: every
+            # run so far used the learned table, and nothing about it was
+            # silently disabled, so there is no regime to distinguish.
+            visual_position_embedding_type = "learned"
+        if not isinstance(visual_position_embedding_type, str):
+            raise TypeError("visual_position_embedding_type must be a str or None")
+        if visual_position_embedding_type not in VISUAL_POSITION_EMBEDDING_TYPES:
+            raise ValueError(
+                "visual_position_embedding_type must be one of "
+                f"{VISUAL_POSITION_EMBEDDING_TYPES}, got "
+                f"{visual_position_embedding_type!r}"
+            )
+        self.visual_position_embedding_type = visual_position_embedding_type
 
         text_hidden_size = self.get_text_config().hidden_size
         if hidden_size is not None and hidden_size != text_hidden_size:

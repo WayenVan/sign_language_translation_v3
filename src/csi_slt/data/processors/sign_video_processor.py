@@ -20,6 +20,7 @@ class SignVideoKwargs(VideosKwargs, total=False):
     training: bool
     do_random_speed: bool
     random_speed_range: tuple[float, float]
+    do_random_resize: bool
     do_random_erasing: bool
     do_random_gaussian_blur: bool
 
@@ -38,6 +39,7 @@ class SignVideoProcessor(BaseVideoProcessor):
     do_resize = False
     do_random_speed = True  # random speed augmentation
     random_speed_range = (0.8, 1.25)
+    do_random_resize = True
     do_random_erasing = True
     do_random_gaussian_blur = False
     input_data_format = "channels_last"
@@ -59,6 +61,10 @@ class SignVideoProcessor(BaseVideoProcessor):
                 scale=(0.8, 1.0),
                 ratio=(0.95, 1.05),
                 antialias=True,
+            )
+            if kwargs["do_random_resize"]
+            else v2.RandomCrop(
+                (kwargs["crop_size"].height, kwargs["crop_size"].width)
             ),
             v2.RandomHorizontalFlip(p=0.5),
             v2.Resize((kwargs["size"].height, kwargs["size"].width))

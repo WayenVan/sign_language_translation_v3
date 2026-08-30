@@ -1,3 +1,4 @@
+import math
 import warnings
 from copy import deepcopy
 from typing import Callable, Optional
@@ -248,8 +249,27 @@ class SltModel(PreTrainedModel, GenerationMixin):
             ),
             requires_grad=True,
         )
-        self.visual_position_embedding = nn.Embedding(
-            self.MAX_TOKEN_LENGTH, self.config.hidden_size
+        # Temporal position of a visual token, added before the token enters
+        # the LLM (which then applies its own RoPE on top). Only the learned
+        # mode owns parameters; "none" and "sincos" leave the state dict without
+        # a ``visual_position_embedding.*`` entry at all.
+        position_embedding_type = config.visual_position_embedding_type
+        self.visual_position_embedding = (
+            nn.Embedding(self.MAX_TOKEN_LENGTH, self.config.hidden_size)
+            if position_embedding_type == "learned"
+            else None
+        )
+        # Non-persistent: the table is a pure function of MAX_TOKEN_LENGTH and
+        # hidden_size, so serializing it would only add weight to every
+        # checkpoint and let a stale copy override the formula on reload.
+        self.register_buffer(
+            "visual_position_table",
+            self._build_sincos_position_table(
+                self.MAX_TOKEN_LENGTH, self.config.hidden_size
+            )
+            if position_embedding_type == "sincos"
+            else None,
+            persistent=False,
         )
         # Global learnable scale, initialized as an identity transform. Shape
         # (1,) rather than a scalar: FSDP2 shards along dim 0 and rejects 0-dim
@@ -608,7 +628,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         """Initialize modules owned by SltModel through Hugging Face post_init."""
         super()._init_weights(module)
 
-        if module is self.visual_position_embedding:
+        if (
+            self.visual_position_embedding is not None
+            and module is self.visual_position_embedding
+        ):
             nn.init.trunc_normal_(module.weight, std=0.02)
 
         # Raw parameters are not handled by the generic module-type rules.
@@ -619,6 +642,37 @@ class SltModel(PreTrainedModel, GenerationMixin):
             self.start_video_embds.copy_(mean)
             self.end_video_embeds.copy_(mean)
 
+    @staticmethod
+    def _build_sincos_position_table(
+        max_positions: int, hidden_size: int
+    ) -> torch.Tensor:
+        """Build the fixed sinusoidal table of ``visual_position_embedding_type``.
+
+        The classic interleaved formulation, with one difference: every row is
+        L2-normalized. Raw sinusoids give each row a norm of ``sqrt(D/2)`` --
+        about 32 at ``D=2048``, some 35x the learned table's initialization
+        (``0.02 * sqrt(D) = 0.905``) and 20x the LLM's own token embeddings --
+        which would drown the visual content the row is added to. Unit rows put
+        the two modes on the same scale, so switching between them measures the
+        encoding rather than its amplitude.
+        """
+        if max_positions <= 0:
+            raise ValueError("max_positions must be positive")
+        if hidden_size <= 0:
+            raise ValueError("hidden_size must be positive")
+
+        positions = torch.arange(max_positions, dtype=torch.float32).unsqueeze(1)
+        frequencies = torch.exp(
+            torch.arange(0, hidden_size, 2, dtype=torch.float32)
+            * (-math.log(10000.0) / hidden_size)
+        )
+        angles = positions * frequencies
+        table = torch.zeros(max_positions, hidden_size, dtype=torch.float32)
+        table[:, 0::2] = torch.sin(angles)
+        # An odd hidden size leaves the last sine without its cosine partner.
+        table[:, 1::2] = torch.cos(angles[:, : hidden_size // 2])
+        return table / table.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+
     def visual_position_embedding_forward(
         self,
         video_feats: torch.Tensor,
@@ -626,6 +680,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
         position_ids: Optional[torch.Tensor] = None,
     ):
         """Add per-video positional embeddings to flattened visual features.
+
+        Which encoding is added -- a trainable table, nothing at all, or a fixed
+        sinusoidal table -- is selected by
+        ``config.visual_position_embedding_type``.
 
         Args:
             video_feats: Concatenated video features with shape ``[BT, D]``.
@@ -649,6 +707,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     f"visual tokens, got {tuple(position_ids.shape)} for "
                     f"{video_feats.shape[0]} tokens"
                 )
+        # The shape checks above hold for every mode; only a table lookup is
+        # bounded by MAX_TOKEN_LENGTH, so "none" stays valid for any length.
+        if self.config.visual_position_embedding_type == "none":
+            return video_feats  # [BT, D]
+
         if (
             position_ids.numel()
             and int(position_ids.max().item()) >= self.MAX_TOKEN_LENGTH
@@ -656,7 +719,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
             raise ValueError(
                 f"visual position id must be smaller than {self.MAX_TOKEN_LENGTH}"
             )
-        position_embeddings = self.visual_position_embedding(position_ids)
+        if self.config.visual_position_embedding_type == "learned":
+            position_embeddings = self.visual_position_embedding(position_ids)
+        else:
+            position_embeddings = self.visual_position_table[position_ids].to(
+                dtype=video_feats.dtype
+            )
         return video_feats + position_embeddings  # [BT, D]
 
     def _apply_llm_embedding_scale(

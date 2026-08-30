@@ -3,6 +3,9 @@ config:
   video_soft_token_id: 151656
   video_token_scale: 1.0
   video_bidirectional_attention: true
+  # Adapter-side temporal position of each visual token, added before the
+  # LLM applies its own RoPE: learned (trainable table) | none | sincos.
+  visual_position_embedding_type: learned
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: dinov2
   visual_backbone_config:

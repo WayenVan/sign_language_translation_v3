@@ -4,6 +4,9 @@ config:
   # V3 emits 4 query tokens per stride-2 window: 4 / 2 = 2 tokens per frame.
   video_token_scale: 2.0
   video_bidirectional_attention: true
+  # Adapter-side temporal position of each visual token, added before the
+  # LLM applies its own RoPE: learned (trainable table) | none | sincos.
+  visual_position_embedding_type: learned
   attention_diversity_loss_weight: 0.001
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: c_radio_v4

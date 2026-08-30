@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v4.0-dev
-  export WANDB_TAGS="lite-lora-experiment"
+  export WANDB_TAGS="visual-pe-ablation"
   REPORT_TO=wandb
 fi
 
@@ -76,6 +76,14 @@ CMD_ARGS=(
   --debug
   -m csi_slt.commands.train
   model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-micro
+  # Plain causal attention: video tokens attend only to the past, exactly like
+  # every run before the mask fix (205ede8).
+  model.config.video_bidirectional_attention=false
+  # Drop the adapter-side learned position table entirely and leave the temporal
+  # order of the visual tokens to the LLM's own RoPE. The alternatives are
+  # "learned" (the default, a trainable 1024 x 2048 table) and "sincos" (a fixed
+  # sinusoidal table with unit-norm rows).
+  model.config.visual_position_embedding_type=none
   # No LLM or visual-backbone LoRA is injected in this adapter-only run.
   peft=none
   engine.trainability.llm.mode=frozen
@@ -84,6 +92,8 @@ CMD_ARGS=(
   # Keep every other newly introduced SLT parameter trainable as well.
   engine.trainability.visual_semantic_encoder.mode=full
   engine.trainability.ctc_head.mode=full
+  # A no-op while visual_position_embedding_type=none: that mode constructs no
+  # position module at all. Kept so the plan stays complete and portable.
   engine.trainability.visual_position_embedding.mode=full
   engine.trainability.visual_boundary_embeddings.mode=full
   engine.trainability.visual_scale.mode=full
@@ -92,7 +102,9 @@ CMD_ARGS=(
   +engine.training_args.visual_adapter_learning_rate=1e-4
   # prompt=diverse_train
   prompt=fixed_prompt
-  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-micro-0829.224x224-ctc-de
+  engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-micro-0830.224x224-ctc-de-causal-nopos
+  # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-lite
+  # engine.training_args.output_dir=outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0829.224x224-ctc-de-causal
   # model=qwen3-1.7b-cradio-l-dinoframecrossv28shuffle-wilder
   # engine.training_args.output_dir=outputs/v4.0-qwen3-1.b-cradio-l-dinoframecrossv28shuffle-wilder-0818.224x224-ctc
   # model=qwen3-1.7b-cradio-h-dinoframecrossv28shuffle-wilder

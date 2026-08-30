@@ -9,6 +9,9 @@ config:
   # on top of the causal mask. Requires an attention implementation that
   # can carry a custom mask (sdpa or flex_attention, not flash_attention).
   video_bidirectional_attention: true
+  # Adapter-side temporal position of each visual token, added before the
+  # LLM applies its own RoPE: learned (trainable table) | none | sincos.
+  visual_position_embedding_type: learned
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: dinov2
   visual_backbone_config:
