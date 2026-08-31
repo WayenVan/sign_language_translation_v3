@@ -748,8 +748,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
         _, _, _, _ = video.shape
         _ = video_length.shape[0]
 
+        backbone_kwargs = {}
+        if getattr(
+            self.visual_adapter, "requires_visual_backbone_attention", False
+        ):
+            backbone_kwargs["return_attention_maps"] = True
         visual_backbone_output: VisualBackboneOutput = self.visual_backbone(
-            video, video_length
+            video, video_length, **backbone_kwargs
         )  # [BT, CLS+HW+REGISTIRY, C]
         visual_adapter_output: VisualAdapterOutput = self.visual_adapter(
             visual_backbone_output, permute_video_tokens=permute_video_tokens

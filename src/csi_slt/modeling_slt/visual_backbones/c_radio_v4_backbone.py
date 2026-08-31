@@ -13,63 +13,6 @@ from csi_slt.modeling_slt.output_utils import VisualBackboneOutput
 logger = logging.getLogger(__name__)
 
 
-class _LayerAttentionFusion(nn.Module):
-    """Fuse same-shaped layer outputs with content-dependent layer attention.
-
-    Attention is computed independently for every leading token position from
-    channel-wise mean, RMS, and absolute mean descriptors. The final scoring
-    layer starts at zero, making the initial fusion exactly a uniform mean.
-    """
-
-    def __init__(self, num_layers: int, hidden_dim: int) -> None:
-        super().__init__()
-        if num_layers < 2:
-            raise ValueError("layer attention requires at least two layers")
-        if hidden_dim <= 0:
-            raise ValueError("layer_fusion_hidden_dim must be positive")
-
-        self.num_layers = num_layers
-        self.score_mlp = nn.Sequential(
-            nn.Linear(3, hidden_dim),
-            nn.GELU(),
-            nn.Linear(hidden_dim, 1),
-        )
-        self.layer_bias = nn.Parameter(torch.zeros(num_layers))
-        nn.init.zeros_(self.score_mlp[-1].weight)
-        nn.init.zeros_(self.score_mlp[-1].bias)
-
-    def forward(
-        self, tensors: list[torch.Tensor], name: str
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if len(tensors) != self.num_layers:
-            raise RuntimeError(
-                f"expected {self.num_layers} C-RADIO {name} layers, got {len(tensors)}"
-            )
-        reference_shape = tensors[0].shape
-        if any(tensor.shape != reference_shape for tensor in tensors[1:]):
-            shapes = [tuple(tensor.shape) for tensor in tensors]
-            raise RuntimeError(
-                f"cannot fuse C-RADIO {name} tensors with shapes {shapes}"
-            )
-
-        # [F, L, ..., C]. Scores are produced per frame and per optional token.
-        stacked = torch.stack(tensors, dim=1)
-        mean = stacked.mean(dim=-1)
-        rms = stacked.square().mean(dim=-1).add(1e-6).sqrt()
-        absolute_mean = stacked.abs().mean(dim=-1)
-        descriptors = torch.stack((mean, rms, absolute_mean), dim=-1)
-        descriptors = (descriptors - descriptors.mean(dim=1, keepdim=True)) / (
-            descriptors.var(dim=1, keepdim=True, unbiased=False).add(1e-6).sqrt()
-        )
-
-        bias_shape = (1, self.num_layers, *([1] * (stacked.ndim - 3)))
-        logits = self.score_mlp(descriptors).squeeze(-1)
-        logits = logits + self.layer_bias.view(bias_shape)
-        weights = logits.softmax(dim=1)
-        fused = (stacked * weights.unsqueeze(-1)).sum(dim=1)
-        return fused, weights
-
-
 class CRadioV4Backbone(nn.Module):
     def __init__(
         self,
@@ -82,11 +25,12 @@ class CRadioV4Backbone(nn.Module):
         if self.id is None:
             raise ValueError("id must be provided in config for CRadioV4Backbone")
 
-        self.output_layers = self._normalize_output_layers(
-            config.get("output_layer", [-1, -2, -3, -4])
+        self.output_layer = self._normalize_output_layer(
+            config.get("output_layer", -8)
         )
-        # Preserve the public attribute used by existing configuration/debug code.
-        self.output_layer = self.output_layers
+        self.attention_layer = self._validate_layer(
+            "attention_layer", config.get("attention_layer", -25)
+        )
         self.config = config
         self._input_values_validated = False
         if "freeze_visual_encoder" in config:
@@ -109,22 +53,6 @@ class CRadioV4Backbone(nn.Module):
         else:
             self.visual_encoder = c_radio_v4
             self.c_radio_v4_config = c_radio_v4.config
-
-        if len(self.output_layers) > 1:
-            fusion_hidden_dim = config.get("layer_fusion_hidden_dim", 32)
-            if isinstance(fusion_hidden_dim, bool) or not isinstance(
-                fusion_hidden_dim, int
-            ):
-                raise TypeError("layer_fusion_hidden_dim must be an integer")
-            self.summary_layer_fusion = _LayerAttentionFusion(
-                len(self.output_layers), fusion_hidden_dim
-            )
-            self.feature_layer_fusion = _LayerAttentionFusion(
-                len(self.output_layers), fusion_hidden_dim
-            )
-        else:
-            self.summary_layer_fusion = None
-            self.feature_layer_fusion = None
 
         # Keep standalone construction safe until the engine applies the
         # explicit visual-backbone trainability and runtime plan.
@@ -152,29 +80,61 @@ class CRadioV4Backbone(nn.Module):
         self.runtime_mode = runtime_mode
         self.visual_encoder.train(self.training and runtime_mode == "train")
 
-    def forward(self, x, t_lengths=None) -> VisualBackboneOutput:
+    def forward(
+        self,
+        x,
+        t_lengths=None,
+        *,
+        return_attention_maps: bool = False,
+    ) -> VisualBackboneOutput:
         """
         video: Packed frames with shape [F, C, H, W].
         """
         self._validate_inputs(x, t_lengths)
-        radio_outputs = self._forward_intermediates(x)
-        summaries = [output.summary for output in radio_outputs]
-        feature_layers = [output.features for output in radio_outputs]
+        if not isinstance(return_attention_maps, bool):
+            raise TypeError("return_attention_maps must be a boolean")
+        captured_attention_input = None
+        attention_module = None
+        hook_handle = None
+        if return_attention_maps:
+            attention_module = self._get_attention_module(self.attention_layer)
+
+            def capture_attention_input(_module, args):
+                nonlocal captured_attention_input
+                if not args or not isinstance(args[0], torch.Tensor):
+                    raise RuntimeError(
+                        "C-RADIO attention module did not receive a tensor input"
+                    )
+                captured_attention_input = args[0]
+
+            hook_handle = attention_module.register_forward_pre_hook(
+                capture_attention_input
+            )
+
+        try:
+            radio_output = self._forward_intermediates(
+                x, include_attention_layer=return_attention_maps
+            )
+        finally:
+            if hook_handle is not None:
+                hook_handle.remove()
         extras = None
-        if len(radio_outputs) == 1:
-            summary = summaries[0]
-            features = feature_layers[0]
-        else:
-            summary, summary_layer_weights = self.summary_layer_fusion(
-                summaries, "summary"
+        summary = radio_output.summary
+        features = radio_output.features
+
+        if return_attention_maps:
+            if captured_attention_input is None or attention_module is None:
+                raise RuntimeError(
+                    "the requested C-RADIO attention layer was not executed"
+                )
+            cls_attention = self._compute_cls_patch_attention(
+                attention_module,
+                captured_attention_input,
+                patch_count=features.shape[1],
             )
-            features, feature_layer_weights = self.feature_layer_fusion(
-                feature_layers, "features"
-            )
-            extras = {
-                "summary_layer_weights": summary_layer_weights,
-                "feature_layer_weights": feature_layer_weights,
-            }
+            extras = {} if extras is None else extras
+            extras["attention_maps"] = cls_attention
+            extras["attention_layer"] = self.attention_layer
 
         return VisualBackboneOutput(
             visual_features=features,  # [B, T, C]
@@ -183,51 +143,116 @@ class CRadioV4Backbone(nn.Module):
             extras=extras,
         )
 
+    def _get_attention_module(self, attention_layer: int) -> nn.Module:
+        """Find one ViT attention block by the same index used for intermediates."""
+        radio_model = getattr(self.visual_encoder, "radio_model", self.visual_encoder)
+        attention_modules = [
+            module
+            for module in radio_model.modules()
+            if isinstance(getattr(module, "qkv", None), nn.Module)
+            and isinstance(getattr(module, "num_heads", None), int)
+        ]
+        if not attention_modules:
+            raise TypeError(
+                "C-RADIO encoder does not expose ViT attention modules with qkv "
+                "and num_heads attributes"
+            )
+        try:
+            return attention_modules[attention_layer]
+        except IndexError as error:
+            raise IndexError(
+                f"attention_layer {attention_layer} is out of range for the "
+                f"{len(attention_modules)} discovered C-RADIO attention layers"
+            ) from error
+
     @staticmethod
-    def _normalize_output_layers(output_layer: int | Sequence[int]) -> tuple[int, ...]:
-        """Normalize one or more intermediate block indices."""
-        if isinstance(output_layer, bool):
-            raise TypeError("output_layer must be an integer or a sequence of integers")
-        if isinstance(output_layer, int):
-            return (output_layer,)
-        if isinstance(output_layer, (str, bytes)) or not isinstance(
-            output_layer, Sequence
-        ):
-            raise TypeError("output_layer must be an integer or a sequence of integers")
+    def _compute_cls_patch_attention(
+        attention_module: nn.Module,
+        hidden_states: torch.Tensor,
+        *,
+        patch_count: int,
+    ) -> torch.Tensor:
+        """Reconstruct per-head CLS-to-patch attention from a timm-style block."""
+        qkv = attention_module.qkv(hidden_states)
+        if not isinstance(qkv, torch.Tensor) or qkv.ndim != 3:
+            raise RuntimeError(
+                "C-RADIO attention qkv projection must return [F, N, 3 * C]"
+            )
+        frame_count, token_count, triple_width = qkv.shape
+        num_heads = attention_module.num_heads
+        if triple_width % (3 * num_heads) != 0:
+            raise RuntimeError(
+                f"qkv width {triple_width} is not divisible by 3 * {num_heads} heads"
+            )
+        head_dim = triple_width // (3 * num_heads)
+        qkv = qkv.reshape(frame_count, token_count, 3, num_heads, head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
+        query, key = qkv[0], qkv[1]
 
-        layers = tuple(output_layer)
-        if not layers:
-            raise ValueError("output_layer must contain at least one layer index")
-        if any(
-            isinstance(layer, bool) or not isinstance(layer, int) for layer in layers
-        ):
-            raise TypeError("every output_layer entry must be an integer")
-        if len(set(layers)) != len(layers):
-            raise ValueError("output_layer must not contain duplicate layer indices")
-        return layers
+        q_norm = getattr(attention_module, "q_norm", None)
+        k_norm = getattr(attention_module, "k_norm", None)
+        if isinstance(q_norm, nn.Module):
+            query = q_norm(query)
+        if isinstance(k_norm, nn.Module):
+            key = k_norm(key)
 
-    def _forward_intermediates(self, x: torch.Tensor):
+        scale = getattr(attention_module, "scale", head_dim**-0.5)
+        attention = (query * scale) @ key.transpose(-2, -1)
+        attention = attention.softmax(dim=-1)
+        if patch_count <= 0 or patch_count >= token_count:
+            raise RuntimeError(
+                f"invalid patch token count {patch_count} for {token_count} total tokens"
+            )
+        # C-RADIO/timm places CLS and optional register tokens before patches.
+        return attention[:, :, 0, token_count - patch_count :]
+
+    @staticmethod
+    def _validate_layer(name: str, layer: object) -> int:
+        if isinstance(layer, bool) or not isinstance(layer, int):
+            raise TypeError(f"{name} must be an integer")
+        return layer
+
+    @classmethod
+    def _normalize_output_layer(cls, output_layer: object) -> int:
+        """Accept legacy one-item layer lists while keeping one output layer."""
+        if isinstance(output_layer, Sequence) and not isinstance(
+            output_layer, (str, bytes)
+        ):
+            if len(output_layer) != 1:
+                raise ValueError(
+                    "output_layer must contain exactly one layer when provided "
+                    "as a sequence"
+                )
+            output_layer = output_layer[0]
+        return cls._validate_layer("output_layer", output_layer)
+
+    def _forward_intermediates(
+        self, x: torch.Tensor, *, include_attention_layer: bool = False
+    ):
         radio_model = getattr(self.visual_encoder, "radio_model", self.visual_encoder)
         forward_intermediates = getattr(radio_model, "forward_intermediates", None)
         if forward_intermediates is None:
             raise TypeError(
                 "C-RADIO encoder must expose forward_intermediates to fuse layers"
             )
+        indices = [self.output_layer]
+        if include_attention_layer and self.attention_layer != self.output_layer:
+            indices.append(self.attention_layer)
         outputs = forward_intermediates(
             x,
-            indices=list(self.output_layers),
+            indices=indices,
             return_prefix_tokens=True,
             norm=True,
             output_fmt="NLC",
             intermediates_only=True,
             aggregation="sparse",
         )
-        if len(outputs) != len(self.output_layers):
+        if len(outputs) != len(indices):
             raise RuntimeError(
                 "C-RADIO returned an unexpected number of intermediate layers: "
-                f"expected {len(self.output_layers)}, got {len(outputs)}"
+                f"expected {len(indices)}, got {len(outputs)}"
             )
-        return outputs
+        return outputs[0]
 
     def _validate_inputs(self, x: torch.Tensor, t_lengths: torch.Tensor | None) -> None:
         """Cheaply validate packed, unnormalized C-RADIO image inputs.

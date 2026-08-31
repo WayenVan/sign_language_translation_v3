@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 from torch import nn
 
 from csi_slt.engine.trainability import (
@@ -38,17 +39,56 @@ class _FakeEncoder(nn.Module):
         self.config = SimpleNamespace()
 
 
-def test_default_layers_start_as_uniform_attention_fusion():
+class _FakeAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.num_heads = 2
+        self.scale = 0.5
+        self.qkv = nn.Linear(4, 12, bias=False)
+        self.q_norm = nn.Identity()
+        self.k_norm = nn.Identity()
+
+    def forward(self, hidden_states):
+        return hidden_states
+
+
+class _AttentionFakeRadioModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.blocks = nn.ModuleList([_FakeAttention(), _FakeAttention()])
+
+    def forward_intermediates(self, x, **kwargs):
+        hidden_states = x.new_ones((x.shape[0], 3, 4))
+        for block in self.blocks:
+            hidden_states = block(hidden_states)
+        return [
+            SimpleNamespace(
+                summary=hidden_states[:, 0],
+                features=hidden_states[:, 1:],
+            )
+            for _ in kwargs["indices"]
+        ]
+
+
+class _AttentionFakeEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.radio_model = _AttentionFakeRadioModel()
+        self.config = SimpleNamespace()
+
+
+def test_default_feature_and_attention_layers_are_independent():
     encoder = _FakeEncoder()
     backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=encoder)
     lengths = torch.tensor([1, 1])
 
     output = backbone(torch.rand(2, 3, 2, 2), t_lengths=lengths)
 
-    assert backbone.output_layers == (-1, -2, -3, -4)
+    assert backbone.output_layer == -8
+    assert backbone.attention_layer == -25
     assert encoder.radio_model.calls == [
         {
-            "indices": [-1, -2, -3, -4],
+            "indices": [-8],
             "return_prefix_tokens": True,
             "norm": True,
             "output_fmt": "NLC",
@@ -56,31 +96,20 @@ def test_default_layers_start_as_uniform_attention_fusion():
             "aggregation": "sparse",
         }
     ]
-    torch.testing.assert_close(output.visual_features, torch.full((2, 2, 3), -2.5))
-    torch.testing.assert_close(output.pooled_visual_features, torch.full((2, 3), -2.5))
+    torch.testing.assert_close(output.visual_features, torch.full((2, 2, 3), -8.0))
+    torch.testing.assert_close(output.pooled_visual_features, torch.full((2, 3), -8.0))
     assert output.visual_length is lengths
     assert encoder.radio_model.weight.requires_grad is False
-    assert backbone.summary_layer_fusion.layer_bias.requires_grad is True
-    assert backbone.feature_layer_fusion.layer_bias.requires_grad is True
-    torch.testing.assert_close(
-        output.extras["summary_layer_weights"], torch.full((2, 4), 0.25)
-    )
-    torch.testing.assert_close(
-        output.extras["feature_layer_weights"], torch.full((2, 4, 2), 0.25)
-    )
-    (output.visual_features.sum() + output.pooled_visual_features.sum()).backward()
-    assert backbone.summary_layer_fusion.score_mlp[-1].weight.grad.abs().sum() > 0
-    assert backbone.feature_layer_fusion.score_mlp[-1].weight.grad.abs().sum() > 0
+    assert output.extras is None
 
 
-def test_frozen_encoder_stays_in_eval_while_fusion_trains():
+def test_frozen_encoder_stays_in_eval_while_backbone_trains():
     encoder = _FakeEncoder()
     backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=encoder)
 
     backbone.train()
 
     assert backbone.training is True
-    assert backbone.summary_layer_fusion.training is True
     assert encoder.training is False
 
 
@@ -106,17 +135,57 @@ def test_single_output_layer_remains_supported():
 
     output = backbone(torch.rand(1, 3, 2, 2))
 
-    assert backbone.output_layers == (-2,)
-    assert backbone.summary_layer_fusion is None
-    assert backbone.feature_layer_fusion is None
+    assert backbone.output_layer == -2
     assert output.extras is None
     torch.testing.assert_close(output.visual_features, torch.full((1, 2, 3), -2.0))
+
+
+@pytest.mark.parametrize("output_layer", [[-2], OmegaConf.create([-2])])
+def test_legacy_single_item_output_layer_list_is_unwrapped(output_layer):
+    encoder = _FakeEncoder()
+    backbone = CRadioV4Backbone(
+        {"id": "fake", "output_layer": output_layer}, c_radio_v4=encoder
+    )
+
+    output = backbone(torch.rand(1, 3, 2, 2))
+
+    assert backbone.output_layer == -2
+    assert encoder.radio_model.calls[0]["indices"] == [-2]
+    torch.testing.assert_close(output.visual_features, torch.full((1, 2, 3), -2.0))
+
+
+def test_attention_maps_are_opt_in_cls_to_patch_probabilities():
+    backbone = CRadioV4Backbone(
+        {"id": "fake", "output_layer": -1, "attention_layer": -1},
+        c_radio_v4=_AttentionFakeEncoder(),
+    )
+
+    output = backbone(
+        torch.rand(2, 3, 2, 2),
+        return_attention_maps=True,
+    )
+
+    assert output.extras["attention_maps"].shape == (2, 2, 2)
+    assert output.extras["attention_layer"] == -1
+    assert torch.isfinite(output.extras["attention_maps"]).all()
+
+
+def test_attention_layer_is_independent_from_output_layer():
+    backbone = CRadioV4Backbone(
+        {"id": "fake", "output_layer": -1, "attention_layer": -2},
+        c_radio_v4=_AttentionFakeEncoder(),
+    )
+
+    output = backbone(torch.rand(1, 3, 2, 2), return_attention_maps=True)
+
+    assert output.extras["attention_layer"] == -2
+    assert output.extras["attention_maps"].shape == (1, 2, 2)
 
 
 def test_construction_starts_encoder_frozen_and_eval():
     encoder = _FakeEncoder()
     CRadioV4Backbone(
-        {"id": "fake", "output_layer": [-1]},
+        {"id": "fake", "output_layer": -1},
         c_radio_v4=encoder,
     )
 
@@ -178,7 +247,7 @@ def test_engine_plan_controls_lora_runtime_mode(runtime_mode, expected_training)
     assert encoder.radio_model.lora_adapter.weight.grad is not None
 
 
-@pytest.mark.parametrize("output_layer", [[], [-1, -1], [-1, "-2"], True])
+@pytest.mark.parametrize("output_layer", [[], [-1, -2], ["-1"], "-1", True])
 def test_invalid_output_layers_are_rejected(output_layer):
     with pytest.raises((TypeError, ValueError)):
         CRadioV4Backbone(
