@@ -475,7 +475,7 @@ class AttnPoolAdapter(nn.Module):
         projection_rank: int | None = None,
         use_layer_norm: bool = True,
         temporal_scale_factor: int = 2,
-        top_k: int = 32,
+        top_k: int = 48,
         attention_smooth_kernel_size: int = 3,
         patch_grid_size: tuple[int, int] | None = None,
         spatial_conv_kernel_size: int = 3,

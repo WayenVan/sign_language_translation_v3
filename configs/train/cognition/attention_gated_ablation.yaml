@@ -14,7 +14,7 @@ model:
     visual_adapter_kwargs:
       # Explicit ablation knobs, restating the model-config defaults.
       temporal_scale_factor: 2
-      top_k: 32
+      top_k: 48
       attention_smooth_kernel_size: 3
       use_temporal_conv: false
       residual_gate_init: 0.0

@@ -43,7 +43,7 @@ config:
     use_layer_norm: true
 
     # CLS attention processing and hard spatial selection.
-    top_k: 32
+    top_k: 48
     attention_smooth_kernel_size: 3
     # null infers a square patch grid from the patch-token count.
     patch_grid_size: null
