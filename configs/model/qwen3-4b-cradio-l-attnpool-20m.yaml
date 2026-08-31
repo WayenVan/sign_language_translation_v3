@@ -1,0 +1,66 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    # Patch features and summary come from the eighth-last block.
+    output_layer: -8
+    # CLS-to-patch selection scores come from the twenty-fifth-last block.
+    attention_layer: -25
+
+  visual_adapter_type: attnpool
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
+    input_dim: 1152
+    output_dim: 2560
+
+    # Emit one visual token per non-overlapping pair of input frames.
+    temporal_scale_factor: 2
+    # 1152 -> 5024 -> GELU -> 2560. Together with the spatial context module,
+    # this gives 19,999,906 adapter parameters. The rank moved 5023 -> 5024 to
+    # reabsorb the 3,456 parameters freed by disabling the temporal conv, so
+    # this config keeps its ~20M budget.
+    projection_rank: 5024
+    use_layer_norm: true
+
+    # CLS attention processing and hard spatial selection.
+    top_k: 32
+    attention_smooth_kernel_size: 3
+    # null infers a square patch grid from the patch-token count.
+    patch_grid_size: null
+
+    # Contextualize every patch before applying the hard mask at pooling time.
+    spatial_conv_kernel_size: 3
+    # Off: the temporal branch cost 6.6 ms of the adapter's 16.6 ms fwd+bwd,
+    # and most of that was the packed<->padded round trip and its layout
+    # copies rather than the depthwise Conv1d itself. Disabling it also drops
+    # the per-forward device synchronizations from 11 to 4, since
+    # packed_to_padded is no longer called. Temporal context still comes from
+    # the fixed mean over temporal_scale_factor frames.
+    use_temporal_conv: false
+    # Unused while use_temporal_conv is false.
+    temporal_conv_kernel_size: 3
+    # tanh(0)=0: the contextual residual starts as an exact identity.
+    residual_gate_init: 0.0
+
+    # sigmoid(-2) ~= 0.119 attention pool and 0.881 uniform selected-patch pool.
+    pooling_gate_init: -2.0
