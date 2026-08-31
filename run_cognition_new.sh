@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_stpool_baseline
+#SBATCH --job-name=slt_qwen3_4b_attnpool20m_tconv
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -38,8 +38,8 @@ if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB."
   REPORT_TO=none
 else
-  export WANDB_PROJECT=sign_language_translation_v4.0-dev
-  export WANDB_TAGS="spatiotemporal-pooled-baseline,backbone-layer-probe"
+  export WANDB_PROJECT=sign_language_translation_v5.0-dev
+  export WANDB_TAGS="attnpool,20m,attention-gated-ablation,temporal-conv"
   REPORT_TO=wandb
 fi
 
@@ -76,56 +76,17 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  model=qwen3-4b-cradio-l-spatiotemporal-pooled-linear
-  # Keep these two ablation choices explicit in the launch command even though
-  # the model config already sets them, so a run log records them unambiguously.
-  # Plain causal attention: visual tokens attend only to the past in Qwen.
-  model.config.video_bidirectional_attention=false
-  # Construct no adapter-side visual-position module. Temporal order between
-  # pooled windows is represented only by Qwen's own RoPE.
-  model.config.visual_position_embedding_type=none
-  # Layer-probe policy: no LoRA is injected; freeze both pretrained towers and
-  # train only the new baseline adapter plus the randomly initialized CTC head.
-  peft=none
-  engine.trainability.llm.mode=frozen
-  engine.trainability.llm.runtime_mode=eval
-  engine.trainability.visual_backbone.mode=frozen
-  engine.trainability.visual_backbone.runtime_mode=eval
-  engine.trainability.visual_adapter.mode=full
-  engine.trainability.visual_adapter.runtime_mode=train
-  engine.trainability.ctc_head.mode=full
-  # These components are frozen to prevent them from absorbing layer-specific
-  # differences. visual_position_embedding is absent in "none" mode, but its
-  # explicit frozen plan keeps all seven required plan entries unambiguous.
-  engine.trainability.visual_position_embedding.mode=frozen
-  engine.trainability.visual_boundary_embeddings.mode=frozen
-  engine.trainability.visual_scale.mode=frozen
-  # The adapter receives an explicit LR; the CTC head uses the default LR.
-  engine.training_args.learning_rate=1e-4
-  +engine.training_args.visual_adapter_learning_rate=1e-4
-  # prompt=diverse_train
-  prompt=fixed_prompt
-  engine.training_args.output_dir=outputs/v4.0-qwen3-4b-cradio-l-stpool-baseline-lm1-0830.224x224-ctc-de-causal-nopos
-  engine.training_args.per_device_train_batch_size=2
-  engine.training_args.per_device_eval_batch_size=1
-  engine.training_args.dataloader_num_workers=6
-  engine.training_args.eval_steps=6000
-  engine.training_args.logging_steps=15
+  --config-name=train/cognition/attention_gated_ablation
+  # Temporary ablation override: enable the adapter's temporal depthwise Conv1d.
+  model.config.visual_adapter_kwargs.use_temporal_conv=true
+  # Temporal-scale ablation: average every two frames into one visual token.
+  model.config.visual_adapter_kwargs.temporal_scale_factor=2
+  model.config.video_token_scale=0.5
+  data.processor.video_token_scale=0.5
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-attnpool20m-tconv-lm8-attnm25-topk32-ts2-0831.224x224-de
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
-  engine.training_args.ddp_find_unused_parameters=False
-  # data=ph14t_*x224x224_gemma_multiling
-  # data=ph14t_*x224x224_qwen_multiling
-  data=ph14t_*x224x224_qwen_single_language
-  data.language=de
-  # The adapter averages every two frames and therefore emits T/2 tokens. This
-  # must match model.config.video_token_scale=0.5 exactly.
-  data.processor.video_token_scale=0.5
   data.data_root="$DATASET_PATH"
-  data.processor.num_extra_video_tokens=2
-  data.processor.video_processor.padding_to_multiple_of=4
-  data.processor.video_processor.do_resize=False
-  data.processor.video_processor.do_normalize=False # NOTE: 很重要！！！
 )
 
 accelerate launch "${CMD_ARGS[@]}"
