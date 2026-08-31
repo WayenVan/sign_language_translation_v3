@@ -217,7 +217,7 @@ def main():
     )
     parser.add_argument("--backbone-id", default="nvidia/C-RADIOv4-SO400M")
     parser.add_argument(
-        "--mediapipe-dir", default=str(PROJECT_ROOT / "large_files" / "mediapipe")
+        "--mediapipe-dir", default=str(PROJECT_ROOT / ".cache" / "mediapipe")
     )
     parser.add_argument("--detect-size", type=int, default=512)
     parser.add_argument("--num-videos", type=int, default=40)

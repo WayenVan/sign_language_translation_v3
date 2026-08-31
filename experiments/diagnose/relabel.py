@@ -32,7 +32,7 @@ def main():
     parser.add_argument("--out", default="outputs/diagnose/labels_hand_vs_face.npz")
     parser.add_argument(
         "--mediapipe-dir",
-        default=str(Path(__file__).resolve().parents[2] / "large_files" / "mediapipe"),
+        default=str(Path(__file__).resolve().parents[2] / ".cache" / "mediapipe"),
     )
     parser.add_argument("--detect-size", type=int, default=512)
     args = parser.parse_args()
