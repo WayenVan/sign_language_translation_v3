@@ -17,6 +17,14 @@ hydra:
     dir: .
   output_subdir: null
 
+model:
+  config:
+    # Baseline attention is the standard causal (one-way) Qwen attention.
+    video_bidirectional_attention: false
+    # Baseline uses no adapter-side visual positional embedding. Qwen's RoPE
+    # still encodes the order of the emitted visual-token sequence.
+    visual_position_embedding_type: none
+
 engine:
   # Which parameters this run optimizes. Applied by
   # `apply_trainability_plan`: everything is frozen first, then exactly the
@@ -31,7 +39,8 @@ engine:
     visual_backbone: { mode: frozen, runtime_mode: eval }
     visual_adapter: { mode: full, runtime_mode: train }
     ctc_head: { mode: full }
-    visual_position_embedding: { mode: full }
+    # No module is constructed while visual_position_embedding_type=none.
+    visual_position_embedding: { mode: frozen }
     visual_boundary_embeddings: { mode: full }
     visual_scale: { mode: full }
   evaluate_before_training: false
@@ -49,7 +58,7 @@ engine:
     ddp_find_unused_parameters: True
     save_strategy: best
     load_best_model_at_end: true
-    save_total_limit: 1
+    save_total_limit: 2
     logging_steps: 50
     eval_strategy: "steps"
     eval_steps: 4000
@@ -95,3 +104,11 @@ engine:
     # length_penalty: 1.0
   llm_dtype: bfloat16
   visual_backbone_dtype: auto
+
+data:
+  processor:
+    video_processor:
+      padding_to_multiple_of: 4
+      do_resize: false
+      # C-RADIO performs its expected preprocessing internally.
+      do_normalize: false
