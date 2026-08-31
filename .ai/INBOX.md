@@ -30,3 +30,17 @@
 注意笔记第 5 节——有个自然但会造成静默权重破坏的错误修法。
 
 #todo #upstream #fsdp #accelerate
+
+---
+
+## 2026-08-31 02:15
+
+C-RADIOv4 逐层 patch 可分性诊断跑完了，三条结论推翻了之前的两个假设：末层特征**没有**被
+背景污染（`output_layer: [-1]` 不用改）；**CLS attention 不能当 token 筛选的打分器**——
+在「手 vs 脸」上 AUC 只有 0.034，是个反向的人脸检测器，用它做 top-k 会优先丢掉手；
+两个探针任务全部饱和，说明 patch 特征不是瓶颈，真正该怀疑的是 224×224 下手型细节根本
+没被编码。完整数据、图和复跑方式见
+[cradio_patch_separability_diagnosis.md](cradio_patch_separability_diagnosis.md)。
+下一步：手型回归探针（现有 features.npz 就能跑，不用重跑 backbone）。
+
+#experiment #visual-adapter #diagnosis
