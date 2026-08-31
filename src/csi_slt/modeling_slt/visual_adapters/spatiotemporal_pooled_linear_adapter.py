@@ -1,4 +1,4 @@
-"""Minimal spatial-temporal mean-pooling adapter for capacity controls."""
+"""Minimal spatial-temporal mean-pooling adapter with a two-layer projection."""
 
 import math
 
@@ -13,28 +13,27 @@ from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackbon
 
 
 class SpatiotemporalPooledLinearAdapter(nn.Module):
-    """Spatially and temporally mean-pool patches, then linearly project.
+    """Spatially and temporally mean-pool patches, then project through an MLP.
 
     This adapter deliberately ignores the backbone's pooled/CLS feature and
-    contains no learned patch selection, positional embedding, nonlinear
-    activation, or learned spatial/temporal interaction.  Temporal processing
-    is a fixed mean over non-overlapping windows inside each video.  It is meant
-    to be the smallest stable temporal baseline against which learned
-    mechanisms can be ablated.
+    contains no learned patch selection, positional embedding, or learned
+    spatial/temporal interaction.  Temporal processing is a fixed mean over
+    non-overlapping windows inside each video.  It is meant to be the smallest
+    stable temporal baseline against which learned mechanisms can be ablated.
 
-    ``projection_rank`` controls the number of trainable projection parameters:
+    The projection is the standard two-layer VLM connector,
+    ``Linear -> GELU -> Linear``, matching what LLaVA-1.5, Qwen2-VL and
+    InternVL use.  ``projection_rank`` is its hidden width and is the single
+    knob controlling adapter capacity:
 
-    - ``None``: one dense ``input_dim -> output_dim`` projection.
-    - positive integer ``R``: a bias-free ``input_dim -> R`` projection followed
-      by an ``R -> output_dim`` projection.  With no activation between them,
-      the composed operation remains linear.  ``R`` may exceed either endpoint
-      dimension when an over-parameterized but still linear capacity control is
-      needed.
+    - ``None``: resolves to ``output_dim``, the usual connector default.
+    - ``R < min(input_dim, output_dim)``: a genuine bottleneck.
+    - ``R`` above that: extra capacity.  Unlike a bias-free linear pair, the
+      GELU makes width beyond ``min(input_dim, output_dim)`` add expressive
+      power rather than only parameters.
 
-    With affine LayerNorm enabled, the exact parameter counts are:
-
-    - dense: ``2 * input_dim + input_dim * output_dim + output_dim``;
-    - rank R: ``2 * input_dim + R * (input_dim + output_dim) + output_dim``.
+    With affine LayerNorm enabled, the exact parameter count is
+    ``2 * input_dim + R * (input_dim + output_dim + 1) + output_dim``.
     """
 
     def __init__(
@@ -54,23 +53,26 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
 
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.projection_rank = projection_rank
+        # A ``None`` rank resolves to output_dim, so this attribute always
+        # reports the hidden width the projection actually uses.
+        self.projection_rank = (
+            output_dim if projection_rank is None else projection_rank
+        )
         self.temporal_scale_factor = temporal_scale_factor
         self.norm = nn.LayerNorm(input_dim) if use_layer_norm else nn.Identity()
 
-        if projection_rank is None:
-            self.projection = nn.Linear(input_dim, output_dim)
-        else:
-            self.projection = nn.Sequential(
-                nn.Linear(input_dim, projection_rank, bias=False),
-                nn.Linear(projection_rank, output_dim),
-            )
+        # Both layers keep their bias: with a GELU in between, the first bias
+        # sets where each hidden unit sits on the nonlinearity.
+        self.projection = nn.Sequential(
+            nn.Linear(input_dim, self.projection_rank),
+            nn.GELU(),
+            nn.Linear(self.projection_rank, output_dim),
+        )
 
         # Use fan-in initialization rather than allowing the outer HF model to
-        # initialize both factor matrices with the same fixed standard
+        # initialize both weight matrices with the same fixed standard
         # deviation.  The latter makes output variance grow with R and would
-        # confound parameter-budget comparisons.  The second factor is scaled
-        # so the dense and factorized forms have similar initial output scale.
+        # confound parameter-budget comparisons.
         self._reset_projection_parameters()
         mark_module_tree_as_initialized(self)
 
@@ -80,17 +82,14 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
             raise ValueError(f"{name} must be a positive integer, got {value!r}")
 
     def _reset_projection_parameters(self) -> None:
-        if self.projection_rank is None:
-            nn.init.kaiming_uniform_(self.projection.weight, a=math.sqrt(5))
-            nn.init.zeros_(self.projection.bias)
-            return
-
-        input_projection, output_projection = self.projection
-        nn.init.kaiming_uniform_(input_projection.weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(output_projection.weight, a=math.sqrt(5))
-        with torch.no_grad():
-            output_projection.weight.mul_(math.sqrt(3.0))
-        nn.init.zeros_(output_projection.bias)
+        # Plain fan-in init on both layers.  The earlier sqrt(3) rescaling of
+        # the second factor existed to match a *linear* pair to a single dense
+        # projection; with a GELU between the layers that compensation no
+        # longer applies and would just bias the initial output scale.
+        input_projection, output_projection = self.projection[0], self.projection[2]
+        for projection in (input_projection, output_projection):
+            nn.init.kaiming_uniform_(projection.weight, a=math.sqrt(5))
+            nn.init.zeros_(projection.bias)
 
     @property
     def trainable_parameter_count(self) -> int:
@@ -116,7 +115,7 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
 
         # Temporal mean is performed separately within each packed video, so a
         # window can never cross a video boundary.  Projection happens after
-        # temporal pooling to keep the baseline as small and cheap as possible.
+        # temporal pooling to keep the baseline as cheap as possible.
         video_features = torch.split(frame_features, visual_length.tolist(), dim=0)
         pooled_features = torch.cat(
             [

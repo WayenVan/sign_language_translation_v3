@@ -55,21 +55,34 @@ def test_spatiotemporal_pooling_matches_explicit_means_and_projection(
     assert patches.grad is not None
 
 
+def _expected_parameter_count(
+    input_dim: int, output_dim: int, rank: int, use_layer_norm: bool = True
+) -> int:
+    return (
+        (2 * input_dim if use_layer_norm else 0)
+        + rank * (input_dim + output_dim + 1)
+        + output_dim
+    )
+
+
 def test_projection_rank_controls_exact_active_parameter_count() -> None:
     input_dim = 4
     output_dim = 6
     rank = 3
-    dense = SpatiotemporalPooledLinearAdapter(input_dim, output_dim)
-    factorized = SpatiotemporalPooledLinearAdapter(
+    default = SpatiotemporalPooledLinearAdapter(input_dim, output_dim)
+    narrow = SpatiotemporalPooledLinearAdapter(
         input_dim, output_dim, projection_rank=rank
     )
 
-    expected_dense = 2 * input_dim + input_dim * output_dim + output_dim
-    expected_factorized = 2 * input_dim + rank * (input_dim + output_dim) + output_dim
-
-    assert dense.trainable_parameter_count == expected_dense
-    assert factorized.trainable_parameter_count == expected_factorized
-    assert all(parameter.requires_grad for parameter in factorized.parameters())
+    # A ``None`` rank resolves to output_dim rather than to a dense projection.
+    assert default.projection_rank == output_dim
+    assert default.trainable_parameter_count == _expected_parameter_count(
+        input_dim, output_dim, output_dim
+    )
+    assert narrow.trainable_parameter_count == _expected_parameter_count(
+        input_dim, output_dim, rank
+    )
+    assert all(parameter.requires_grad for parameter in narrow.parameters())
 
 
 def test_layer_norm_can_be_excluded_from_parameter_budget() -> None:
@@ -80,7 +93,26 @@ def test_layer_norm_can_be_excluded_from_parameter_budget() -> None:
         use_layer_norm=False,
     )
 
-    assert adapter.trainable_parameter_count == 3 * (4 + 6) + 6
+    assert adapter.trainable_parameter_count == _expected_parameter_count(
+        4, 6, 3, use_layer_norm=False
+    )
+
+
+def test_projection_is_a_two_layer_gelu_mlp() -> None:
+    adapter = SpatiotemporalPooledLinearAdapter(
+        input_dim=4, output_dim=6, projection_rank=3
+    )
+
+    assert isinstance(adapter.projection[1], torch.nn.GELU)
+
+    # A nonlinear map cannot satisfy f(2x) - f(0) == 2 * (f(x) - f(0)).
+    features = torch.randn(5, 4)
+    zero = adapter.projection(torch.zeros(1, 4))
+    assert not torch.allclose(
+        adapter.projection(2 * features) - zero,
+        2 * (adapter.projection(features) - zero),
+        atol=1e-5,
+    )
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,41 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: -1
+
+  visual_adapter_type: spatiotemporal_pooled_linear
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
+    input_dim: 1152
+    output_dim: 2560
+
+    # Fixed, non-overlapping temporal mean over every two frames.
+    temporal_scale_factor: 2
+
+    # Widened 1152 -> 5385 -> GELU -> 2560 connector. Including affine
+    # LayerNorm, the adapter has exactly 19,999,369 trainable parameters.
+    projection_rank: 5385
+    use_layer_norm: true
