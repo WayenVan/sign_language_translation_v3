@@ -1,0 +1,76 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# Parameter-matched counterpart of
+# qwen3-4b-cradio-l-spatiotemporal-pooled-linear-20m.yaml. Everything outside
+# visual_adapter_kwargs is identical, so a run against that baseline isolates
+# one variable: patches are fused with their next-frame match before the
+# spatial mean. The fusion block is the same NextFramePatchFusion the attnpool
+# ablation uses, so the two ablations differ only in what surrounds it.
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: -1
+
+  visual_adapter_type: spatiotemporal_next_frame
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
+    input_dim: 1152
+    output_dim: 2560
+
+    # Window size of the temporal mean. Every video's frame count must be
+    # divisible by it, which is also what keeps a window from spanning two
+    # videos in the packed batch.
+    temporal_scale_factor: 2
+
+    # null infers a square patch grid from the patch-token count.
+    patch_grid_size: null
+
+    # Hidden width of the fusion space the content, delta and displacement
+    # streams are projected into. The block costs 3,460 * H + 5,761
+    # parameters, here 3,548,801 (17.7% of the budget).
+    patch_fusion_hidden_dim: 1024
+    # Softmax temperature over cosine similarities, and how many next-frame
+    # candidates survive before that softmax. top_k=1 makes the match a hard
+    # nearest neighbour.
+    patch_fusion_temperature: 0.1
+    patch_fusion_matching_top_k: 1
+    # Chebyshev radius, in patch units, of the window a match may come from.
+    patch_fusion_window_radius: 3
+    # sigmoid(0) = 0.5, deliberately more open than the -2.0 the repo's other
+    # gated branches use. The spatial mean here runs over all 196 patches,
+    # and measured on real C-RADIO features it dilutes the residual hard: the
+    # pooled frame vector has norm 27.8 against the branch's pinned sqrt(D) =
+    # 33.9 per patch, with motion spread broadly over the grid rather than
+    # concentrated. At -2.0 the branch would arrive at the projection as ~7%
+    # of the pooled signal; at 0.0 it is ~30%. The gate is still learnable in
+    # both directions, so this sets where the test starts, not where it ends.
+    patch_fusion_gate_init: 0.0
+
+    # 1152 -> 4429 -> GELU -> 2560. The rank drops from the baseline's 5385 to
+    # pay for the fusion block: including affine LayerNorm the adapter has
+    # 19,998,542 trainable parameters against the baseline's 19,999,369, a
+    # difference of 827 (0.004%).
+    projection_rank: 4429
+    use_layer_norm: true

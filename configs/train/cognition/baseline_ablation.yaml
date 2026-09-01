@@ -11,8 +11,6 @@ defaults:
 
 model:
   config:
-    visual_backbone_config:
-      output_layer: -8
     visual_adapter_kwargs:
       # Explicit ablation knob; 2 is the model's default temporal pooling.
       temporal_scale_factor: 2

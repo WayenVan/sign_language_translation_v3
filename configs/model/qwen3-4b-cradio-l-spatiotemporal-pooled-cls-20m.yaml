@@ -1,0 +1,35 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+config:
+  hidden_size: 2560
+  video_soft_token_id: 151656
+  video_token_scale: 0.5
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: -1
+
+  visual_adapter_type: spatiotemporal_pooled_linear
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M pooled/CLS width, not its 1152-wide patch feature.
+    input_dim: 2304
+    output_dim: 2560
+    use_cls_token: true
+
+    temporal_scale_factor: 2
+
+    # 2304 -> 4110 -> GELU -> 2560. Including affine LayerNorm, the
+    # adapter has exactly 20,002,318 trainable parameters.
+    projection_rank: 4110
+    use_layer_norm: true

@@ -1,0 +1,61 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# Parameter-matched counterpart of
+# qwen3-4b-cradio-l-spatiotemporal-pooled-linear-20m.yaml. Everything outside
+# visual_adapter_kwargs is identical, so a run against that baseline isolates
+# one variable: the fixed temporal mean becomes a gated motion residual.
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    output_layer: -1
+
+  visual_adapter_type: spatiotemporal_motion
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
+    input_dim: 1152
+    output_dim: 2560
+
+    # Window size of the temporal fusion. Every video's frame count must be
+    # divisible by it, which is also what keeps a window from spanning two
+    # videos in the packed batch.
+    temporal_scale_factor: 2
+
+    # Hidden width of the motion branch's SwiGLU. The branch costs
+    # 3,458 * H + 5,761 parameters, here 3,546,753 (17.7% of the budget).
+    motion_hidden_dim: 1024
+
+    # sigmoid(-2) ~= 0.119: the motion residual starts small, so training
+    # begins close to the mean-pooling baseline. Deliberately not zero -- a
+    # zero gate multiplies the whole branch by zero, which leaves every
+    # parameter behind it with no gradient at all.
+    motion_gate_init: -2.0
+
+    # 1152 -> 4430 -> GELU -> 2560. The rank drops from the baseline's 5385 to
+    # pay for the motion branch: including affine LayerNorm the adapter has
+    # 20,000,207 trainable parameters against the baseline's 19,999,369, a
+    # difference of 838 (0.004%). Ranks for other branch widths, all matched to
+    # the same budget: H=512 -> 4907, H=768 -> 4668, H=1536 -> 3953.
+    projection_rank: 4430
+    use_layer_norm: true

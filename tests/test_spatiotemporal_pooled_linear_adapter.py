@@ -55,6 +55,36 @@ def test_spatiotemporal_pooling_matches_explicit_means_and_projection(
     assert patches.grad is not None
 
 
+def test_cls_option_bypasses_spatial_patch_pooling() -> None:
+    torch.manual_seed(0)
+    patches = torch.randn(6, 5, 4)
+    cls_features = torch.randn(6, 11, requires_grad=True)
+    backbone_output = VisualBackboneOutput(
+        visual_features=patches,
+        pooled_visual_features=cls_features,
+        visual_length=torch.tensor([2, 4]),
+    )
+    adapter = SpatiotemporalPooledLinearAdapter(
+        input_dim=11,
+        output_dim=6,
+        projection_rank=3,
+        use_cls_token=True,
+    )
+
+    output = adapter(backbone_output)
+    temporal_mean = torch.cat(
+        (
+            cls_features[:2].reshape(1, 2, 11).mean(dim=1),
+            cls_features[2:].reshape(2, 2, 11).mean(dim=1),
+        )
+    )
+    expected = adapter.projection(adapter.norm(temporal_mean))
+
+    torch.testing.assert_close(output.visual_features, expected)
+    output.visual_features.sum().backward()
+    assert cls_features.grad is not None
+
+
 def _expected_parameter_count(
     input_dim: int, output_dim: int, rank: int, use_layer_norm: bool = True
 ) -> int:

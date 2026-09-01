@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_attnpool20m_topkall
+#SBATCH --job-name=slt_qwen3_4b_nextframe20m_lm1
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="attnpool,20m,attention-gated-ablation,topk-all,no-temporal-conv"
+  export WANDB_TAGS="spatiotemporal-next-frame,20m,lm1,hard-match,window3"
   REPORT_TO=wandb
 fi
 
@@ -76,17 +76,15 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  --config-name=train/cognition/attention_gated_ablation
-  # Ablation: keep the adapter's learned spatial context but no temporal
-  # convolution. Temporal mixing is then only the fixed mean below.
-  model.config.visual_adapter_kwargs.use_temporal_conv=false
-  # Use the final C-RADIO block for patch features; CLS attention remains -25.
-  model.config.visual_backbone_config.output_layer=-1
-  # Temporal-scale ablation: average every two frames into one visual token.
+  # Keep the latest 20M run's training, data and two-frame tokenization setup;
+  # only swap in the parameter-matched next-frame fusion adapter. Use the
+  # baseline recipe here so no attnpool-only kwargs leak into this model.
+  --config-name=train/cognition/baseline_ablation
+  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
   model.config.visual_adapter_kwargs.temporal_scale_factor=2
   model.config.video_token_scale=0.5
   data.processor.video_token_scale=0.5
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-attnpool20m-lm1-attnm25-topk48-ts2-0831.224x224-de
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-spatiotemporal-next-frame20m-lm1-hardmatch-wr3-ts2-0901.224x224-de
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"

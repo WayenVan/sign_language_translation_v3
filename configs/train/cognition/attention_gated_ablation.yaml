@@ -1,7 +1,10 @@
 # @package _global_
 
-# Shared setup for attention-gated patch-pooling ablations. Individual runs
-# should override only the ablation variable(s) and their output directory.
+# Shared setup for the attention-selected patch-pooling ablations. CLS
+# attention picks which patches survive; the survivors are pooled by a plain
+# uniform mean, with no learned gate and no attention weighting. Individual
+# runs should override only the ablation variable(s) and their output
+# directory.
 defaults:
   - /train/base
   - override /model: qwen3-4b-cradio-l-attnpool-20m
@@ -17,8 +20,6 @@ model:
       top_k: 48
       attention_smooth_kernel_size: 3
       use_temporal_conv: false
-      residual_gate_init: 0.0
-      pooling_gate_init: -2.0
 
 engine:
   training_args:

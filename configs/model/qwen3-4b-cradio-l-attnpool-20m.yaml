@@ -22,8 +22,12 @@ config:
   visual_backbone_type: c_radio_v4
   visual_backbone_config:
     id: nvidia/C-RADIOv4-SO400M
-    # Patch features and summary come from the eighth-last block.
-    output_layer: -8
+    # Patch features come from the final block; the adapter ignores the
+    # backbone's summary/CLS vector entirely. The layer-wise probe found the
+    # last block best at the discrimination this task needs -- hand vs face
+    # Fisher ratio 0.72 there against ~0.50 mid-stack -- so there is no reason
+    # to read patches from an intermediate block.
+    output_layer: -1
     # CLS-to-patch selection scores come from the twenty-fifth-last block.
     attention_layer: -25
 
@@ -35,10 +39,11 @@ config:
 
     # Emit one visual token per non-overlapping pair of input frames.
     temporal_scale_factor: 2
-    # 1152 -> 5024 -> GELU -> 2560. Together with the spatial context module,
-    # this gives 19,999,906 adapter parameters. The rank moved 5023 -> 5024 to
-    # reabsorb the 3,456 parameters freed by disabling the temporal conv, so
-    # this config keeps its ~20M budget.
+    # 1152 -> 5024 -> GELU -> 2560. Together with the spatial residual block,
+    # this gives 19,999,904 adapter parameters.
+    # NOTE: the temporal block now carries its own LayerNorm and output
+    # projection, so enabling use_temporal_conv adds 1,334,016 parameters.
+    # Drop the rank to 4665 if you turn it on and want to hold the 20M budget.
     projection_rank: 5024
     use_layer_norm: true
 
@@ -49,18 +54,19 @@ config:
     patch_grid_size: null
 
     # Contextualize every patch before applying the hard mask at pooling time.
+    # With both convolutions off the adapter carries no patch_context at all,
+    # and its parameters reduce to exactly the pooled-linear baseline's shape.
+    use_spatial_conv: true
     spatial_conv_kernel_size: 3
-    # Off: the temporal branch cost 6.6 ms of the adapter's 16.6 ms fwd+bwd,
-    # and most of that was the packed<->padded round trip and its layout
-    # copies rather than the depthwise Conv1d itself. Disabling it also drops
-    # the per-forward device synchronizations from 11 to 4, since
-    # packed_to_padded is no longer called. Temporal context still comes from
-    # the fixed mean over temporal_scale_factor frames.
+    # Off for speed: the temporal branch pays a packed<->padded round trip and
+    # four layout copies, which cost more than its depthwise Conv1d, and it is
+    # the only reason packed_to_padded runs at all. Temporal context then comes
+    # only from the fixed mean over temporal_scale_factor frames.
+    # CAUTION: this is a speed choice, not a quality one. The one run that had
+    # the temporal branch enabled fit *better* than this config at every
+    # matched step (train-loss gap vs the pooled-linear baseline was +0.528
+    # with it on versus +0.597 with it off, at step 6000). Re-measure before
+    # treating "off" as the better setting.
     use_temporal_conv: false
     # Unused while use_temporal_conv is false.
     temporal_conv_kernel_size: 3
-    # tanh(0)=0: the contextual residual starts as an exact identity.
-    residual_gate_init: 0.0
-
-    # sigmoid(-2) ~= 0.119 attention pool and 0.881 uniform selected-patch pool.
-    pooling_gate_init: -2.0

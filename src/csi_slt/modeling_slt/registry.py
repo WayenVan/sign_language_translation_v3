@@ -14,6 +14,12 @@ from .visual_adapters.spatiotemporal_pooled_linear_adapter import (
 from .visual_adapters.attnpool_adapter import (
     AttnPoolAdapter,
 )
+from .visual_adapters.spatiotemporal_motion_adapter import (
+    SpatiotemporalMotionAdapter,
+)
+from .visual_adapters.spatiotemporal_next_frame_adapter import (
+    SpatiotemporalNextFrameAdapter,
+)
 from .visual_adapters.token_sampler_adapter_v2 import (
     TokenSampleAdapterV2,
 )
@@ -58,6 +64,8 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "temporal_merge": TemporalMergeAdapter,
     "spatiotemporal_pooled_linear": SpatiotemporalPooledLinearAdapter,
     "attnpool": AttnPoolAdapter,
+    "spatiotemporal_motion": SpatiotemporalMotionAdapter,
+    "spatiotemporal_next_frame": SpatiotemporalNextFrameAdapter,
     "token_sampler_v2": TokenSampleAdapterV2,
     "dinoframe": DINOFrameAdapter,
     "dinoframe_cross": DINOFrameAdapterCross,

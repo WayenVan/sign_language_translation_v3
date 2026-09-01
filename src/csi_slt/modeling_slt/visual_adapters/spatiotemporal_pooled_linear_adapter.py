@@ -15,11 +15,17 @@ from csi_slt.modeling_slt.output_utils import VisualAdapterOutput, VisualBackbon
 class SpatiotemporalPooledLinearAdapter(nn.Module):
     """Spatially and temporally mean-pool patches, then project through an MLP.
 
-    This adapter deliberately ignores the backbone's pooled/CLS feature and
-    contains no learned patch selection, positional embedding, or learned
-    spatial/temporal interaction.  Temporal processing is a fixed mean over
-    non-overlapping windows inside each video.  It is meant to be the smallest
-    stable temporal baseline against which learned mechanisms can be ablated.
+    By default, this adapter ignores the backbone's pooled/CLS feature and
+    spatially averages its patch features. Setting use_cls_token=True replaces
+    that spatial mean with pooled_visual_features while retaining the same
+    temporal pooling and projection. In CLS mode, input_dim must match the CLS
+    width; otherwise it must match the patch width.
+
+    The adapter contains no learned patch selection, positional embedding, or
+    learned spatial/temporal interaction. Temporal processing is a fixed mean
+    over non-overlapping windows inside each video. It is meant to be the
+    smallest stable temporal baseline against which learned mechanisms can be
+    ablated.
 
     The projection is the standard two-layer VLM connector,
     ``Linear -> GELU -> Linear``, matching what LLaVA-1.5, Qwen2-VL and
@@ -43,6 +49,7 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
         projection_rank: int | None = None,
         use_layer_norm: bool = True,
         temporal_scale_factor: int = 2,
+        use_cls_token: bool = False,
     ) -> None:
         super().__init__()
         self._validate_dimension("input_dim", input_dim)
@@ -50,6 +57,8 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
         if projection_rank is not None:
             self._validate_dimension("projection_rank", projection_rank)
         self._validate_dimension("temporal_scale_factor", temporal_scale_factor)
+        if not isinstance(use_cls_token, bool):
+            raise TypeError("use_cls_token must be a boolean")
 
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -59,6 +68,7 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
             output_dim if projection_rank is None else projection_rank
         )
         self.temporal_scale_factor = temporal_scale_factor
+        self.use_cls_token = use_cls_token
         self.norm = nn.LayerNorm(input_dim) if use_layer_norm else nn.Identity()
 
         # Both layers keep their bias: with a GELU in between, the first bias
@@ -106,12 +116,16 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
         permute_video_tokens: bool = False,
     ) -> VisualAdapterOutput:
         patch_features = visual_backbone_output.visual_features
+        cls_features = visual_backbone_output.pooled_visual_features
         visual_length = visual_backbone_output.visual_length
-        self._validate_inputs(patch_features, visual_length)
+        self._validate_inputs(patch_features, cls_features, visual_length)
 
-        # Spatial mean: [sum(T), P, D] -> [sum(T), D].  Every patch has fixed
-        # weight 1/P; the backbone's pooled/CLS feature is never consumed.
-        frame_features = patch_features.mean(dim=1)
+        if self.use_cls_token:
+            frame_features = cls_features
+        else:
+            # Spatial mean: [sum(T), P, D] -> [sum(T), D]. Every patch has
+            # fixed weight 1/P; this is the unchanged default behavior.
+            frame_features = patch_features.mean(dim=1)
 
         # Temporal mean is performed separately within each packed video, so a
         # window can never cross a video boundary.  Projection happens after
@@ -141,22 +155,42 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
     def _validate_inputs(
         self,
         patch_features: Tensor | None,
+        cls_features: Tensor | None,
         visual_length: Tensor | None,
     ) -> None:
-        if patch_features is None:
-            raise ValueError("visual_features must contain patch features")
-        if patch_features.ndim != 3:
-            raise ValueError(
-                "visual_features must have shape [sum(T), P, input_dim], got "
-                f"{tuple(patch_features.shape)}"
-            )
-        if patch_features.shape[1] == 0:
-            raise ValueError("visual_features must contain at least one patch")
-        if patch_features.shape[-1] != self.input_dim:
-            raise ValueError(
-                f"patch feature dimension must be {self.input_dim}, got "
-                f"{patch_features.shape[-1]}"
-            )
+        if self.use_cls_token:
+            if cls_features is None:
+                raise ValueError(
+                    "pooled_visual_features must contain CLS features when "
+                    "use_cls_token=true"
+                )
+            if cls_features.ndim != 2:
+                raise ValueError(
+                    "pooled_visual_features must have shape [sum(T), input_dim], "
+                    f"got {tuple(cls_features.shape)}"
+                )
+            if cls_features.shape[-1] != self.input_dim:
+                raise ValueError(
+                    f"CLS feature dimension must be {self.input_dim}, got "
+                    f"{cls_features.shape[-1]}"
+                )
+            frame_count = cls_features.shape[0]
+        else:
+            if patch_features is None:
+                raise ValueError("visual_features must contain patch features")
+            if patch_features.ndim != 3:
+                raise ValueError(
+                    "visual_features must have shape [sum(T), P, input_dim], got "
+                    f"{tuple(patch_features.shape)}"
+                )
+            if patch_features.shape[1] == 0:
+                raise ValueError("visual_features must contain at least one patch")
+            if patch_features.shape[-1] != self.input_dim:
+                raise ValueError(
+                    f"patch feature dimension must be {self.input_dim}, got "
+                    f"{patch_features.shape[-1]}"
+                )
+            frame_count = patch_features.shape[0]
         if visual_length is None:
             raise ValueError("visual_length must be provided")
         if visual_length.ndim != 1 or visual_length.numel() == 0:
@@ -165,7 +199,7 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
             raise TypeError("visual_length must use an integer dtype")
         if bool((visual_length <= 0).any()):
             raise ValueError("all entries in visual_length must be positive")
-        if int(visual_length.sum().item()) != patch_features.shape[0]:
+        if int(visual_length.sum().item()) != frame_count:
             raise ValueError(
                 "visual_length.sum() must equal the number of packed frames"
             )
