@@ -139,9 +139,7 @@ class SpatiotemporalSeparableConv(nn.Module):
         # Forcing the activations contiguous instead would satisfy DDP too, but
         # costs a full copy of the [F, D, H, W] tensor and measured 2x slower.
         if self.spatial_conv is not None:
-            self.spatial_conv = self.spatial_conv.to(
-                memory_format=torch.channels_last
-            )
+            self.spatial_conv = self.spatial_conv.to(memory_format=torch.channels_last)
         self.activation = nn.GELU()
         self.spatial_projection = (
             nn.Linear(hidden_dim, hidden_dim) if use_spatial_conv else None
@@ -231,9 +229,7 @@ class SpatiotemporalSeparableConv(nn.Module):
             )
         return side, side
 
-    def _validate_inputs(
-        self, patch_features: Tensor, visual_length: Tensor
-    ) -> None:
+    def _validate_inputs(self, patch_features: Tensor, visual_length: Tensor) -> None:
         if not isinstance(patch_features, Tensor) or patch_features.ndim != 3:
             raise ValueError("patch_features must have shape [sum(T), P, D]")
         if patch_features.shape[0] == 0 or patch_features.shape[1] == 0:
@@ -324,12 +320,9 @@ class ClsAttentionTopKSelector(nn.Module):
         ):
             raise ValueError("spatial_smooth_kernel must be a positive odd integer")
         if grid_size is not None:
-            if (
-                len(grid_size) != 2
-                or any(
-                    isinstance(size, bool) or not isinstance(size, int) or size <= 0
-                    for size in grid_size
-                )
+            if len(grid_size) != 2 or any(
+                isinstance(size, bool) or not isinstance(size, int) or size <= 0
+                for size in grid_size
             ):
                 raise ValueError("grid_size must contain two positive integers")
         if not isinstance(debug_validation, bool):
@@ -469,6 +462,7 @@ class AttnPoolAdapter(nn.Module):
         use_spatial_conv: bool = True,
         use_temporal_conv: bool = True,
         temporal_conv_kernel_size: int = 3,
+        projection_dropout: float = 0.0,
         debug_validation: bool = False,
     ) -> None:
         super().__init__()
@@ -513,11 +507,17 @@ class AttnPoolAdapter(nn.Module):
             debug_validation=debug_validation,
         )
 
-        self.projection = nn.Sequential(
+        # Dropout only when asked for: nn.Sequential keys its state dict by
+        # position, so inserting it unconditionally would renumber the second
+        # Linear from 2 to 3 and stop every existing checkpoint from loading.
+        projection_layers = [
             nn.Linear(input_dim, self.projection_rank),
             nn.GELU(),
-            nn.Linear(self.projection_rank, output_dim),
-        )
+        ]
+        if projection_dropout > 0.0:
+            projection_layers.append(nn.Dropout(projection_dropout))
+        projection_layers.append(nn.Linear(self.projection_rank, output_dim))
+        self.projection = nn.Sequential(*projection_layers)
 
         self._reset_projection_parameters()
         mark_module_tree_as_initialized(self)
@@ -528,10 +528,12 @@ class AttnPoolAdapter(nn.Module):
             raise ValueError(f"{name} must be a positive integer, got {value!r}")
 
     def _reset_projection_parameters(self) -> None:
-        input_projection, output_projection = self.projection[0], self.projection[2]
-        for projection in (input_projection, output_projection):
-            nn.init.kaiming_uniform_(projection.weight, a=math.sqrt(5))
-            nn.init.zeros_(projection.bias)
+        # Selected by type rather than by index: the projection may carry a
+        # Dropout between its layers, which would shift any fixed index.
+        for layer in self.projection:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_uniform_(layer.weight, a=math.sqrt(5))
+                nn.init.zeros_(layer.bias)
 
     @property
     def trainable_parameter_count(self) -> int:
@@ -570,9 +572,9 @@ class AttnPoolAdapter(nn.Module):
         selected_counts = selection.mask.sum(dim=1, keepdim=True).to(
             dtype=contextualized_patches.dtype
         )
-        frame_features = (
-            contextualized_patches * feature_mask
-        ).sum(dim=1) / selected_counts
+        frame_features = (contextualized_patches * feature_mask).sum(
+            dim=1
+        ) / selected_counts
 
         video_features = torch.split(frame_features, visual_length.tolist(), dim=0)
         pooled_features = torch.cat(

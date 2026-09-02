@@ -264,6 +264,8 @@ class HandRoiPooledAdapter(nn.Module):
         roi_projection_rank: int | None = None,
         gate_init: float = -2.0,
         spatial_dropout: float = 0.0,
+        projection_dropout: float = 0.0,
+        roi_projection_dropout: float | None = None,
     ) -> None:
         super().__init__()
         self._validate_dimension("input_dim", input_dim)
@@ -308,10 +310,17 @@ class HandRoiPooledAdapter(nn.Module):
         # it is the baseline's own projection over the global half alone.
         pooled_dim = 2 * input_dim if fusion_mode == "concat" else input_dim
         self.norm = nn.LayerNorm(pooled_dim) if use_layer_norm else nn.Identity()
-        self.projection = nn.Sequential(
-            nn.Linear(pooled_dim, self.projection_rank),
-            nn.GELU(),
-            nn.Linear(self.projection_rank, output_dim),
+        # The two branches take separate rates because dropout does not mean the
+        # same thing in each. Here it both damps and perturbs; in the residual
+        # branch below, the non-affine LayerNorm restores the magnitude, leaving
+        # only the perturbation.
+        self.roi_projection_dropout = (
+            projection_dropout
+            if roi_projection_dropout is None
+            else roi_projection_dropout
+        )
+        self.projection = self._build_projection(
+            pooled_dim, self.projection_rank, output_dim, projection_dropout
         )
 
         self.roi_norm = None
@@ -319,12 +328,15 @@ class HandRoiPooledAdapter(nn.Module):
         self.fusion_gate = None
         if fusion_mode == "gated":
             self.roi_norm = nn.LayerNorm(input_dim) if use_layer_norm else nn.Identity()
-            self.roi_projection = nn.Sequential(
-                nn.Linear(input_dim, self.roi_projection_rank),
-                nn.GELU(),
-                nn.Linear(self.roi_projection_rank, output_dim),
+            self.roi_projection = self._build_projection(
+                input_dim,
+                self.roi_projection_rank,
+                output_dim,
+                self.roi_projection_dropout,
                 # Pins the branch scale so the gate is identifiable and readable.
-                nn.LayerNorm(output_dim, elementwise_affine=False),
+                # It also cancels dropout's damping: the vector changes, but its
+                # norm is pulled back, so what survives is direction noise.
+                tail=nn.LayerNorm(output_dim, elementwise_affine=False),
             )
             # One-dimensional for FSDP2 compatibility. Default -2.0, not the 0.0
             # used by NextFramePatchFusion: that value compensated for a residual
@@ -343,6 +355,28 @@ class HandRoiPooledAdapter(nn.Module):
         if self.fusion_gate is None:
             raise AttributeError("roi_weight is only defined in gated fusion mode")
         return float(torch.sigmoid(self.fusion_gate).item())
+
+    @staticmethod
+    def _build_projection(
+        in_dim: int,
+        rank: int,
+        out_dim: int,
+        dropout: float,
+        tail: nn.Module | None = None,
+    ) -> nn.Sequential:
+        """``Linear -> GELU -> [Dropout] -> Linear -> [tail]``.
+
+        Dropout is inserted only when positive: an ``nn.Sequential`` keys its
+        state dict by position, so adding it unconditionally would renumber the
+        second Linear and stop every existing checkpoint from loading.
+        """
+        layers: list[nn.Module] = [nn.Linear(in_dim, rank), nn.GELU()]
+        if dropout > 0.0:
+            layers.append(nn.Dropout(dropout))
+        layers.append(nn.Linear(rank, out_dim))
+        if tail is not None:
+            layers.append(tail)
+        return nn.Sequential(*layers)
 
     @staticmethod
     def _validate_dimension(name: str, value: int) -> None:

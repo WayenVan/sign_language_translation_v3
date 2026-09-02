@@ -497,6 +497,7 @@ class SpatiotemporalNextFrameMotionAdapter(nn.Module):
         patch_fusion_window_radius: int | None = 3,
         motion_hidden_dim: int | None = None,
         motion_gate_init: float = -2.0,
+        projection_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self._validate_dimension("input_dim", input_dim)
@@ -533,11 +534,17 @@ class SpatiotemporalNextFrameMotionAdapter(nn.Module):
 
         # Both layers keep their bias: with a GELU in between, the first bias
         # sets where each hidden unit sits on the nonlinearity.
-        self.projection = nn.Sequential(
+        # Dropout only when asked for: nn.Sequential keys its state dict by
+        # position, so inserting it unconditionally would renumber the second
+        # Linear from 2 to 3 and stop every existing checkpoint from loading.
+        projection_layers = [
             nn.Linear(input_dim, self.projection_rank),
             nn.GELU(),
-            nn.Linear(self.projection_rank, output_dim),
-        )
+        ]
+        if projection_dropout > 0.0:
+            projection_layers.append(nn.Dropout(projection_dropout))
+        projection_layers.append(nn.Linear(self.projection_rank, output_dim))
+        self.projection = nn.Sequential(*projection_layers)
 
         self._reset_projection_parameters()
         mark_module_tree_as_initialized(self)
@@ -550,10 +557,12 @@ class SpatiotemporalNextFrameMotionAdapter(nn.Module):
     def _reset_projection_parameters(self) -> None:
         # Plain fan-in init on both layers, matching the pooled-linear
         # baseline so the two runs start from the same projection scale.
-        input_projection, output_projection = self.projection[0], self.projection[2]
-        for projection in (input_projection, output_projection):
-            nn.init.kaiming_uniform_(projection.weight, a=math.sqrt(5))
-            nn.init.zeros_(projection.bias)
+        # Selected by type rather than by index: the projection may carry a
+        # Dropout between its layers, which would shift any fixed index.
+        for layer in self.projection:
+            if isinstance(layer, nn.Linear):
+                nn.init.kaiming_uniform_(layer.weight, a=math.sqrt(5))
+                nn.init.zeros_(layer.bias)
 
     @property
     def trainable_parameter_count(self) -> int:

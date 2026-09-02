@@ -70,6 +70,8 @@ class SpatiotemporalNextFrameHandRoiAdapter(HandRoiPooledAdapter):
         roi_projection_rank: int | None = None,
         gate_init: float = -2.0,
         spatial_dropout: float = 0.0,
+        projection_dropout: float = 0.0,
+        roi_projection_dropout: float | None = None,
         patch_grid_size: tuple[int, int] | None = None,
         patch_fusion_hidden_dim: int | None = None,
         patch_fusion_temperature: float = 0.1,
@@ -90,6 +92,8 @@ class SpatiotemporalNextFrameHandRoiAdapter(HandRoiPooledAdapter):
             roi_projection_rank=roi_projection_rank,
             gate_init=gate_init,
             spatial_dropout=spatial_dropout,
+            projection_dropout=projection_dropout,
+            roi_projection_dropout=roi_projection_dropout,
         )
         self.next_frame_patch_fusion = NextFramePatchFusion(
             hidden_dim=input_dim,
