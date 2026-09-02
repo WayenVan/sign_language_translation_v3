@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_nextframe20m_lm1
+#SBATCH --job-name=slt_qwen3_4b_handroi20m_lm1
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="spatiotemporal-next-frame,20m,lm1,hard-match,window3"
+  export WANDB_TAGS="hand-roi-pooled,20m,lm1,top-k-24,frozen-scorer"
   REPORT_TO=wandb
 fi
 
@@ -76,15 +76,20 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  # Keep the latest 20M run's training, data and two-frame tokenization setup;
-  # only swap in the parameter-matched next-frame fusion adapter. Use the
-  # baseline recipe here so no attnpool-only kwargs leak into this model.
+  # Hand-ROI pooling: each token concatenates the frame's global mean with the
+  # mean of the top-24 patches a frozen scorer ranks most hand-like. Token count
+  # is unchanged from the pooled-linear baseline, so this isolates one variable.
+  #
+  # Requires outputs/hand_patch_scorer (preprocess/train_scorer.py). It is read
+  # once here, at from_pretrained_components; a resumed checkpoint carries the
+  # coefficients itself and does not need the directory.
+  #
+  # No temporal_scale_factor override: this config runs at the baseline's
+  # factor 2, and train/cognition/baseline_ablation already reserves T/2 visual
+  # placeholders to match.
   --config-name=train/cognition/baseline_ablation
-  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
-  model.config.visual_adapter_kwargs.temporal_scale_factor=2
-  model.config.video_token_scale=0.5
-  data.processor.video_token_scale=0.5
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-spatiotemporal-next-frame20m-lm1-hardmatch-wr3-ts2-0901.224x224-de
+  model=qwen3-4b-cradio-l-handroi-20m
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-handroi20m-lm1-k24-0902.224x224
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
