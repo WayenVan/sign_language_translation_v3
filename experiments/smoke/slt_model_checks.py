@@ -1,3 +1,5 @@
+"""Environment-dependent manual checks for SLT model construction and I/O."""
+
 import safetensors
 import hydra
 import sys

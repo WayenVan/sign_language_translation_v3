@@ -1,3 +1,5 @@
+"""Manually build the real datamodule and inspect a collated batch."""
+
 import hydra
 import sys
 import torch

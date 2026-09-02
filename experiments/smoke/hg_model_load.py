@@ -1,3 +1,5 @@
+"""Manually exercise loading Gemma weights into an empty-initialized model."""
+
 import numpy as np
 
 import torch

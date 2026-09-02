@@ -1,3 +1,5 @@
+"""Manually inspect Qwen3-VL video feature extraction."""
+
 from transformers.models.qwen3_vl import Qwen3VLForConditionalGeneration, Qwen3VLModel
 import torch
 from einops import rearrange

@@ -1,3 +1,5 @@
+"""Manual processor checks requiring models, datasets, and output paths."""
+
 import sys
 
 sys.path.append("./src")
