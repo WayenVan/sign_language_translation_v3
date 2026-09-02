@@ -92,6 +92,28 @@ def token_type_ids_mask_function(
     return inner_mask
 
 
+def _load_pretrained_submodule_components(model: nn.Module) -> None:
+    """Let submodules pull in weights that live outside this checkpoint.
+
+    Some components are built empty by ``__init__`` and filled from their own
+    pretrained source -- the hand-patch scorer, whose coefficients were fitted
+    offline. Loading them in ``__init__`` instead would make every
+    ``from_pretrained`` read weights it is about to overwrite, and would tie a
+    finished checkpoint to a directory that may no longer exist. So this factory,
+    the one path that does load from external sources, drives it.
+
+    Duck-typed: any module exposing ``load_pretrained_components()`` is called.
+    Define the hook on whichever module owns the loading and not also on its
+    parent, or the same weights are read twice.
+    """
+    for name, module in model.named_modules():
+        loader = getattr(module, "load_pretrained_components", None)
+        if callable(loader):
+            loader()
+            mark_module_tree_as_initialized(module)
+            logger.info("Loaded pretrained components for %s", name or "<root>")
+
+
 class SltModel(PreTrainedModel, GenerationMixin):
     config_class = SltConfig
     MAX_TOKEN_LENGTH = 1024
@@ -498,11 +520,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         logger.info("force retie the lm_head to the input embeddings!!!!!!!!")
 
-        return cls(
+        model = cls(
             config=config,
             llm=llm,
             visual_backbone=visual_backbone,
         )
+        _load_pretrained_submodule_components(model)
+        return model
 
         # fmt: on
 

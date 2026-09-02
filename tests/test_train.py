@@ -71,15 +71,15 @@ def test_trainability_plan_can_select_only_visual_adapter():
 
     trainable_count = apply_trainability_plan(
         model,
-        SltTrainabilityPlan(
-            visual_adapter=VisualAdapterTrainabilityPlan(mode="full")
-        ),
+        SltTrainabilityPlan(visual_adapter=VisualAdapterTrainabilityPlan(mode="full")),
     )
 
     assert trainable_count == sum(
         parameter.numel() for parameter in model.visual_adapter.parameters()
     )
-    assert all(parameter.requires_grad for parameter in model.visual_adapter.parameters())
+    assert all(
+        parameter.requires_grad for parameter in model.visual_adapter.parameters()
+    )
     assert all(
         not parameter.requires_grad
         for name, parameter in model.named_parameters()
@@ -118,9 +118,7 @@ def test_slt_model_applies_llm_runtime_mode_independently_of_gradients(
     ("runtime_mode", "expected_training"),
     [("eval", False), ("train", True)],
 )
-def test_slt_model_applies_visual_adapter_runtime_mode(
-    runtime_mode, expected_training
-):
+def test_slt_model_applies_visual_adapter_runtime_mode(runtime_mode, expected_training):
     model = object.__new__(train_command.SltModel)
     nn.Module.__init__(model)
     model.llm = nn.Linear(2, 2)
@@ -267,9 +265,7 @@ def test_initialize_model_creates_components_then_injects_lora(monkeypatch):
 
 
 def test_initialize_model_requires_checkpoint_dir_when_loading():
-    model_cfg = OmegaConf.create(
-        {"load_from_checkpoint": True, "checkpoint_dir": None}
-    )
+    model_cfg = OmegaConf.create({"load_from_checkpoint": True, "checkpoint_dir": None})
 
     with pytest.raises(ValueError, match="checkpoint_dir is required"):
         initialize_model(
@@ -309,3 +305,55 @@ def test_legacy_combined_lora_factory_warns_and_delegates(monkeypatch):
 
     assert model is loaded_model
     assert events == [("llm", llm_lora), ("visual", visual_lora)]
+
+
+class _ModelWithAlwaysFrozenComponent(nn.Module):
+    """A plan-trainable adapter holding a nested module that must never train."""
+
+    def __init__(self):
+        super().__init__()
+        self.llm = nn.Linear(4, 4)
+        self.visual_backbone = nn.Linear(4, 4)
+        self.visual_adapter = nn.Module()
+        self.visual_adapter.projection = nn.Linear(4, 4)
+        self.visual_adapter.constant = nn.Linear(4, 1)
+        self.visual_adapter.constant.always_frozen = True
+
+
+def test_always_frozen_modules_survive_a_plan_that_trains_their_parent():
+    # requires_grad_ recurses, so "train the adapter" would otherwise reach the
+    # fitted constants nested inside it -- silently, and on the default plan.
+    model = _ModelWithAlwaysFrozenComponent()
+
+    trainable_count = apply_trainability_plan(
+        model,
+        SltTrainabilityPlan(visual_adapter=VisualAdapterTrainabilityPlan(mode="full")),
+    )
+
+    assert all(
+        not parameter.requires_grad
+        for parameter in model.visual_adapter.constant.parameters()
+    )
+    assert all(
+        parameter.requires_grad
+        for parameter in model.visual_adapter.projection.parameters()
+    )
+    # The frozen module must also be left out of the reported count.
+    assert trainable_count == sum(
+        parameter.numel() for parameter in model.visual_adapter.projection.parameters()
+    )
+
+
+def test_always_frozen_is_an_instance_marker_so_it_can_be_turned_off():
+    model = _ModelWithAlwaysFrozenComponent()
+    model.visual_adapter.constant.always_frozen = False
+
+    apply_trainability_plan(
+        model,
+        SltTrainabilityPlan(visual_adapter=VisualAdapterTrainabilityPlan(mode="full")),
+    )
+
+    assert all(
+        parameter.requires_grad
+        for parameter in model.visual_adapter.constant.parameters()
+    )

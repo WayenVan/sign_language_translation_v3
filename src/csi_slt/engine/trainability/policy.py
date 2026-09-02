@@ -2,11 +2,35 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from torch import nn
 
 from .plans import SltTrainabilityPlan, VisualBackboneTrainabilityPlan
+
+logger = logging.getLogger(__name__)
+
+
+def _refreeze_always_frozen(model: nn.Module) -> list[str]:
+    """Re-freeze modules that no plan is allowed to train, and name them.
+
+    ``requires_grad_`` recurses, so a plan that trains a component also trains
+    anything nested inside it. Some nested modules are fitted constants rather
+    than parameters -- the hand-patch scorer's coefficients, for one, which were
+    fitted offline against a specific backbone and whose gradients would quietly
+    invalidate that provenance. They opt out by carrying ``always_frozen``.
+
+    The marker is expected to be an *instance* attribute set by whoever owns the
+    module, so ownership decides, and turning the option off in a config is
+    still enough to make such a module trainable.
+    """
+    frozen = []
+    for name, module in model.named_modules():
+        if getattr(module, "always_frozen", False):
+            module.requires_grad_(False)
+            frozen.append(name or "<root>")
+    return frozen
 
 
 def _set_module_trainable(module: nn.Module | None, trainable: bool) -> None:
@@ -134,9 +158,7 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
     _apply_visual_backbone_runtime_mode(visual_backbone, plan.visual_backbone)
 
     visual_adapter = getattr(model, "visual_adapter", None)
-    _set_module_trainable(
-        visual_adapter, plan.visual_adapter.mode == "full"
-    )
+    _set_module_trainable(visual_adapter, plan.visual_adapter.mode == "full")
     visual_adapter_runtime_setter = getattr(
         model, "set_visual_adapter_runtime_mode", None
     )
@@ -157,6 +179,16 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
     visual_scale = getattr(model, "visual_scale", None)
     if visual_scale is not None:
         visual_scale.requires_grad_(plan.visual_scale.mode == "full")
+
+    # After every plan decision, and before counting: a plan may have unfrozen a
+    # component that holds one of these.
+    always_frozen = _refreeze_always_frozen(model)
+    if always_frozen:
+        logger.info(
+            "Kept %d module(s) frozen regardless of the plan: %s",
+            len(always_frozen),
+            ", ".join(always_frozen),
+        )
 
     trainable_count = sum(
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad

@@ -1,0 +1,77 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# Parameter-matched counterpart of
+# qwen3-4b-cradio-l-spatiotemporal-pooled-linear-20m.yaml. Everything outside
+# visual_adapter_kwargs is identical, so a run against that baseline isolates
+# one variable: each token now carries a hand-ROI half beside the global mean.
+#
+# The two halves are concatenated rather than emitted as separate tokens, so
+# token count, video_token_scale and the CTC head are unchanged and the two runs
+# are directly comparable.
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    # Must match what the scorer was fitted on: its coefficients are only valid
+    # for this backbone at this layer, and a mismatch degrades its ranking
+    # silently rather than failing. The scorer's own config records what it
+    # was fitted against.
+    output_layer: -1
+
+  visual_adapter_type: hand_roi_pooled
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
+    input_dim: 1152
+    output_dim: 2560
+
+    # Window size of the temporal mean. Every video's frame count must be
+    # divisible by it, which is also what keeps a window from spanning two
+    # videos in the packed batch.
+    temporal_scale_factor: 2
+
+    # Fitted offline by preprocess/train_scorer.py. Read only when a model is
+    # built from pretrained components; a checkpoint carries the coefficients
+    # itself, so this directory need not survive.
+    scorer_path: outputs/hand_patch_scorer
+
+    # Patches kept per frame. Measured on held-out videos with this scorer:
+    # k=16 keeps 91.1% of hand patches with 7.3% of the budget on non-hand
+    # patches, k=24 keeps 98.3% at 11.4%, k=32 keeps 99.6% at 17.6%. Every
+    # non-hand patch kept is one more vector averaged into the ROI half, so
+    # this is not simply "larger is safer"; k=24 trades 4 points of purity for
+    # 7 points of recall, which is the better side of that curve for a mean.
+    top_k: 24
+
+    # The coefficients are fitted constants. This also marks the scorer
+    # always-frozen, so a plan with visual_adapter.mode=full cannot recurse
+    # into it. Set false to make it trainable end to end.
+    freeze_scorer: true
+
+    # 2304 -> 4109 -> GELU -> 2560. The projection input is doubled by the
+    # concatenation, so the rank drops from the baseline's 5385: including
+    # affine LayerNorm the adapter has 19,997,453 trainable parameters against
+    # the baseline's 19,999,369, a difference of 1,916 (0.01%). The frozen
+    # scorer's 1,153 coefficients are excluded from that count.
+    projection_rank: 4109
+    use_layer_norm: true
