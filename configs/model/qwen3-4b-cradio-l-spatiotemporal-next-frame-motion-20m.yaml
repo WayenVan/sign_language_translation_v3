@@ -52,7 +52,7 @@ config:
     patch_fusion_temperature: 0.1
     patch_fusion_matching_top_k: 1
     patch_fusion_window_radius: 3
-    patch_fusion_gate_init: 0.0
+    patch_fusion_gate_init: 1.0
 
     # Window-level SwiGLU motion branch. These values match
     # qwen3-4b-cradio-l-spatiotemporal-motion-20m exactly.

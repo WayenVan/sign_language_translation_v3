@@ -66,7 +66,7 @@ config:
     # concentrated. At -2.0 the branch would arrive at the projection as ~7%
     # of the pooled signal; at 0.0 it is ~30%. The gate is still learnable in
     # both directions, so this sets where the test starts, not where it ends.
-    patch_fusion_gate_init: 0.0
+    patch_fusion_gate_init: 1.0
 
     # 1152 -> 4429 -> GELU -> 2560. The rank drops from the baseline's 5385 to
     # pay for the fusion block: including affine LayerNorm the adapter has

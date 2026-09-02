@@ -1,0 +1,71 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# The gated counterpart of qwen3-4b-cradio-l-handroi-20m.yaml. Same scorer, same
+# top_k, same token count; the only difference is how the global and hand-ROI
+# halves become one token:
+#
+#   concat  MLP([global ; roi])                    -- interactions between halves
+#   gated   projection(global) + s(gate)*f(roi)    -- ROI as a residual
+#
+# The gated form starts at the pooled-linear baseline when s(gate) = 0, so the
+# ROI half has to earn its contribution. That is aimed at the concat run's
+# problem: by step 30k its train-dev BLEU-4 gap was +0.031 against the
+# baseline's +0.004, i.e. the bottleneck is generalization, not capacity.
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    # Must match what the scorer was fitted on; a mismatch degrades its ranking
+    # silently rather than failing.
+    output_layer: -1
+
+  visual_adapter_type: hand_roi_pooled
+  visual_adapter_kwargs:
+    input_dim: 1152
+    output_dim: 2560
+    temporal_scale_factor: 2
+
+    scorer_path: outputs/hand_patch_scorer
+    top_k: 24
+    freeze_scorer: true
+
+    fusion_mode: gated
+
+    # sigmoid(-2) ~= 0.119. Deliberately not the 0.0 that
+    # NextFramePatchFusion uses: that value compensated for a residual diluted
+    # across 196 patches by a spatial mean, and there is no such dilution here,
+    # where the ROI half is a whole vector beside the global one. Under the
+    # observed overfitting this is a value to select on dev rather than hand to
+    # a faster learning rate, so expect to sweep it.
+    gate_init: -2.0
+
+    # Splitting into two branches costs rank: concat spends one rank 4109 on a
+    # 2304-wide input, gated spends 3500 on the global half plus 1884 on the
+    # residual. The global branch keeps the larger share because it still has to
+    # do the baseline's whole job; the ROI branch is a correction.
+    # 20,000,521 trainable parameters against the baseline's 19,999,369, a
+    # difference of 1,152 (0.006%). The frozen scorer is excluded.
+    projection_rank: 3500
+    roi_projection_rank: 1884
+    use_layer_norm: true
