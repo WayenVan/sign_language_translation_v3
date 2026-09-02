@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_nextframe20m_gate1_lm1
+#SBATCH --job-name=slt_qwen3_4b_nextframe20m_dispkaiming_lm1
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="next-frame-fusion,20m,lm1,hardmatch,wr3,gate-init-1.0"
+  export WANDB_TAGS="next-frame-fusion,20m,lm1,hardmatch,wr3,gate-init-1.0,displacement-kaiming"
   REPORT_TO=wandb
 fi
 
@@ -76,26 +76,23 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  # Next-frame fusion, repeating the wr3/hardmatch run with a more open gate.
+  # Ablation of one thing: NextFramePatchFusion's displacement stream now uses
+  # fan-in init instead of zeros. Every other setting matches the reference run
+  # outputs/...-nextframe20m-lm1-hardmatch-wr3-gate1-0902..., field by field
+  # from its own hydra_config -- same adapter, gate_init 1.0, hidden 1024,
+  # window radius 3, hard matching, rank 4429, temporal factor 2.
   #
-  # Overridden here rather than in the config because gate_init is being swept:
-  # the gate is optimized against the training loss, and both improved adapters
-  # already overfit (train-dev BLEU-4 gap +0.043 by step 30k against the
-  # baseline's +0.004), so which value generalizes has to be picked on dev
-  # rather than handed to a faster learning rate. The config keeps 0.0, the run
-  # that produced test BLEU-4 0.1075.
+  # Why: zeros left displacement at 0.9% of the fusion hidden vector after 42k
+  # steps, against content's 69% and delta's 74%, with its weight norm still
+  # climbing rather than settling. The handicap is structural -- 2 dimensions of
+  # unit scale against 1152 LayerNormed ones -- so starting at zero penalises it
+  # twice for the same thing. Fan-in starts it at 15.2%.
   #
-  # sigmoid(1.0) = 0.73 against the previous 0.50. Every other adapter kwarg is
-  # unchanged from that checkpoint, verified field by field.
-  #
-  # CAVEAT: this is not a single-variable change. NextFramePatchFusion's
-  # displacement projection now uses fan-in init instead of zeros, because zeros
-  # left it at 0.9% of the fusion hidden vector after 42k steps against
-  # content's 69%. That is a deliberate confound, accepted for this run.
+  # Read the run against the reference's dev curve (0.1066 @18k, 0.1135 @24k)
+  # and against visual_adapter/mean_displacement in the logs.
   --config-name=train/cognition/baseline_ablation
   model=qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
-  model.config.visual_adapter_kwargs.patch_fusion_gate_init=1.0
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe20m-lm1-hardmatch-wr3-gate1-0902.224x224
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe20m-lm1-hardmatch-wr3-gate1-dispkaiming-0902.224x224
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
