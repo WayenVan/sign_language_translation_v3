@@ -6,6 +6,7 @@ import torch
 from torch import Tensor, nn
 
 from csi_slt.modeling_slt.misc import (
+    SpatialDropoutMean,
     mark_module_tree_as_initialized,
     random_derangement,
 )
@@ -50,6 +51,7 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
         use_layer_norm: bool = True,
         temporal_scale_factor: int = 2,
         use_cls_token: bool = False,
+        spatial_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self._validate_dimension("input_dim", input_dim)
@@ -69,6 +71,8 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
         )
         self.temporal_scale_factor = temporal_scale_factor
         self.use_cls_token = use_cls_token
+        # Unused in CLS mode: that path has no spatial pooling to drop from.
+        self.spatial_pool = SpatialDropoutMean(spatial_dropout)
         self.norm = nn.LayerNorm(input_dim) if use_layer_norm else nn.Identity()
 
         # Both layers keep their bias: with a GELU in between, the first bias
@@ -123,9 +127,10 @@ class SpatiotemporalPooledLinearAdapter(nn.Module):
         if self.use_cls_token:
             frame_features = cls_features
         else:
-            # Spatial mean: [sum(T), P, D] -> [sum(T), D]. Every patch has
-            # fixed weight 1/P; this is the unchanged default behavior.
-            frame_features = patch_features.mean(dim=1)
+            # Spatial mean: [sum(T), P, D] -> [sum(T), D]. Every surviving
+            # patch has equal weight; with spatial_dropout=0 that is all of
+            # them, i.e. the unchanged default behavior.
+            frame_features = self.spatial_pool(patch_features)
 
         # Temporal mean is performed separately within each packed video, so a
         # window can never cross a video boundary.  Projection happens after

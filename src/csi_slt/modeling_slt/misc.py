@@ -65,9 +65,7 @@ def packed_temporal_windows(
     output_lengths = lengths_tensor // stride
     total_frames = packed_features.shape[0]
     left_radius = (window_size - 1) // 2
-    offsets = (
-        torch.arange(window_size, device=packed_features.device) - left_radius
-    )
+    offsets = torch.arange(window_size, device=packed_features.device) - left_radius
     frame_indices = torch.arange(total_frames, device=packed_features.device)
 
     video_ends = torch.cumsum(lengths_tensor, dim=0)
@@ -83,9 +81,7 @@ def packed_temporal_windows(
     window_local_indices = torch.minimum(
         window_local_indices.clamp_min(0), centre_lengths[:, None] - 1
     )
-    packed_window_indices = (
-        video_starts[centre_video_ids, None] + window_local_indices
-    )
+    packed_window_indices = video_starts[centre_video_ids, None] + window_local_indices
     return packed_features[packed_window_indices], output_lengths
 
 
@@ -226,7 +222,9 @@ def random_derangement(video_lengths, device=None):
     one-frame video cannot be deranged, so it is rejected explicitly instead
     of silently returning an unchanged frame.
     """
-    lengths = video_lengths.tolist() if torch.is_tensor(video_lengths) else video_lengths
+    lengths = (
+        video_lengths.tolist() if torch.is_tensor(video_lengths) else video_lengths
+    )
     permutations = []
     offset = 0
     for length in lengths:
@@ -247,6 +245,68 @@ def random_derangement(video_lengths, device=None):
     if not permutations:
         return torch.empty(0, dtype=torch.long, device=device)
     return torch.cat(permutations)
+
+
+class SpatialDropoutMean(nn.Module):
+    """Mean over a frame's patches, with patches randomly dropped in training.
+
+    ``[F, P, D] -> [F, D]``.  At ``p = 0`` and in eval this is exactly
+    ``patch_features.mean(dim=1)``, so it is a drop-in replacement that changes
+    nothing until it is switched on.
+
+    The point is not generic regularization.  A plain spatial mean gives every
+    patch a fixed weight of 1/P, which lets a handful of always-present patches
+    -- the backdrop, a station logo, the signer's own face -- act as a
+    fingerprint the model can key on instead of reading the signing.  Dropping
+    patches makes any individual one unreliable, so a representation that
+    depends on a specific few stops paying off.
+
+    Two details that are wrong in the obvious implementation:
+
+    * **Renormalize by the survivors, not by P.**  Scaling by 1/P after dropping
+      would shrink every training feature while eval kept full scale, and that
+      train/eval mismatch produces no error at all -- only a worse dev number
+      with no obvious cause.
+    * **Draw the mask per frame**, not once per batch, or every frame in a step
+      loses the same regions and the noise stops being independent.
+
+    A caveat about when this fires: the module follows its parent's ``training``
+    flag, and ``SltModel.train()`` puts the visual adapter in train mode only
+    when the trainability plan sets ``visual_adapter.runtime_mode = "train"``.
+    That field defaults to ``"eval"``, so a plan that leaves it alone silently
+    disables this everywhere.
+    """
+
+    def __init__(self, p: float = 0.0) -> None:
+        super().__init__()
+        if not isinstance(p, (int, float)) or isinstance(p, bool):
+            raise TypeError(f"p must be a float, got {type(p).__name__}")
+        if not 0.0 <= float(p) < 1.0:
+            raise ValueError(f"p must be in [0, 1), got {p}")
+        self.p = float(p)
+
+    def forward(self, patch_features: torch.Tensor) -> torch.Tensor:
+        if patch_features.ndim != 3:
+            raise ValueError(
+                "patch_features must have shape [F, P, D], got "
+                f"{tuple(patch_features.shape)}"
+            )
+        if self.p == 0.0 or not self.training:
+            return patch_features.mean(dim=1)
+
+        draw = torch.rand(patch_features.shape[:2], device=patch_features.device)
+        keep = draw >= self.p
+        # Whatever the draw, keep the frame's largest sample: at P=196 and a
+        # sane p an all-dropped frame is astronomically unlikely, but it would
+        # divide by zero rather than fail loudly, and an ablation at p=0.9 makes
+        # it merely unlikely.
+        keep.scatter_(1, draw.argmax(dim=1, keepdim=True), True)
+
+        weights = keep.unsqueeze(-1).to(dtype=patch_features.dtype)
+        return (patch_features * weights).sum(dim=1) / weights.sum(dim=1)
+
+    def extra_repr(self) -> str:
+        return f"p={self.p}"
 
 
 if __name__ == "__main__":

@@ -27,7 +27,6 @@ Data flow::
     visual tokens [F / s, output_dim]
 """
 
-
 import math
 
 import torch
@@ -75,7 +74,7 @@ class NextFramePatchFusion(nn.Module):
         fusion_hidden_dim: int | None = None,
         temperature: float = 0.1,
         matching_top_k: int = 1,
-        gate_init: float = -2.0,
+        gate_init: float = 1.0,
         spatial_window_radius: int | None = 3,
         grid_size: tuple[int, int] | None = None,
     ) -> None:
@@ -469,6 +468,7 @@ class MotionTemporalFusion(nn.Module):
         motion_weight = torch.sigmoid(self.gate).to(dtype=static.dtype)
         return static + motion_weight * self.gate_norm(motion)
 
+
 class SpatiotemporalNextFrameMotionAdapter(nn.Module):
     """Fuse patch correspondences and window motion, then project.
 
@@ -493,7 +493,7 @@ class SpatiotemporalNextFrameMotionAdapter(nn.Module):
         patch_fusion_hidden_dim: int | None = None,
         patch_fusion_temperature: float = 0.1,
         patch_fusion_matching_top_k: int = 1,
-        patch_fusion_gate_init: float = 0.0,
+        patch_fusion_gate_init: float = 1.0,
         patch_fusion_window_radius: int | None = 3,
         motion_hidden_dim: int | None = None,
         motion_gate_init: float = -2.0,
@@ -649,7 +649,6 @@ class SpatiotemporalNextFrameMotionAdapter(nn.Module):
                 "every visual length must be divisible by temporal_scale_factor "
                 f"{self.temporal_scale_factor}"
             )
-
 
 
 def _validate_dimension(name: str, value: int) -> None:

@@ -48,6 +48,7 @@ import torch
 from torch import Tensor, nn
 
 from csi_slt.modeling_slt.misc import (
+    SpatialDropoutMean,
     mark_module_tree_as_initialized,
     random_derangement,
 )
@@ -208,14 +209,45 @@ class TopKRoiPool(nn.Module):
         return (feature_patches * weights).sum(dim=1) / weights.sum(dim=1)
 
 
+FUSION_MODES = ("concat", "gated")
+
+
 class HandRoiPooledAdapter(nn.Module):
-    """Concatenate a global mean and a hand-ROI mean, then pool over time.
+    """Combine a global mean and a hand-ROI mean, then pool over time.
 
     ``top_k`` is the one knob that trades recall against purity.  Measured on
     held-out videos with the shipped scorer: k=16 keeps 91% of hand patches with
     7% of the budget spent on non-hand patches, k=24 keeps 98% at 11%, k=32
     keeps 99.6% at 18%.  Every non-hand patch kept is one more vector averaged
     into the ROI half, so this is not simply "larger is safer".
+
+    ``fusion_mode`` selects how the two halves become one token. Both emit one
+    token per ``temporal_scale_factor`` frames and pool over time identically,
+    so a run of one against the other changes only the fusion.
+
+    ``"concat"`` projects ``[global ; roi]`` jointly. Its first layer can compute
+    interactions between the halves -- where the hand sits relative to the torso,
+    say -- which is expressivity the gated form does not have.
+
+    ``"gated"`` makes the ROI half a residual on the baseline::
+
+        out = projection(global) + sigmoid(gate) * roi_residual(roi)
+
+    At ``sigmoid(gate) = 0`` this is exactly the pooled-linear baseline, so
+    training starts from a known-good representation and the ROI half has to
+    earn its contribution. That matters here: the concat run reached a
+    train-dev BLEU-4 gap of +0.031 by step 30k where the baseline stayed at
+    +0.004, so the bottleneck is generalization rather than capacity.
+
+    The residual branch ends in a non-affine LayerNorm. Without it
+    ``sigmoid(gate) * f(roi)`` is unidentifiable -- ``f`` can grow its own
+    weights to offset a small gate -- and the logged gate would say nothing.
+    Pinning the branch norm makes it a readable fraction, comparable across runs.
+
+    Note that the gate scales the branch but does not decide its sign or which
+    channels it touches: ``f``'s output layer is free, so per-channel
+    suppression, amplification and inversion are already available without a
+    per-channel gate.
     """
 
     def __init__(
@@ -228,6 +260,10 @@ class HandRoiPooledAdapter(nn.Module):
         use_layer_norm: bool = True,
         temporal_scale_factor: int = 2,
         freeze_scorer: bool = True,
+        fusion_mode: str = "concat",
+        roi_projection_rank: int | None = None,
+        gate_init: float = -2.0,
+        spatial_dropout: float = 0.0,
     ) -> None:
         super().__init__()
         self._validate_dimension("input_dim", input_dim)
@@ -235,16 +271,26 @@ class HandRoiPooledAdapter(nn.Module):
         self._validate_dimension("top_k", top_k)
         if projection_rank is not None:
             self._validate_dimension("projection_rank", projection_rank)
+        if roi_projection_rank is not None:
+            self._validate_dimension("roi_projection_rank", roi_projection_rank)
         self._validate_dimension("temporal_scale_factor", temporal_scale_factor)
+        if fusion_mode not in FUSION_MODES:
+            raise ValueError(
+                f"fusion_mode must be one of {FUSION_MODES}, got {fusion_mode!r}"
+            )
 
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.top_k = top_k
         self.temporal_scale_factor = temporal_scale_factor
+        self.fusion_mode = fusion_mode
         # A ``None`` rank resolves to output_dim, so this attribute always
         # reports the hidden width the projection actually uses.
         self.projection_rank = (
             output_dim if projection_rank is None else projection_rank
+        )
+        self.roi_projection_rank = (
+            self.projection_rank if roi_projection_rank is None else roi_projection_rank
         )
 
         self.roi_pool = TopKRoiPool(
@@ -253,9 +299,14 @@ class HandRoiPooledAdapter(nn.Module):
             scorer_path=scorer_path,
             freeze_scorer=freeze_scorer,
         )
+        # The global half only. The ROI half pools ~24 deliberately chosen
+        # patches, so dropping a fifth of them removes a fifth of the hand --
+        # the opposite of what selecting them was for.
+        self.spatial_pool = SpatialDropoutMean(spatial_dropout)
 
-        # The projection sees the two halves concatenated.
-        pooled_dim = 2 * input_dim
+        # In concat mode the projection sees both halves at once; in gated mode
+        # it is the baseline's own projection over the global half alone.
+        pooled_dim = 2 * input_dim if fusion_mode == "concat" else input_dim
         self.norm = nn.LayerNorm(pooled_dim) if use_layer_norm else nn.Identity()
         self.projection = nn.Sequential(
             nn.Linear(pooled_dim, self.projection_rank),
@@ -263,8 +314,35 @@ class HandRoiPooledAdapter(nn.Module):
             nn.Linear(self.projection_rank, output_dim),
         )
 
+        self.roi_norm = None
+        self.roi_projection = None
+        self.fusion_gate = None
+        if fusion_mode == "gated":
+            self.roi_norm = nn.LayerNorm(input_dim) if use_layer_norm else nn.Identity()
+            self.roi_projection = nn.Sequential(
+                nn.Linear(input_dim, self.roi_projection_rank),
+                nn.GELU(),
+                nn.Linear(self.roi_projection_rank, output_dim),
+                # Pins the branch scale so the gate is identifiable and readable.
+                nn.LayerNorm(output_dim, elementwise_affine=False),
+            )
+            # One-dimensional for FSDP2 compatibility. Default -2.0, not the 0.0
+            # used by NextFramePatchFusion: that value compensated for a residual
+            # diluted across 196 patches by a spatial mean, and no such dilution
+            # happens here -- the ROI half is a whole vector beside the global
+            # one. Under the observed overfitting this is a hyperparameter to
+            # select on dev, not something to hand to a faster learning rate.
+            self.fusion_gate = nn.Parameter(torch.tensor([float(gate_init)]))
+
         self._reset_projection_parameters()
         mark_module_tree_as_initialized(self)
+
+    @property
+    def roi_weight(self) -> float:
+        """Current gate value: how much of the ROI residual rides on the token."""
+        if self.fusion_gate is None:
+            raise AttributeError("roi_weight is only defined in gated fusion mode")
+        return float(torch.sigmoid(self.fusion_gate).item())
 
     @staticmethod
     def _validate_dimension(name: str, value: int) -> None:
@@ -272,12 +350,16 @@ class HandRoiPooledAdapter(nn.Module):
             raise ValueError(f"{name} must be a positive integer, got {value!r}")
 
     def _reset_projection_parameters(self) -> None:
-        # Fan-in init on both layers, matching the pooled-linear baseline so the
-        # two runs start from the same projection scale.
-        input_projection, output_projection = self.projection[0], self.projection[2]
-        for projection in (input_projection, output_projection):
-            nn.init.kaiming_uniform_(projection.weight, a=math.sqrt(5))
-            nn.init.zeros_(projection.bias)
+        # Fan-in init on every linear layer, matching the pooled-linear baseline
+        # so the runs start from the same projection scale.
+        blocks = [self.projection]
+        if self.roi_projection is not None:
+            blocks.append(self.roi_projection)
+        for block in blocks:
+            for layer in block:
+                if isinstance(layer, nn.Linear):
+                    nn.init.kaiming_uniform_(layer.weight, a=math.sqrt(5))
+                    nn.init.zeros_(layer.bias)
 
     @property
     def trainable_parameter_count(self) -> int:
@@ -300,7 +382,9 @@ class HandRoiPooledAdapter(nn.Module):
         # Scored and pooled on the same tensor for now; a motion residual would
         # go in as feature_patches while the scoring stays on the raw features.
         roi_features = self.roi_pool(patch_features)
-        global_features = patch_features.mean(dim=1)
+        global_features = self.spatial_pool(patch_features)
+        # Both halves are pooled over time together regardless of fusion mode,
+        # so the two modes differ in the fusion and in nothing else.
         frame_features = torch.cat([global_features, roi_features], dim=-1)
 
         # Temporal mean runs separately inside each packed video, so a window
@@ -314,7 +398,13 @@ class HandRoiPooledAdapter(nn.Module):
             dim=0,
         )
         pooled_length = visual_length // self.temporal_scale_factor
-        visual_features = self.projection(self.norm(pooled_features))
+        if self.fusion_mode == "concat":
+            visual_features = self.projection(self.norm(pooled_features))
+        else:
+            pooled_global, pooled_roi = pooled_features.split(self.input_dim, dim=-1)
+            visual_features = self.projection(self.norm(pooled_global)) + torch.sigmoid(
+                self.fusion_gate
+            ) * self.roi_projection(self.roi_norm(pooled_roi))
 
         if permute_video_tokens:
             permutation = random_derangement(
@@ -335,6 +425,11 @@ class HandRoiPooledAdapter(nn.Module):
                 .mean()
                 .reshape(()),
                 "selection_margin": self.roi_pool.score_margin(patch_features),
+                **(
+                    {"roi_gate": torch.sigmoid(self.fusion_gate.detach()).reshape(())}
+                    if self.fusion_gate is not None
+                    else {}
+                ),
             },
         )
 

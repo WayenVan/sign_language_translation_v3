@@ -34,8 +34,7 @@ def _adapter(projection_rank: int | None = 3):
 
 def test_adapter_and_both_fusions_are_owned_by_the_new_module() -> None:
     module_name = (
-        "csi_slt.modeling_slt.visual_adapters."
-        "spatiotemporal_next_frame_motion_adapter"
+        "csi_slt.modeling_slt.visual_adapters.spatiotemporal_next_frame_motion_adapter"
     )
 
     assert NextFramePatchFusion.__module__ == module_name
@@ -102,7 +101,12 @@ def test_projection_rank_remains_configurable() -> None:
 def test_both_motion_diagnostics_are_exposed() -> None:
     adapter = _adapter()
 
-    assert adapter.patch_motion_weight == pytest.approx(0.5)
+    # The two gates carry different defaults on purpose: the patch fusion's
+    # residual is diluted by a spatial mean over every patch, the window
+    # fusion's is not, so they do not start from the same place.
+    assert adapter.patch_motion_weight == pytest.approx(
+        torch.sigmoid(torch.tensor(1.0)).item()
+    )
     assert adapter.temporal_motion_weight == pytest.approx(
         torch.sigmoid(torch.tensor(-2.0)).item()
     )
