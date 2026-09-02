@@ -153,9 +153,17 @@ class NextFramePatchFusion(nn.Module):
             nn.Linear(fusion_hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim, elementwise_affine=False),
         )
-        # Let direction enter gradually without blocking its first-step
-        # gradient. The content and delta streams retain their normal init.
-        nn.init.zeros_(self.displacement_projection.weight)
+        # Fan-in init, not zeros. Zeros never blocked this branch's gradient --
+        # a Linear's weight gradient depends on its input, not on its weight --
+        # but it did leave it two orders of magnitude behind the others, and it
+        # could not close that gap under a shared learning rate: after 42k steps
+        # of one run it still contributed 0.9% of the fusion hidden vector
+        # against content's 69% and delta's 74%. The handicap is structural, not
+        # temporary: displacement enters through 2 dimensions of roughly unit
+        # scale while content and delta enter through 1152 LayerNormed ones, so
+        # starting it at zero on top of that is a second penalty for the same
+        # thing.
+        nn.init.kaiming_uniform_(self.displacement_projection.weight, a=math.sqrt(5))
         # Keep this one-dimensional for FSDP2 compatibility.
         self.fusion_gate = nn.Parameter(torch.tensor([float(gate_init)]))
         # Built on first use: these depend on the runtime patch count, and are

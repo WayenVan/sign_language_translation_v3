@@ -32,6 +32,13 @@ class VisualAdapterOutput(ModelOutput):
     position_ids: Optional[torch.Tensor] = (  # Adapter-defined visual positions.
         None  # Optional packed visual-token positions; defaults to 0..length-1 per sample.
     )
+    # Detached single-element tensors the trainer averages across steps, merged
+    # into the model's own logging_scalars under a "visual_adapter/" prefix.
+    # Kept apart from ``extras`` -- which carries arbitrary tensors -- because
+    # being scalar is the one property here that has to be enforced. Values stay
+    # on device: calling .item() per step would synchronize the accelerator, so
+    # the conversion belongs where logging actually happens.
+    logging_scalars: Optional[dict[str, torch.Tensor]] = None
     extras: Optional[dict] = None  # any extra information
 
 
@@ -46,6 +53,9 @@ class PrepareForCausalLMOutput(NamedTuple):
     # scale factor.
     ctc_visual_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
     ctc_visual_lengths: Optional[torch.Tensor] = None  # [B]
+    # Carried through so SltModel.forward can merge them into its own
+    # logging_scalars; the adapter output itself does not reach that far.
+    visual_adapter_logging_scalars: Optional[dict[str, torch.Tensor]] = None
 
 
 @dataclass

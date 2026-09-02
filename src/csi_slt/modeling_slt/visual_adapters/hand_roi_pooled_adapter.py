@@ -173,6 +173,20 @@ class TopKRoiPool(nn.Module):
             mask.scatter_(-1, scores.topk(k, dim=-1).indices, True)
         return mask
 
+    def score_margin(self, score_features: Tensor) -> Tensor:
+        """Mean gap between the k-th and (k+1)-th score, over frames.
+
+        How decisively the cut is made. A frame with no hand in it still yields
+        exactly ``top_k`` patches -- the mask cannot be empty -- so this is the
+        signal that the ROI half is pooling background: roughly 9% of frames in
+        the fitting set held no detectable hand.
+        """
+        with torch.no_grad():
+            scores = self.scorer(score_features)
+            k = min(self.top_k, scores.shape[-1])
+            top = scores.topk(min(k + 1, scores.shape[-1]), dim=-1).values
+            return (top[:, k - 1] - top[:, -1]).mean().reshape(())
+
     def forward(
         self, score_features: Tensor, feature_patches: Tensor | None = None
     ) -> Tensor:
@@ -311,6 +325,17 @@ class HandRoiPooledAdapter(nn.Module):
         return VisualAdapterOutput(
             visual_features=visual_features,
             visual_length=pooled_length,
+            logging_scalars={
+                # How far the ROI half has drifted from the global half. Equal
+                # means the selection changed nothing; the gap is what the
+                # scorer bought.
+                "roi_global_distance": (roi_features - global_features)
+                .detach()
+                .norm(dim=-1)
+                .mean()
+                .reshape(()),
+                "selection_margin": self.roi_pool.score_margin(patch_features),
+            },
         )
 
     def _validate_inputs(

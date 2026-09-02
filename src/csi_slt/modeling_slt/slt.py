@@ -92,6 +92,33 @@ def token_type_ids_mask_function(
     return inner_mask
 
 
+def _prefixed_logging_scalars(
+    scalars: Optional[dict], prefix: str
+) -> dict[str, torch.Tensor]:
+    """Validate a component's logging scalars and namespace them.
+
+    Components emit bare names so they need to know nothing about the model's
+    namespace; the prefix is applied here, where collisions with ``ce_loss`` and
+    friends would otherwise happen. Values must already be detached
+    single-element tensors: the trainer averages them across steps, and a live
+    graph or a full feature map here would hold memory for a whole logging
+    interval before anything complained.
+    """
+    if not scalars:
+        return {}
+    prefixed = {}
+    for name, value in scalars.items():
+        if not isinstance(value, torch.Tensor) or value.numel() != 1:
+            raise TypeError(
+                f"{prefix}/{name} must be a single-element tensor, got "
+                f"{type(value).__name__}"
+            )
+        if value.requires_grad:
+            raise ValueError(f"{prefix}/{name} must be detached before logging")
+        prefixed[f"{prefix}/{name}"] = value
+    return prefixed
+
+
 def _load_pretrained_submodule_components(model: nn.Module) -> None:
     """Let submodules pull in weights that live outside this checkpoint.
 
@@ -893,6 +920,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             packed_visual_position_ids=visual_position_ids,
             ctc_visual_features=ctc_visual_features,  # [sum(Lv), D]
             ctc_visual_lengths=ctc_visual_lengths,  # [B]
+            visual_adapter_logging_scalars=visual_output.logging_scalars,
         )
         if return_visual_backbone_extras:
             return prepare_output, visual_backbone_extras
@@ -1189,6 +1217,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     "ctc_weighted_loss": weighted_ctc_loss.detach(),
                     "ctc_loss_weight": loss.new_tensor(self.config.ctc_loss_weight),
                 }
+            )
+        if logging_scalars is not None and prepare_output is not None:
+            logging_scalars.update(
+                _prefixed_logging_scalars(
+                    prepare_output.visual_adapter_logging_scalars, "visual_adapter"
+                )
             )
 
         return SltCausalLMOutputWithPast(

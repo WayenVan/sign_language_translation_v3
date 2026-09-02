@@ -505,6 +505,16 @@ class SpatiotemporalNextFrameAdapter(nn.Module):
         return VisualAdapterOutput(
             visual_features=visual_features,
             visual_length=pooled_length,
+            # Both are already computed -- the gate is a parameter read and the
+            # displacement was needed by the matching -- so logging them costs
+            # nothing. Kept on device and unconverted: .item() here would
+            # synchronize the accelerator on every step.
+            logging_scalars={
+                "motion_gate": torch.sigmoid(
+                    self.next_frame_patch_fusion.fusion_gate.detach()
+                ).reshape(()),
+                "mean_displacement": self.next_frame_patch_fusion._last_displacement,
+            },
         )
 
     def _validate_inputs(

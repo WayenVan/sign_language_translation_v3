@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_handroi20m_lm1
+#SBATCH --job-name=slt_qwen3_4b_nextframe20m_gate1_lm1
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="hand-roi-pooled,20m,lm1,top-k-24,frozen-scorer"
+  export WANDB_TAGS="next-frame-fusion,20m,lm1,hardmatch,wr3,gate-init-1.0"
   REPORT_TO=wandb
 fi
 
@@ -76,20 +76,26 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  # Hand-ROI pooling: each token concatenates the frame's global mean with the
-  # mean of the top-24 patches a frozen scorer ranks most hand-like. Token count
-  # is unchanged from the pooled-linear baseline, so this isolates one variable.
+  # Next-frame fusion, repeating the wr3/hardmatch run with a more open gate.
   #
-  # Requires outputs/hand_patch_scorer (preprocess/train_scorer.py). It is read
-  # once here, at from_pretrained_components; a resumed checkpoint carries the
-  # coefficients itself and does not need the directory.
+  # Overridden here rather than in the config because gate_init is being swept:
+  # the gate is optimized against the training loss, and both improved adapters
+  # already overfit (train-dev BLEU-4 gap +0.043 by step 30k against the
+  # baseline's +0.004), so which value generalizes has to be picked on dev
+  # rather than handed to a faster learning rate. The config keeps 0.0, the run
+  # that produced test BLEU-4 0.1075.
   #
-  # No temporal_scale_factor override: this config runs at the baseline's
-  # factor 2, and train/cognition/baseline_ablation already reserves T/2 visual
-  # placeholders to match.
+  # sigmoid(1.0) = 0.73 against the previous 0.50. Every other adapter kwarg is
+  # unchanged from that checkpoint, verified field by field.
+  #
+  # CAVEAT: this is not a single-variable change. NextFramePatchFusion's
+  # displacement projection now uses fan-in init instead of zeros, because zeros
+  # left it at 0.9% of the fusion hidden vector after 42k steps against
+  # content's 69%. That is a deliberate confound, accepted for this run.
   --config-name=train/cognition/baseline_ablation
-  model=qwen3-4b-cradio-l-handroi-20m
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-handroi20m-lm1-k24-0902.224x224
+  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
+  model.config.visual_adapter_kwargs.patch_fusion_gate_init=1.0
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe20m-lm1-hardmatch-wr3-gate1-0902.224x224
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
