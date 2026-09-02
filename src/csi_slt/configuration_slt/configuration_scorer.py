@@ -7,15 +7,29 @@ from transformers.configuration_utils import PretrainedConfig
 class HandPatchScorerConfig(PretrainedConfig):
     """Configuration for the frozen hand-patch scorer.
 
-    The scorer is one linear map over a single patch feature, so the only thing
-    it needs to know is that feature's width. ``patch_grid_size`` and
-    ``fitted_on`` carry no weight at inference; they record what the
-    coefficients were fitted against, because a scorer is only valid for the
-    backbone, layer and input resolution that produced its training features,
-    and a silently mismatched scorer degrades into a near-random patch ranking
-    rather than failing. ``visual_backbone_class`` and
-    ``visual_backbone_init_kwargs`` retain the exact class and constructor
-    arguments needed to reconstruct that feature extractor.
+    The scorer is one linear map over a single patch feature, so ``input_dim``
+    is the only field it needs to run.  The rest is provenance, and it is not
+    decoration: a scorer is valid only for the backbone, layer and input
+    resolution that produced its fitting features, and a mismatched one degrades
+    into a near-random patch ranking rather than failing.
+
+    ``visual_backbone_class`` and ``visual_backbone_init_kwargs`` are enough to
+    rebuild that feature extractor::
+
+        module, _, name = config.visual_backbone_class.rpartition(".")
+        backbone_class = getattr(importlib.import_module(module), name)
+        backbone = backbone_class.from_pretrained_backbone(
+            **config.visual_backbone_init_kwargs
+        )
+
+    Every backbone in ``csi_slt.modeling_slt.registry`` is built through
+    ``from_pretrained_backbone``, so that constructor is a convention here
+    rather than a stored field, and ``visual_backbone_init_kwargs`` holds its
+    literal keyword arguments -- ``config`` and ``dtype`` included.
+
+    ``patch_grid_size`` is unused by ``forward`` but needed by any consumer that
+    treats the scores spatially: smoothing a score map or dilating a selection
+    mask both require reshaping ``[P]`` back into a grid.
     """
 
     model_type = "hand_patch_scorer"
@@ -24,7 +38,6 @@ class HandPatchScorerConfig(PretrainedConfig):
         self,
         input_dim: int = 1152,
         patch_grid_size: tuple[int, int] | None = None,
-        fitted_on: str | None = None,
         visual_backbone_class: str | None = None,
         visual_backbone_init_kwargs: dict[str, Any] | None = None,
         **kwargs,
@@ -42,7 +55,8 @@ class HandPatchScorerConfig(PretrainedConfig):
                 for size in patch_grid_size
             ):
                 raise ValueError(
-                    f"patch_grid_size must be two positive integers, got {patch_grid_size!r}"
+                    "patch_grid_size must be two positive integers, got "
+                    f"{patch_grid_size!r}"
                 )
         if visual_backbone_class is not None and not isinstance(
             visual_backbone_class, str
@@ -60,7 +74,6 @@ class HandPatchScorerConfig(PretrainedConfig):
             )
         self.input_dim = input_dim
         self.patch_grid_size = patch_grid_size
-        self.fitted_on = fitted_on
         self.visual_backbone_class = visual_backbone_class
         self.visual_backbone_init_kwargs = deepcopy(
             visual_backbone_init_kwargs

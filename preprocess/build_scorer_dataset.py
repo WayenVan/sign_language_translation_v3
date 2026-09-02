@@ -1,5 +1,19 @@
 """Carve a labelled frame dataset for the hand-patch scorer out of PHOENIX14T *train*.
 
+Usage::
+
+    # print the per-signer sampling plan without writing anything
+    python preprocess/build_scorer_dataset.py --dry-run
+
+    # build it: ~13.7k frames, a few minutes across --workers processes
+    python preprocess/build_scorer_dataset.py --out dataset/ph14_train_scorer_dataset
+
+    # a bigger fitting set: raise the per-signer frame budget
+    python preprocess/build_scorer_dataset.py --frames-per-signer 2500
+
+Requires ``.cache/mediapipe/hand_landmarker.task``; the script prints the exact
+curl command if it is missing.
+
 The scorer is a ``Linear(1152 -> 1)`` fitted offline on hand/background patch
 labels and then frozen into the visual adapter.  Because it ships inside the
 model, its own fitting and evaluation data must come from the train split only:
