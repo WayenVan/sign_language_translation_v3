@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_nextframe20m_dispkaiming_lm1
+#SBATCH --job-name=slt_qwen3_4b_nextframe_handroi20m_gated_lm1
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="next-frame-fusion,20m,lm1,hardmatch,wr3,gate-init-1.0,displacement-kaiming"
+  export WANDB_TAGS="next-frame-fusion,hand-roi,20m,lm1,hardmatch,wr3,gate-init-1.0,displacement-kaiming,roi-gated,roi-gate-init--2.0,no-dropout"
   REPORT_TO=wandb
 fi
 
@@ -76,23 +76,42 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  # Ablation of one thing: NextFramePatchFusion's displacement stream now uses
-  # fan-in init instead of zeros. Every other setting matches the reference run
-  # outputs/...-nextframe20m-lm1-hardmatch-wr3-gate1-0902..., field by field
-  # from its own hydra_config -- same adapter, gate_init 1.0, hidden 1024,
-  # window radius 3, hard matching, rank 4429, temporal factor 2.
+  # The two branches that moved dev BLEU-4 put in one adapter: patches are
+  # fused with their next-frame match, then pooled both globally and over the
+  # frozen scorer's hand ROI, with the ROI half riding in as a gated residual.
+  # Still parameter-matched to the pooled-linear baseline (19,999,694 against
+  # 19,999,369, +0.0016%), so the comparison stays a comparison of information
+  # paths rather than of capacity.
   #
-  # Why: zeros left displacement at 0.9% of the fusion hidden vector after 42k
-  # steps, against content's 69% and delta's 74%, with its weight norm still
-  # climbing rather than settling. The handicap is structural -- 2 dimensions of
-  # unit scale against 1152 LayerNormed ones -- so starting at zero penalises it
-  # twice for the same thing. Fan-in starts it at 15.2%.
+  # This is not a one-variable ablation -- it combines two -- so it is read
+  # against both of its parents rather than against one reference:
   #
-  # Read the run against the reference's dev curve (0.1066 @18k, 0.1135 @24k)
-  # and against visual_adapter/mean_displacement in the logs.
+  #   next-frame dispkaiming  dev 0.0948 @18k  0.0990 @24k  0.1114 @30k
+  #   next-frame gate1        dev 0.1066 @18k  0.1135 @24k
+  #   hand-ROI gated          dev 0.0728 @18k  0.0865 @24k
+  #
+  # dispkaiming is the code-matched one: the fan-in displacement init landed in
+  # NextFramePatchFusion itself, so this run inherits it with no flag. Note it
+  # was behind gate1 at both 18k and 24k, i.e. that init has not paid off so
+  # far, which is a confound this run carries and cannot separate.
+  #
+  # gated, not concat, for the ROI half: on the standalone hand-ROI pair gated
+  # reached 0.0865 dev with a zero train-dev gap against concat's 0.0824 at
+  # +0.007, and the point of combining is to add a path without adding a way to
+  # memorize. Both gates are learnable and both are logged
+  # (visual_adapter/motion_gate, visual_adapter/roi_gate), so what each branch
+  # ends up carrying is readable from the run.
+  #
+  # Both dropouts stay 0. .ai/overfitting_component_attribution.md argues the
+  # projection hidden layer is where the memorizing happens, but turning it on
+  # here would confound the combination with the regularizer; that is the next
+  # run, once this one has a curve.
+  #
+  # The gap only opens after ~30k steps in these runs, so this needs >=30k
+  # before it says anything about generalization.
   --config-name=train/cognition/baseline_ablation
-  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe20m-lm1-hardmatch-wr3-gate1-dispkaiming-0902.224x224
+  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-lm1-hardmatch-wr3-gate1-roigate-2.0-0903.224x224
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"

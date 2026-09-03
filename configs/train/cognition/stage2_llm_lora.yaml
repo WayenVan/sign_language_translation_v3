@@ -1,0 +1,93 @@
+# @package _global_
+
+# Stage 2: let the LLM read the visual modality.
+#
+# Stage 1 (train/cognition/baseline_ablation) trains a visual adapter against a
+# fully frozen Qwen3-4B. This continues from such a checkpoint and unfreezes the
+# LLM through LoRA while keeping the adapter trainable at a much smaller rate.
+#
+# Two decisions this file encodes, both taken from the repo's own v4.0
+# continuation runs on this same 7,096-sentence dataset:
+#
+#   1. The adapter is NOT frozen. Every v4.0 stage-2 run that froze it lost
+#      ground against its own stage-1 checkpoint (de 0.1162 -> 0.0701 / 0.0774 /
+#      0.0783), and every run that kept it trainable gained. LoRA moves the
+#      LLM's input-side reading of the visual tokens; the adapter has to move
+#      with it. Overfitting is controlled by giving the adapter a 10x smaller
+#      learning rate than the LoRA, not by freezing it.
+#   2. LoRA covers all 36 layers at low rank rather than a few layers at high
+#      rank -- see configs/peft/qwen3-4b-llm-all-qv-r8.yaml.
+#
+# The CTC head stays frozen while ctc_loss_weight stays at 1.0, so the auxiliary
+# loss is still computed (SltModel gates it on ctc_enabled and the weight, not
+# on the head's requires_grad). A frozen head makes it a fixed probe: the
+# adapter must keep producing features stage 1's gloss classifier can still
+# decode, which is the cheapest anti-drift anchor available here.
+
+defaults:
+  - /train/cognition/baseline_ablation
+  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
+  - override /peft: qwen3-4b-llm-all-qv-r8
+  - _self_
+
+model:
+  # The architecture comes from the checkpoint; the model group above only
+  # records which stage-1 recipe this continues.
+  load_from_checkpoint: true
+  checkpoint_dir: ???
+
+engine:
+  trainability:
+    # runtime_mode=train is what activates lora_dropout.
+    llm: { mode: lora, runtime_mode: train }
+    visual_backbone: { mode: frozen, runtime_mode: eval }
+    visual_adapter: { mode: full, runtime_mode: train }
+    ctc_head: { mode: frozen }
+    visual_position_embedding: { mode: frozen }
+    # ~5k parameters between them. Left trainable because the useful magnitude
+    # of the visual stream relative to the text stream is exactly what changes
+    # once the LLM stops being frozen.
+    visual_boundary_embeddings: { mode: full }
+    visual_scale: { mode: full }
+
+  # Non-negotiable sanity gate. LoRA initializes to a zero-valued delta, so the
+  # step-0 evaluation must reproduce the stage-1 checkpoint's dev score. The
+  # v4.0 llora-all run logged before_train bleu4 = 0.0030 against a 0.1162
+  # checkpoint and was abandoned; that is a load mismatch, not a training
+  # result. Read this number before reading anything else.
+  evaluate_before_training: true
+
+  # 800 training sentences re-scored at every evaluation. This is the
+  # overfitting instrument: watch the train-probe/dev BLEU gap, not dev BLEU
+  # alone. A dev score that flattens while the probe keeps climbing is the
+  # signal to cut epochs or the adapter rate.
+  train_probe:
+    every_n_evaluations: 1
+    num_samples: 800
+
+  training_args:
+    # v4.0's stage-2 continuations were still climbing when they were stopped at
+    # 5 epochs, so this is not tuned to the point of diminishing returns. Best
+    # checkpoint selection (save_strategy=best on eval_overall_weighted_bleu4,
+    # inherited from train/base) is what actually terminates the run.
+    num_train_epochs: 12
+
+    # Fallback rate for anything without a component override.
+    learning_rate: 1.0e-4
+    # LoRA needs a rate an order of magnitude above full fine-tuning; the
+    # adapter is already trained and only needs to track the LLM's drift.
+    llm_lora_learning_rate: 1.0e-4
+    visual_adapter_learning_rate: 1.0e-5
+    # LoRA's own decay is left off: its capacity is already bounded by r=8, and
+    # decay on B pulls the delta toward zero rather than toward the base model.
+    llm_lora_weight_decay: 0.0
+    visual_adapter_weight_decay: 0.01
+    weight_decay: 0.01
+    warmup_steps: 0.03
+    lr_scheduler_type: cosine
+
+    # ~20 evaluations over 12 epochs, roughly one every 0.6 epochs. v4.0's
+    # continuations moved fast enough that stage-1's 6000-step cadence would
+    # have missed the peak.
+    eval_steps: 0.05
+    logging_steps: 15

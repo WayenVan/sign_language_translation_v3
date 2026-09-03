@@ -1,0 +1,30 @@
+type: lora
+
+# Stage-2 modality-fusion LoRA for Qwen3-4B (36 layers, hidden 2560,
+# 32 q heads x 128, 8 kv heads x 128).
+#
+# No layers_to_transform: LoRA is injected into every one of the 36 layers.
+# That is deliberate. A frozen-LLM stage-1 checkpoint has taught the adapter to
+# emit vectors that live in the LLM's *input* embedding space; what the LLM has
+# never done is read them. Re-reading a new token type is work the lower and
+# middle blocks do -- restricting LoRA to the last four blocks only lets the
+# model re-write its output distribution, not its interpretation of the input.
+# The repo's own v4.0 evidence agrees: every all-layer llm-LoRA continuation
+# gained (de 0.1162 -> 0.1460, en 0.1399 -> 0.2225, zh 0.2030 -> 0.2861),
+# while the last-4-only visual-side variants did not.
+#
+# Budget: q (2560x4096) + v (2560x1024) at r=8 costs 81,920 params per layer,
+# 2.95M over 36 layers -- still under a sixth of the 20M visual adapter this
+# runs alongside, which is why the rank is the cheap knob here and the adapter
+# learning rate is the expensive one.
+llm_lora_config:
+  r: 8
+  lora_alpha: 16
+  # Raised from the repo's usual 0.05. 7,096 training sentences is the whole
+  # budget; dropout is free regularization on the side that is being newly
+  # unfrozen. Requires engine.trainability.llm.runtime_mode=train to be active.
+  lora_dropout: 0.1
+  bias: "none"
+  target_modules:
+    - "q_proj"
+    - "v_proj"
