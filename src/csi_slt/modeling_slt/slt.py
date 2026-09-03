@@ -1,6 +1,6 @@
 import math
-import warnings
 from copy import deepcopy
+from enum import Enum
 from typing import Callable, Optional
 
 import torch
@@ -19,7 +19,7 @@ from csi_slt.modeling_slt.info_utils import (
     InformationRequest,
     build_information_output,
 )
-from peft import LoraConfig, get_peft_model, inject_adapter_in_model
+from peft import LoraConfig, inject_adapter_in_model
 from ..configuration_slt.configuration import SltConfig
 from .output_utils import (
     PrepareForCausalLMOutput,
@@ -239,16 +239,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
         for param in self.llm.parameters():
             param.requires_grad = False
 
-        # WARN: new lora code start here
+        validate_llm_lora_config_presence(
+            enabled=config.llm_lora,
+            config=config.llm_lora_config,
+        )
         if config.llm_lora:
-            if not config.llm_lora_config:
-                raise ValueError(
-                    "llm_lora_config must be provided when llm_lora is True."
-                )
-            self.llm = get_peft_model(self.llm, LoraConfig(**config.llm_lora_config))
-            # PEFT initializes the newly injected LoRA modules itself. Keep the
-            # outer SltModel.post_init() from replacing that initialization.
-            mark_module_tree_as_initialized(self.llm)
+            self._inject_llm_lora(LoraConfig(**config.llm_lora_config))
 
         if config.visual_lora:
             if not config.visual_lora_config:
@@ -319,10 +315,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # explicit trainability plan selects otherwise.
         self.set_llm_runtime_mode("eval")
         self.set_visual_adapter_runtime_mode("eval")
-
-        # NOTE: tie the weights when using LoRA initialization
-        if config.llm_lora:
-            self._register_llm_tied_weights()
 
         # Set once by the first forward that checks the materialized mask.
         self._bidirectional_mask_validated = False
@@ -460,26 +452,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
             self._bidirectional_mask_validated = True
             return
 
-    def _register_llm_tied_weights(self):
-        """Register the actual embedding/head paths after PEFT wraps the LLM."""
-        input_embeddings = self.get_input_embeddings()
-        output_embeddings = self.get_output_embeddings()
-        if input_embeddings is None or output_embeddings is None:
-            return
-
-        module_names = {
-            id(module): name
-            for name, module in self.named_modules(remove_duplicate=False)
-        }
-        input_name = module_names.get(id(input_embeddings))
-        output_name = module_names.get(id(output_embeddings))
-        if input_name is None or output_name is None:
-            raise RuntimeError(
-                "Could not resolve the PEFT-wrapped input/output embedding paths."
-            )
-
-        self.all_tied_weights_keys[f"{output_name}.weight"] = f"{input_name}.weight"
-
     def _inject_visual_lora(self, peft_config: LoraConfig) -> None:
         """Inject LoRA in-place without changing the visual encoder interface."""
         visual_encoder = getattr(self.visual_backbone, "visual_encoder", None)
@@ -491,6 +463,19 @@ class SltModel(PreTrainedModel, GenerationMixin):
         inject_adapter_in_model(peft_config=peft_config, model=visual_encoder)
         mark_module_tree_as_initialized(visual_encoder)
 
+    def _inject_llm_lora(self, peft_config: LoraConfig) -> None:
+        """Inject LoRA into the native LLM without wrapping its top level."""
+        injected_llm = inject_adapter_in_model(
+            peft_config=peft_config,
+            model=self.llm,
+        )
+        if injected_llm is not self.llm:
+            raise RuntimeError("PEFT replaced the native LLM during in-place injection")
+        # PEFT initializes the new adapter parameters. Protect them from the
+        # outer SltModel.post_init(), which runs after checkpoint topology has
+        # been reconstructed.
+        mark_module_tree_as_initialized(self.llm)
+
     def inject_llm_lora(self, peft_config: LoraConfig) -> None:
         """Inject a new LoRA adapter into the language model."""
         if self.config.llm_lora:
@@ -498,11 +483,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 "The checkpoint already contains LLM LoRA. "
                 "Use SltModel.from_pretrained() to load it."
             )
-        self.llm = get_peft_model(self.llm, peft_config)
-        mark_module_tree_as_initialized(self.llm)
+        self._inject_llm_lora(peft_config)
         self.config.llm_lora = True
         self.config.llm_lora_config = _serialize_lora_config(peft_config)
-        self._register_llm_tied_weights()
 
     def inject_visual_lora(self, peft_config: LoraConfig) -> None:
         """Inject a new LoRA adapter into the visual encoder in-place."""
@@ -535,9 +518,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
         llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
-        # Ensure lm_head and input embeddings are tied even when the source model
-        # did not tie them.
-        llm.tie_weights(recompute_mapping=True)
 
         # This factory explicitly loaded both components from pretrained
         # checkpoints. Protect them from the outer SltModel.post_init(); the
@@ -545,90 +525,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
         mark_module_tree_as_initialized(llm)
         mark_module_tree_as_initialized(visual_backbone)
 
-        logger.info("force retie the lm_head to the input embeddings!!!!!!!!")
-
         model = cls(
             config=config,
             llm=llm,
             visual_backbone=visual_backbone,
         )
         _load_pretrained_submodule_components(model)
-        return model
-
-        # fmt: on
-
-    @classmethod
-    def from_pretrained_components_with_lora(
-        cls,
-        config: SltConfig,
-        peft_config: LoraConfig,
-        llm_dtype="auto",
-        visual_backbone_dtype="auto",
-    ):
-        model = cls.from_pretrained_components(
-            config=config,
-            llm_dtype=llm_dtype,
-            visual_backbone_dtype=visual_backbone_dtype,
-        )
-
-        if model.config.llm_lora:
-            raise ValueError(
-                "The checkpoint already contains LoRA. "
-                "Use SltModel.from_pretrained() to load it."
-            )
-
-        model.llm = get_peft_model(model.llm, peft_config)
-        # The checkpoint weights were already loaded and PEFT initialized the
-        # newly injected LoRA modules; the complete wrapped LLM is now ready.
-        mark_module_tree_as_initialized(model.llm)
-
-        # setup config
-        model.config.llm_lora = True
-        model.config.llm_lora_config = {
-            key: list(value) if isinstance(value, set) else value
-            for key, value in peft_config.to_dict().items()
-        }
-        model._register_llm_tied_weights()
-
-        return model
-
-    @classmethod
-    def from_pretrained_with_new_lora(
-        cls,
-        peft_config: LoraConfig | None = None,
-        checkpoint_dir: str | None = None,
-        model_dtype="auto",
-        *,
-        llm_lora_config: LoraConfig | None = None,
-        visual_lora_config: LoraConfig | None = None,
-    ):
-        """Load a checkpoint and inject LoRA (deprecated compatibility API)."""
-        warnings.warn(
-            "SltModel.from_pretrained_with_new_lora() is deprecated; call "
-            "SltModel.from_pretrained() and then inject_llm_lora() and/or "
-            "inject_visual_lora() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if checkpoint_dir is None:
-            raise TypeError("checkpoint_dir must be provided")
-        if peft_config is not None and llm_lora_config is not None:
-            raise ValueError(
-                "Pass either the legacy peft_config argument or "
-                "llm_lora_config, not both"
-            )
-        if llm_lora_config is None:
-            llm_lora_config = peft_config
-        if llm_lora_config is None and visual_lora_config is None:
-            raise ValueError("At least one LoRA config must be provided")
-
-        model: SltModel = cls.from_pretrained(checkpoint_dir, dtype=model_dtype)
-
-        if llm_lora_config is not None:
-            model.inject_llm_lora(llm_lora_config)
-        if visual_lora_config is not None:
-            model.inject_visual_lora(visual_lora_config)
-
         return model
 
     def _configure_generation(self):
@@ -1308,3 +1210,90 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     def get_decoder(self):
         return self.llm
+
+
+# ---------------------------------------------------------------------------
+# LLM LoRA configuration validation
+#
+# Keep checkpoint/configuration policy out of SltModel's execution path. The
+# model calls these helpers only at topology boundaries: construction and a
+# request to resume or add LoRA.
+# ---------------------------------------------------------------------------
+
+_LORA_CONFIG_METADATA_KEYS = {
+    "auto_mapping",
+    "base_model_name_or_path",
+    "peft_version",
+    "revision",
+}
+
+
+def validate_llm_lora_config_presence(*, enabled: bool, config: dict) -> None:
+    """Require the LoRA presence flag and reconstruction config to agree."""
+    if not isinstance(enabled, bool):
+        raise TypeError("llm_lora must be a bool")
+    if not isinstance(config, dict):
+        raise TypeError("llm_lora_config must be a dict")
+    if enabled and not config:
+        raise ValueError("llm_lora_config must be provided when llm_lora is True")
+    if not enabled and config:
+        raise ValueError("llm_lora_config must be empty when llm_lora is False")
+
+
+def validate_requested_llm_lora_config(
+    checkpoint_config: dict,
+    requested_config: LoraConfig,
+) -> None:
+    """Reject a resume request that differs from checkpoint LoRA topology."""
+    if not isinstance(checkpoint_config, dict) or not checkpoint_config:
+        raise ValueError("checkpoint does not contain an LLM LoRA configuration")
+    if not isinstance(requested_config, LoraConfig):
+        raise TypeError("requested_config must be a LoraConfig")
+
+    checkpoint = _canonical_lora_config(checkpoint_config)
+    requested = _canonical_lora_config(requested_config)
+    if checkpoint == requested:
+        return
+
+    differing_fields = sorted(
+        key
+        for key in checkpoint.keys() | requested.keys()
+        if checkpoint.get(key) != requested.get(key)
+    )
+    differences = ", ".join(
+        f"{key}: checkpoint={checkpoint.get(key)!r}, "
+        f"requested={requested.get(key)!r}"
+        for key in differing_fields
+    )
+    raise ValueError(
+        "Requested LLM LoRA config does not match the checkpoint config"
+        + (f" ({differences})" if differences else "")
+    )
+
+
+def _canonical_lora_config(config: dict | LoraConfig) -> dict:
+    """Fill PEFT defaults and normalize containers before config comparison."""
+    lora_config = config if isinstance(config, LoraConfig) else LoraConfig(**config)
+    values = {
+        key: value
+        for key, value in lora_config.to_dict().items()
+        if key not in _LORA_CONFIG_METADATA_KEYS
+    }
+    return _canonicalize_lora_value(values)
+
+
+def _canonicalize_lora_value(value):
+    """Convert PEFT enums and unordered containers to stable Python values."""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_lora_value(item)
+            for key, item in sorted(value.items())
+        }
+    if isinstance(value, (set, frozenset)):
+        normalized = [_canonicalize_lora_value(item) for item in value]
+        return sorted(normalized, key=repr)
+    if isinstance(value, (list, tuple)):
+        return [_canonicalize_lora_value(item) for item in value]
+    return value

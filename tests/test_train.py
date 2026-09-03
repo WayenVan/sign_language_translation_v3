@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 import torch
 from omegaconf import OmegaConf
+from peft import LoraConfig, TaskType
 from torch import nn
 
 import csi_slt.commands.train as train_command
@@ -185,6 +188,8 @@ def test_initialize_model_loads_before_injecting_new_lora(monkeypatch):
     events = []
 
     class _LoadedModel:
+        config = OmegaConf.create({"llm_lora": False})
+
         def inject_llm_lora(self, config):
             events.append(("llm", config))
 
@@ -228,6 +233,8 @@ def test_initialize_model_creates_components_then_injects_lora(monkeypatch):
             self.llm_model_name_or_path = kwargs["llm_model_name_or_path"]
 
     class _FakeModel:
+        config = OmegaConf.create({"llm_lora": False})
+
         def inject_llm_lora(self, config):
             events.append(("llm", config))
 
@@ -277,34 +284,80 @@ def test_initialize_model_requires_checkpoint_dir_when_loading():
         )
 
 
-def test_legacy_combined_lora_factory_warns_and_delegates(monkeypatch):
+def test_initialize_model_does_not_reinject_matching_checkpoint_lora(monkeypatch):
     events = []
+    requested = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        target_modules=["q_proj", "v_proj"],
+    )
 
     class _LoadedModel:
+        config = SimpleNamespace(
+            llm_lora=True,
+            llm_lora_config={
+                "task_type": "CAUSAL_LM",
+                "r": 4,
+                "lora_alpha": 8,
+                "target_modules": ["v_proj", "q_proj"],
+            },
+        )
+
         def inject_llm_lora(self, config):
             events.append(("llm", config))
-
-        def inject_visual_lora(self, config):
-            events.append(("visual", config))
 
     loaded_model = _LoadedModel()
     monkeypatch.setattr(
         train_command.SltModel,
         "from_pretrained",
-        classmethod(lambda cls, checkpoint_dir, dtype: loaded_model),
+        lambda checkpoint_dir: loaded_model,
     )
-    llm_lora = object()
-    visual_lora = object()
+    model_cfg = OmegaConf.create(
+        {"load_from_checkpoint": True, "checkpoint_dir": "/tmp/checkpoint-10"}
+    )
 
-    with pytest.warns(DeprecationWarning, match="from_pretrained_with_new_lora"):
-        model = train_command.SltModel.from_pretrained_with_new_lora(
-            checkpoint_dir="/tmp/checkpoint-10",
-            llm_lora_config=llm_lora,
-            visual_lora_config=visual_lora,
-        )
+    model, _ = initialize_model(
+        model_cfg,
+        llm_lora_config=requested,
+        visual_lora_config=None,
+        llm_dtype="auto",
+        visual_backbone_dtype="auto",
+    )
 
     assert model is loaded_model
-    assert events == [("llm", llm_lora), ("visual", visual_lora)]
+    assert events == []
+
+
+def test_initialize_model_rejects_mismatched_checkpoint_lora(monkeypatch):
+    requested_lora = LoraConfig(r=8, target_modules=["q_proj"])
+
+    class _LoadedModel:
+        config = SimpleNamespace(
+            llm_lora=True,
+            llm_lora_config={
+                "r": 4,
+                "target_modules": ["q_proj"],
+            },
+        )
+
+    monkeypatch.setattr(
+        train_command.SltModel,
+        "from_pretrained",
+        lambda checkpoint_dir: _LoadedModel(),
+    )
+    model_cfg = OmegaConf.create(
+        {"load_from_checkpoint": True, "checkpoint_dir": "/tmp/checkpoint-10"}
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        initialize_model(
+            model_cfg,
+            llm_lora_config=requested_lora,
+            visual_lora_config=None,
+            llm_dtype="auto",
+            visual_backbone_dtype="auto",
+        )
 
 
 class _ModelWithAlwaysFrozenComponent(nn.Module):

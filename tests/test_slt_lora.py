@@ -1,4 +1,4 @@
-"""Integration test for creating, saving, and reloading SLT LoRA weights.
+"""Unit tests plus an optional real-checkpoint SLT LoRA round trip.
 
 Set ``BASE_CHECKPOINT`` below to a local, non-LoRA ``SltModel`` checkpoint,
 then run this test directly. For example:
@@ -8,12 +8,20 @@ then run this test directly. For example:
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
 from peft import LoraConfig, TaskType
+from transformers.models.qwen3 import Qwen3Config, Qwen3ForCausalLM
 
-from csi_slt.modeling_slt.slt import SltModel
+from csi_slt.modeling_slt.registry import VISUAL_ADAPTERS, VISUAL_BACKBONES
+from csi_slt.modeling_slt.slt import (
+    SltConfig,
+    SltModel,
+    validate_llm_lora_config_presence,
+    validate_requested_llm_lora_config,
+)
 
 
 BASE_CHECKPOINT = Path(
@@ -21,10 +29,159 @@ BASE_CHECKPOINT = Path(
 )
 
 
+def _tiny_native_llm() -> Qwen3ForCausalLM:
+    return Qwen3ForCausalLM(
+        Qwen3Config(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=4,
+            tie_word_embeddings=True,
+        )
+    )
+
+
+def _slt_shell(llm: Qwen3ForCausalLM) -> SltModel:
+    model = object.__new__(SltModel)
+    torch.nn.Module.__init__(model)
+    model.llm = llm
+    model.config = SimpleNamespace(llm_lora=False, llm_lora_config={})
+    return model
+
+
+class _TinyBackbone(torch.nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.projection = torch.nn.Linear(2, 2)
+
+
+class _TinyAdapter(torch.nn.Module):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.projection = torch.nn.Linear(2, 2)
+
+
+def test_llm_lora_is_injected_without_wrapping_native_llm():
+    native_llm = _tiny_native_llm()
+    model = _slt_shell(native_llm)
+
+    model.inject_llm_lora(
+        LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=2,
+            lora_alpha=4,
+            target_modules=["q_proj", "v_proj"],
+        )
+    )
+
+    assert model.llm is native_llm
+    assert type(model.llm) is Qwen3ForCausalLM
+    assert model.get_input_embeddings().weight is model.get_output_embeddings().weight
+    assert any("lora_" in name for name, _ in model.llm.named_parameters())
+    assert not any(name.startswith("llm.base_model.") for name in model.state_dict())
+
+
+def test_native_llm_tied_weights_survive_full_checkpoint_round_trip(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setitem(VISUAL_BACKBONES, "tiny_test_backbone", _TinyBackbone)
+    monkeypatch.setitem(VISUAL_ADAPTERS, "tiny_test_adapter", _TinyAdapter)
+    llm = _tiny_native_llm()
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=2,
+        lora_alpha=4,
+        target_modules=["q_proj", "v_proj"],
+    )
+    serialized_lora = lora_config.to_dict()
+    serialized_lora["target_modules"] = sorted(serialized_lora["target_modules"])
+    config = SltConfig(
+        hidden_size=16,
+        video_soft_token_id=1,
+        llm_model_name_or_path="Qwen/tiny-test-model",
+        llm_config=llm.config,
+        llm_lora=True,
+        llm_lora_config=serialized_lora,
+        visual_backbone_type="tiny_test_backbone",
+        visual_backbone_config={},
+        visual_adapter_type="tiny_test_adapter",
+        visual_adapter_kwargs={},
+        video_bidirectional_attention=False,
+        visual_position_embedding_type="none",
+    )
+    model = SltModel(config)
+
+    assert type(model.llm) is Qwen3ForCausalLM
+    assert model.all_tied_weights_keys == {
+        "llm.lm_head.weight": "llm.model.embed_tokens.weight"
+    }
+    assert model.get_input_embeddings().weight is model.get_output_embeddings().weight
+
+    checkpoint = tmp_path / "native-llm-lora"
+    model.save_pretrained(checkpoint)
+    reloaded, loading_info = SltModel.from_pretrained(
+        checkpoint,
+        output_loading_info=True,
+    )
+
+    assert type(reloaded.llm) is Qwen3ForCausalLM
+    assert not loading_info["missing_keys"]
+    assert not loading_info["unexpected_keys"]
+    assert (
+        reloaded.get_input_embeddings().weight
+        is reloaded.get_output_embeddings().weight
+    )
+    assert not any(
+        name.startswith("llm.base_model.") for name in reloaded.state_dict()
+    )
+
+
+@pytest.mark.parametrize(
+    ("enabled", "config", "message"),
+    [
+        (True, {}, "must be provided"),
+        (False, {"r": 4}, "must be empty"),
+    ],
+)
+def test_llm_lora_presence_requires_flag_and_config_to_agree(
+    enabled, config, message
+):
+    with pytest.raises(ValueError, match=message):
+        validate_llm_lora_config_presence(enabled=enabled, config=config)
+
+
+def test_requested_lora_config_comparison_normalizes_defaults_and_sets():
+    requested = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=4,
+        lora_alpha=8,
+        target_modules=["q_proj", "v_proj"],
+    )
+    checkpoint = {
+        "task_type": "CAUSAL_LM",
+        "r": 4,
+        "lora_alpha": 8,
+        "target_modules": ["v_proj", "q_proj"],
+    }
+
+    validate_requested_llm_lora_config(checkpoint, requested)
+
+
+def test_requested_lora_config_comparison_reports_structural_mismatch():
+    with pytest.raises(ValueError, match=r"r: checkpoint=4, requested=8"):
+        validate_requested_llm_lora_config(
+            {"r": 4, "target_modules": ["q_proj"]},
+            LoraConfig(r=8, target_modules=["q_proj"]),
+        )
+
+
 def _base_checkpoint() -> Path:
     checkpoint_path = BASE_CHECKPOINT.expanduser()
     if not checkpoint_path.is_dir():
-        pytest.fail(
+        pytest.skip(
             "Set BASE_CHECKPOINT in tests/test_slt_lora.py to an existing "
             f"checkpoint directory; current value: {checkpoint_path}"
         )

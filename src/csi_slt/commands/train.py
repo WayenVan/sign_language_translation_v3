@@ -18,7 +18,11 @@ from csi_slt.engine.trainability import (
     SltTrainabilityPlan,
     apply_trainability_plan,
 )
-from csi_slt.modeling_slt.slt import SltConfig, SltModel
+from csi_slt.modeling_slt.slt import (
+    SltConfig,
+    SltModel,
+    validate_requested_llm_lora_config,
+)
 from csi_slt.utils.checkpoint_verification import verify_model_checkpoint
 from csi_slt.utils.generation_config import merge_generation_config
 
@@ -80,7 +84,13 @@ def initialize_model(
         tokenizer_source = str(slt_config.llm_model_name_or_path)
 
     if llm_lora_config is not None:
-        model.inject_llm_lora(llm_lora_config)
+        if model.config.llm_lora:
+            validate_requested_llm_lora_config(
+                model.config.llm_lora_config,
+                llm_lora_config,
+            )
+        else:
+            model.inject_llm_lora(llm_lora_config)
     if visual_lora_config is not None:
         model.inject_visual_lora(visual_lora_config)
 
