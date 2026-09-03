@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_nextframe_handroi20m_gated_lm1
+#SBATCH --job-name=slt_qwen3_4b_nextframe_handroi20m_gated_diverse
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -39,7 +39,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="next-frame-fusion,hand-roi,20m,lm1,hardmatch,wr3,gate-init-1.0,displacement-kaiming,roi-gated,roi-gate-init--2.0,no-dropout"
+  export WANDB_TAGS="next-frame-handroi,20m,diverse-prompts,no-dropout"
   REPORT_TO=wandb
 fi
 
@@ -111,7 +111,8 @@ CMD_ARGS=(
   # before it says anything about generalization.
   --config-name=train/cognition/baseline_ablation
   model=qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-lm1-hardmatch-wr3-gate1-roigate-2.0-0903.224x224
+  prompt=diverse_train
+  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-diverse-hardmatch-wr3-gate1-roigate-2.0-0903.224x224
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
