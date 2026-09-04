@@ -85,7 +85,10 @@ def test_prepare_routes_one_ctc_head_result_through_codebook_and_into_qwen():
         output.inputs_embeds[0, 2:4],
         output.ctc_logits.softmax(dim=-1) @ model.ctc_codebook.codebook.weight,
     )
-    assert "blank_probability_mean" in output.ctc_codebook_logging_scalars
+    # Blank-frequency stats now live outside the bridge (see
+    # test_logging_scalars.py); only genuine codebook-weight diagnostics
+    # remain in ctc_codebook_logging_scalars.
+    assert "blank_embedding_norm" in output.ctc_codebook_logging_scalars
 
 
 def test_ctc_loss_reuses_precomputed_logits_without_calling_head_again():
@@ -129,15 +132,15 @@ def test_ctc_only_forward_bypasses_codebook_and_llm():
     assert output.loss.ndim == 0
     assert output.logits.shape == (2, 3)
     assert output.lengths.tolist() == [2]
-    # Blank-frequency diagnostics come from `CTCCodebookBridge.blank_frequency_scalars`
-    # called as a plain static function on the class, not through the
-    # (forbidden) `model.ctc_codebook` instance -- that's the whole point of
-    # it being computable straight from ctc_head's output.
+    # Blank-frequency diagnostics come from the module-level
+    # `_ctc_head_blank_frequency_scalars`, not through the (forbidden)
+    # `model.ctc_codebook` instance -- that's the whole point of it being
+    # computable straight from ctc_head's output.
     assert set(output.logging_scalars) == {
         "main_loss",
         "ctc_loss",
-        "ctc_codebook/blank_probability_mean",
-        "ctc_codebook/blank_argmax_ratio",
+        "ctc_head/blank_probability_mean",
+        "ctc_head/blank_argmax_ratio",
     }
 
 

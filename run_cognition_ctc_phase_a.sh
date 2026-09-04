@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=slt_ctc_phase_a_nextframe_handroi20m
+#SBATCH --job-name=slt_ctc_phase_a_nextframe_handroi_conv20m
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -40,7 +40,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_ctc
-  export WANDB_TAGS="phase-a,ctc-only,next-frame-handroi,20m,gated"
+  export WANDB_TAGS="phase-a,ctc-only,next-frame-handroi,conv,20m,gated"
   REPORT_TO=wandb
 fi
 
@@ -67,7 +67,7 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  --config-name=train/ctc/phase_a_nextframe_handroi_20m
+  --config-name=train/ctc/phase_a_nextframe_handroi_conv_20m
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"

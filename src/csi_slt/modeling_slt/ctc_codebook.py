@@ -103,7 +103,7 @@ class CTCCodebookBridge(nn.Module):
             token_distribution=distribution,
             predicted_ids=distribution.argmax(dim=-1),
             blank_probability=blank_probability,
-            logging_scalars=self._build_logging_scalars(ctc_logits),
+            logging_scalars=self._build_logging_scalars(),
         )
 
     def assert_initialized(self) -> None:
@@ -157,43 +157,17 @@ class CTCCodebookBridge(nn.Module):
         self.codebook_initialized.fill_(True)
         self._initialization_verified = True
 
-    @staticmethod
-    def blank_frequency_scalars(
-        ctc_logits: torch.Tensor,
-        blank_id: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Blank-frequency diagnostics computable from raw CTC logits alone.
+    def _build_logging_scalars(self) -> dict[str, torch.Tensor]:
+        """Diagnostics that genuinely depend on the codebook's own weights.
 
-        Neither number touches the codebook: both are pure functions of the
-        classifier's own output, so ``ctc_only`` forwards (which never build
-        a codebook distribution at all) can report them too. Deliberately
-        independent of the codebook's selection mode/temperature -- using a
-        plain temperature-1 softmax here means Phase-A and joint training
-        report numbers on the same footing, instead of the joint side's
-        reading drifting with whatever temperature or Gumbel noise the
-        embedding path happens to use that step.
+        Blank-frequency stats (probability mean, argmax ratio) live in
+        ``SltModel`` instead: they are pure functions of the CTC head's raw
+        logits and need no codebook state, so both ``ctc_only`` (which never
+        builds a codebook distribution at all) and joint training compute
+        them the same way without going through this bridge.
         """
-        if ctc_logits.shape[0] == 0:
-            zero = ctc_logits.new_zeros((), dtype=torch.float32)
-            return zero, zero
-        probabilities = F.softmax(ctc_logits.float(), dim=-1)
-        blank_probability_mean = probabilities[:, blank_id].mean()
-        predicted_ids = ctc_logits.argmax(dim=-1)
-        blank_argmax_ratio = predicted_ids.eq(blank_id).float().mean()
-        return blank_probability_mean.detach(), blank_argmax_ratio.detach()
-
-    def _build_logging_scalars(
-        self,
-        ctc_logits: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        blank_probability_mean, blank_argmax_ratio = self.blank_frequency_scalars(
-            ctc_logits, self.blank_id
-        )
-
         blank_embedding = self.codebook.weight[self.blank_id].float()
         scalars = {
-            "blank_probability_mean": blank_probability_mean,
-            "blank_argmax_ratio": blank_argmax_ratio,
             "blank_embedding_norm": blank_embedding.norm().detach(),
         }
         reference = self.initial_blank_embedding.float()

@@ -5,6 +5,7 @@ from typing import Callable, Literal, Optional, Sequence
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from transformers import logging
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation.configuration_utils import GenerationConfig
@@ -123,6 +124,32 @@ def _prefixed_logging_scalars(
             raise ValueError(f"{prefix}/{name} must be detached before logging")
         prefixed[f"{prefix}/{name}"] = value
     return prefixed
+
+
+def _ctc_head_blank_frequency_scalars(
+    ctc_logits: torch.Tensor, blank_id: int
+) -> dict[str, torch.Tensor]:
+    """Blank-frequency diagnostics computed straight from CTC head logits.
+
+    A pure function of the classifier's own output -- it needs no codebook
+    state, so ``ctc_only`` forwards (which never build a codebook
+    distribution at all) and joint training both call this directly and
+    report the same numbers on the same footing. Deliberately independent of
+    the codebook's selection mode/temperature: a plain temperature-1 softmax
+    here keeps the reading from drifting with whatever temperature or Gumbel
+    noise the embedding path happens to use that step.
+    """
+    if ctc_logits.shape[0] == 0:
+        zero = ctc_logits.new_zeros((), dtype=torch.float32)
+        return {"blank_probability_mean": zero, "blank_argmax_ratio": zero}
+    probabilities = F.softmax(ctc_logits.float(), dim=-1)
+    blank_probability_mean = probabilities[:, blank_id].mean()
+    predicted_ids = ctc_logits.argmax(dim=-1)
+    blank_argmax_ratio = predicted_ids.eq(blank_id).float().mean()
+    return {
+        "blank_probability_mean": blank_probability_mean.detach(),
+        "blank_argmax_ratio": blank_argmax_ratio.detach(),
+    }
 
 
 def _load_pretrained_submodule_components(model: nn.Module) -> None:
@@ -971,20 +998,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
         # Blank-frequency health check, computable straight from ctc_head's
         # own output. ctc_only never builds a codebook distribution, but
-        # this doesn't need one -- and using the same helper joint training
-        # uses keeps the two phases' curves on the same footing.
-        blank_probability_mean, blank_argmax_ratio = (
-            CTCCodebookBridge.blank_frequency_scalars(
-                ctc_output.logits, self.config.ctc_blank_id
-            )
-        )
+        # this doesn't need one -- see _ctc_head_blank_frequency_scalars.
         logging_scalars.update(
             _prefixed_logging_scalars(
-                {
-                    "blank_probability_mean": blank_probability_mean,
-                    "blank_argmax_ratio": blank_argmax_ratio,
-                },
-                "ctc_codebook",
+                _ctc_head_blank_frequency_scalars(
+                    ctc_output.logits, self.config.ctc_blank_id
+                ),
+                "ctc_head",
             )
         )
         if ctc_loss is not None:
@@ -1273,6 +1293,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
             logging_scalars.update(
                 _prefixed_logging_scalars(
                     prepare_output.ctc_codebook_logging_scalars, "ctc_codebook"
+                )
+            )
+            logging_scalars.update(
+                _prefixed_logging_scalars(
+                    _ctc_head_blank_frequency_scalars(
+                        prepare_output.ctc_logits, self.config.ctc_blank_id
+                    ),
+                    "ctc_head",
                 )
             )
             logging_scalars.update(

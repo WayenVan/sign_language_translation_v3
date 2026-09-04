@@ -5,15 +5,18 @@
 #   v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-lm1-
 #   hardmatch-wr3-gate1-roigate-2.0-0903.224x224
 #
-# This constructs the new mandatory-CTC model from pretrained components; it
-# does not load the v5.0 SLT checkpoint. The selected adapter keeps that run's
-# fusion architecture while narrowing its output/CTC representation from 2560
-# to 1024. Projection ranks remain unchanged so this experiment isolates that
-# representation-width decision.
+# Identical to phase_a_nextframe_handroi_20m, except the model swaps in
+# spatiotemporal_next_frame_hand_roi_conv: TemporalConvDownsample replaces the
+# boundary-safe temporal mean with a learnable per-channel temporal filter
+# (temporal_conv_radius=1, so a 4-frame window at step 0 rather than the exact
+# 2-frame mean -- see that model config's docstring). This constructs the new
+# mandatory-CTC model from pretrained components; it does not load the v5.0
+# SLT checkpoint. Projection ranks remain unchanged so this experiment
+# isolates that representation-width decision.
 
 defaults:
   - /train/ctc/phase_a_base
-  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
+  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-conv-20m
   - override /data: ph14t_*x224x224_qwen_single_language
   - override /prompt: diverse_train
   - _self_
@@ -33,7 +36,7 @@ model:
 
 engine:
   training_args:
-    output_dir: outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-20m
+    output_dir: outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-conv-20m
     dataloader_num_workers: 8
     logging_steps: 15
 

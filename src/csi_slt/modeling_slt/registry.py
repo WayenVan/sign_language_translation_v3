@@ -23,6 +23,9 @@ from .visual_adapters.spatiotemporal_next_frame_adapter import (
 from .visual_adapters.spatiotemporal_next_frame_hand_roi_adapter import (
     SpatiotemporalNextFrameHandRoiAdapter,
 )
+from .visual_adapters.spatiotemporal_next_frame_hand_roi_conv_adapter import (
+    SpatiotemporalNextFrameHandRoiConvAdapter,
+)
 from .visual_adapters.hand_roi_pooled_adapter import (
     HandRoiPooledAdapter,
 )
@@ -76,6 +79,7 @@ VISUAL_ADAPTERS: Dict[str, nn.Module] = {
     "spatiotemporal_motion": SpatiotemporalMotionAdapter,
     "spatiotemporal_next_frame": SpatiotemporalNextFrameAdapter,
     "spatiotemporal_next_frame_hand_roi": SpatiotemporalNextFrameHandRoiAdapter,
+    "spatiotemporal_next_frame_hand_roi_conv": SpatiotemporalNextFrameHandRoiConvAdapter,
     "hand_roi_pooled": HandRoiPooledAdapter,
     "spatiotemporal_next_frame_motion": SpatiotemporalNextFrameMotionAdapter,
     "token_sampler_v2": TokenSampleAdapterV2,
