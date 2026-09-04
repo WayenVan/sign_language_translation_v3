@@ -11,7 +11,7 @@ from ..modeling_slt.slt import SltModel
 from ..utils.generation_config import merge_generation_config
 import re
 from accelerate import Accelerator
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.commands.config import instantiate_prompt_resolvers
 
 
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join(os.getcwd(), "configs"))

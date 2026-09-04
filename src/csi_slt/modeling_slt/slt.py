@@ -969,6 +969,24 @@ class SltModel(PreTrainedModel, GenerationMixin):
             ctc_output.visual_adapter_logging_scalars,
             "visual_adapter",
         )
+        # Blank-frequency health check, computable straight from ctc_head's
+        # own output. ctc_only never builds a codebook distribution, but
+        # this doesn't need one -- and using the same helper joint training
+        # uses keeps the two phases' curves on the same footing.
+        blank_probability_mean, blank_argmax_ratio = (
+            CTCCodebookBridge.blank_frequency_scalars(
+                ctc_output.logits, self.config.ctc_blank_id
+            )
+        )
+        logging_scalars.update(
+            _prefixed_logging_scalars(
+                {
+                    "blank_probability_mean": blank_probability_mean,
+                    "blank_argmax_ratio": blank_argmax_ratio,
+                },
+                "ctc_codebook",
+            )
+        )
         if ctc_loss is not None:
             logging_scalars.update(
                 {

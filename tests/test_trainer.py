@@ -3,13 +3,16 @@ from types import SimpleNamespace
 import pytest
 import torch
 from torch import nn
-from omegaconf import OmegaConf
 from transformers import GenerationConfig, Seq2SeqTrainingArguments
 
+from csi_slt.engine.optimization import OptimizationPlan
+from csi_slt.engine.schedule import ScalarAnnealSchedule
 from csi_slt.engine.sft.callbacks import (
+    ETACallback,
     EvalInformationVisualizationCallback,
     TrainSubsetMetricsCallback,
 )
+from csi_slt.engine.sft.metrics import CTCMetric
 from csi_slt.engine.sft.trainer import SltTrainer
 from csi_slt.engine.sft.training_args import SltTrainingArguments
 
@@ -68,21 +71,17 @@ def test_optimizer_uses_separate_component_learning_rates(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
+        optimization_plan=OptimizationPlan.from_mapping(
             {
-                "engine": {
-                    "optimization": {
-                        "llm": {"learning_rate": 2e-5, "weight_decay": 0.01},
-                        "visual_backbone": {
-                            "learning_rate": 3e-5,
-                            "weight_decay": 0.02,
-                        },
-                        "visual_adapter": {
-                            "learning_rate": 4e-5,
-                            "weight_decay": 0.03,
-                        },
-                    }
-                }
+                "llm": {"learning_rate": 2e-5, "weight_decay": 0.01},
+                "visual_backbone": {
+                    "learning_rate": 3e-5,
+                    "weight_decay": 0.02,
+                },
+                "visual_adapter": {
+                    "learning_rate": 4e-5,
+                    "weight_decay": 0.03,
+                },
             }
         ),
     )
@@ -128,8 +127,8 @@ def test_component_learning_rate_defaults_to_global_rate(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
-            {"engine": {"optimization": {"visual_adapter": {"learning_rate": 4e-5}}}}
+        optimization_plan=OptimizationPlan.from_mapping(
+            {"visual_adapter": {"learning_rate": 4e-5}}
         ),
     )
 
@@ -157,16 +156,12 @@ def test_semantic_group_overrides_component_and_global_defaults(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
+        optimization_plan=OptimizationPlan.from_mapping(
             {
-                "engine": {
-                    "optimization": {
-                        "visual_adapter": {
-                            "learning_rate": 4e-5,
-                            "weight_decay": 0.03,
-                            "parameter_groups": {"gates": {"learning_rate": 5e-4}},
-                        }
-                    }
+                "visual_adapter": {
+                    "learning_rate": 4e-5,
+                    "weight_decay": 0.03,
+                    "parameter_groups": {"gates": {"learning_rate": 5e-4}},
                 }
             }
         ),
@@ -196,16 +191,8 @@ def test_optimizer_rejects_unregistered_semantic_group(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
-            {
-                "engine": {
-                    "optimization": {
-                        "visual_adapter": {
-                            "parameter_groups": {"missing": {"learning_rate": 5e-4}}
-                        }
-                    }
-                }
-            }
+        optimization_plan=OptimizationPlan.from_mapping(
+            {"visual_adapter": {"parameter_groups": {"missing": {"learning_rate": 5e-4}}}}
         ),
     )
 
@@ -246,12 +233,8 @@ def test_optimizer_rejects_invalid_semantic_group_registration(
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
-            {
-                "engine": {
-                    "optimization": {"visual_adapter": {"parameter_groups": groups}}
-                }
-            }
+        optimization_plan=OptimizationPlan.from_mapping(
+            {"visual_adapter": {"parameter_groups": groups}}
         ),
     )
 
@@ -270,8 +253,8 @@ def test_component_weight_decay_defaults_to_global_value(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
-            {"engine": {"optimization": {"visual_adapter": {"weight_decay": 0.0}}}}
+        optimization_plan=OptimizationPlan.from_mapping(
+            {"visual_adapter": {"weight_decay": 0.0}}
         ),
     )
 
@@ -299,17 +282,13 @@ def test_ctc_components_support_independent_optimizer_overrides(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
+        optimization_plan=OptimizationPlan.from_mapping(
             {
-                "engine": {
-                    "optimization": {
-                        "ctc_head": {"learning_rate": 3e-4},
-                        "ctc_codebook": {
-                            "learning_rate": 2e-5,
-                            "weight_decay": 0.0,
-                        },
-                    }
-                }
+                "ctc_head": {"learning_rate": 3e-4},
+                "ctc_codebook": {
+                    "learning_rate": 2e-5,
+                    "weight_decay": 0.0,
+                },
             }
         ),
     )
@@ -338,8 +317,8 @@ def test_optimizer_rejects_override_for_frozen_component(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
-            {"engine": {"optimization": {"ctc_codebook": {"learning_rate": 2e-5}}}}
+        optimization_plan=OptimizationPlan.from_mapping(
+            {"ctc_codebook": {"learning_rate": 2e-5}}
         ),
     )
 
@@ -358,15 +337,11 @@ def test_training_log_includes_each_trainable_component_learning_rate(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
+        optimization_plan=OptimizationPlan.from_mapping(
             {
-                "engine": {
-                    "optimization": {
-                        "llm": {"learning_rate": 2e-5},
-                        "visual_backbone": {"learning_rate": 3e-5},
-                        "visual_adapter": {"learning_rate": 4e-5},
-                    }
-                }
+                "llm": {"learning_rate": 2e-5},
+                "visual_backbone": {"learning_rate": 3e-5},
+                "visual_adapter": {"learning_rate": 4e-5},
             }
         ),
     )
@@ -425,25 +400,18 @@ def test_train_probe_test_dataloader_disables_persistent_workers(tmp_path, monke
     assert trainer.args.dataloader_persistent_workers is True
 
 
-def test_trainer_builds_eval_information_callback_from_engine_config(tmp_path):
+def test_trainer_builds_eval_information_callback_from_kwargs(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),
         report_to="none",
     )
-    hydra_config = OmegaConf.create(
-        {
-            "engine": {
-                "eval_information": {
-                    "every_n_evaluations": 3,
-                    "num_samples": 2,
-                }
-            }
-        }
-    )
     trainer = SltTrainer(
         model=_MeanReducedModelWithKwargs(),
         args=args,
-        hydra_config=hydra_config,
+        eval_information_kwargs={
+            "every_n_evaluations": 3,
+            "num_samples": 2,
+        },
     )
 
     callback = next(
@@ -455,22 +423,17 @@ def test_trainer_builds_eval_information_callback_from_engine_config(tmp_path):
     assert callback.num_samples == 2
 
 
-def test_trainer_builds_train_probe_callback_from_engine_config(tmp_path):
+def test_trainer_builds_train_probe_callback_from_kwargs(tmp_path):
     args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
-    hydra_config = OmegaConf.create(
-        {
-            "engine": {
-                "train_probe": {
-                    "every_n_evaluations": 3,
-                    "num_samples": 17,
-                    "seed": 9,
-                    "metric_key_prefix": "train_sample",
-                }
-            }
-        }
-    )
     trainer = SltTrainer(
-        model=_MeanReducedModelWithKwargs(), args=args, hydra_config=hydra_config
+        model=_MeanReducedModelWithKwargs(),
+        args=args,
+        train_probe_kwargs={
+            "every_n_evaluations": 3,
+            "num_samples": 17,
+            "seed": 9,
+            "metric_key_prefix": "train_sample",
+        },
     )
 
     callback = next(
@@ -639,7 +602,7 @@ class _ForwardModeModel(_GenerationModel):
         return {"loss": self.weight * 0, "logits": torch.empty(0)}
 
 
-def test_compute_loss_injects_explicit_engine_forward_mode(tmp_path):
+def test_compute_loss_injects_explicit_forward_mode(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),
         report_to="none",
@@ -648,12 +611,98 @@ def test_compute_loss_injects_explicit_engine_forward_mode(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create({"engine": {"forward_mode": "ctc_only"}}),
+        forward_mode="ctc_only",
     )
 
     trainer.compute_loss(model, {"input_ids": torch.tensor([[1]])})
 
     assert model.forward_mode == "ctc_only"
+
+
+class _ModelWithCtcCodebook(nn.Module):
+    """Minimal model exposing ``ctc_codebook.min_temperature``, like SltModel."""
+
+    def __init__(self, min_temperature=0.1):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(()))
+        self.config = SimpleNamespace()
+        self.ctc_codebook = SimpleNamespace(min_temperature=min_temperature)
+        self.last_kwargs = None
+
+    def forward(self, labels=None, **kwargs):
+        self.last_kwargs = kwargs
+        return {"loss": self.weight * 0 + 8.0}
+
+
+def test_ctc_temperature_schedule_below_min_temperature_rejected_at_construction(
+    tmp_path,
+):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    model = _ModelWithCtcCodebook(min_temperature=0.5)
+
+    with pytest.raises(ValueError, match="min_temperature"):
+        SltTrainer(
+            model=model,
+            args=args,
+            ctc_temperature_schedule=ScalarAnnealSchedule(start=1.0, end=0.3),
+        )
+
+
+def test_compute_loss_injects_ctc_codebook_temperature_in_joint_mode(tmp_path):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    model = _ModelWithCtcCodebook()
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        forward_mode="joint",
+        ctc_temperature_schedule=ScalarAnnealSchedule(
+            start=1.0, end=0.3, anneal_ratio=0.5
+        ),
+    )
+    trainer.state.global_step = 0
+    trainer.state.max_steps = 100
+
+    trainer.compute_loss(model, {"labels": torch.tensor([[1]])})
+
+    assert model.last_kwargs["ctc_codebook_temperature"] == 1.0
+
+
+def test_compute_loss_omits_ctc_codebook_temperature_in_ctc_only_mode(tmp_path):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    model = _ModelWithCtcCodebook()
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        forward_mode="ctc_only",
+        ctc_temperature_schedule=ScalarAnnealSchedule(start=1.0, end=0.3),
+    )
+
+    trainer.compute_loss(model, {"labels": torch.tensor([[1]])})
+
+    assert "ctc_codebook_temperature" not in model.last_kwargs
+
+
+def test_log_reports_current_ctc_codebook_temperature(tmp_path):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    model = _ModelWithCtcCodebook()
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        ctc_temperature_schedule=ScalarAnnealSchedule(
+            start=1.0, end=0.1, anneal_ratio=1.0, mode="linear"
+        ),
+    )
+    trainer.state.global_step = 500
+    trainer.state.max_steps = 1000
+    # ETACallback.on_log divides by a `last_print_time` it only sets up in
+    # `on_train_begin`, which this unit test never runs.
+    trainer.remove_callback(ETACallback)
+
+    trainer.log({"loss": 1.0})
+
+    assert trainer.state.log_history[-1]["ctc_codebook_temperature"] == pytest.approx(
+        0.55
+    )
 
 
 def test_prediction_step_uses_prompt_only_generation_fields(tmp_path):
@@ -782,9 +831,12 @@ def test_prediction_step_returns_ctc_sequences_for_combined_metric(tmp_path):
 
     assert loss.item() == 1.5
     assert model.forward_calls == 1
+    # `prediction_step` stops at the raw per-frame argmax path (paths:
+    # [0, 1, 1, 0] and [2, 0]); collapsing repeats and dropping blank is
+    # CTCMetric's job now, run after cross-process gather.
     ctc_ids, ctc_lengths = predictions[3:5]
-    assert ctc_ids.tolist() == [[1], [2]]
-    assert ctc_lengths.tolist() == [1, 1]
+    assert ctc_ids.tolist() == [[0, 1, 1, 0], [2, 0, 0, 0]]
+    assert ctc_lengths.tolist() == [4, 2]
     reference_ids, reference_lengths = label_output[2:4]
     assert reference_ids.tolist() == [[1, 3], [2, 0]]
     assert reference_lengths.tolist() == [2, 1]
@@ -800,7 +852,7 @@ def test_ctc_only_prediction_step_skips_generation_and_joint_inputs(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create({"engine": {"forward_mode": "ctc_only"}}),
+        forward_mode="ctc_only",
     )
 
     loss, predictions, references = trainer.prediction_step(
@@ -816,9 +868,65 @@ def test_ctc_only_prediction_step_skips_generation_and_joint_inputs(tmp_path):
 
     assert loss.item() == 1.5
     assert model.forward_calls == 1
+    # Raw per-frame argmax path, not yet collapsed -- see the combined-metric
+    # test above for the same paths.
     prediction_ids, prediction_lengths = predictions
-    assert prediction_ids.tolist() == [[1], [2]]
-    assert prediction_lengths.tolist() == [1, 1]
+    assert prediction_ids.tolist() == [[0, 1, 1, 0], [2, 0, 0, 0]]
+    assert prediction_lengths.tolist() == [4, 2]
     reference_ids, reference_lengths = references
     assert reference_ids.tolist() == [[1, 3], [2, 0]]
     assert reference_lengths.tolist() == [2, 1]
+
+
+def test_padded_ctc_argmax_paths_does_not_collapse():
+    # blank=0. Sample 0's raw path is [0, 1, 1, 2]; sample 1's is [1, 1].
+    # Collapsing would turn these into [1, 2] (len 2) and [1] (len 1) --
+    # this function must return the uncollapsed frame-by-frame argmax, sized
+    # by input length, not decoded length.
+    logits = torch.nn.functional.one_hot(
+        torch.tensor([0, 1, 1, 2, 1, 1]), num_classes=3
+    ).float()
+    lengths = torch.tensor([4, 2])
+
+    padded, output_lengths = SltTrainer._padded_ctc_argmax_paths(logits, lengths)
+
+    assert padded.tolist() == [[0, 1, 1, 2], [1, 1, 0, 0]]
+    assert output_lengths.tolist() == [4, 2]
+
+
+def test_padded_ctc_argmax_paths_stays_gather_safe_when_all_blank():
+    # All-blank is CTC's own failure mode, not a malformed input. Padding by
+    # decoded length would make this width 0, which `accelerate.gather`
+    # cannot reshape (`view(-1, 0)` has no unique -1); padding by *input*
+    # length instead keeps the width tied to something that can't collapse
+    # to 0 just because the model predicted blank everywhere.
+    blank_id = 0
+    logits = torch.nn.functional.one_hot(
+        torch.tensor([0, 0, 0, 0, 0]), num_classes=3
+    ).float()
+    lengths = torch.tensor([3, 2])
+
+    padded, output_lengths = SltTrainer._padded_ctc_argmax_paths(logits, lengths)
+
+    assert padded.shape == (2, 3)
+    assert padded.numel() > 0
+    assert output_lengths.tolist() == [3, 2]
+    # CTCMetric is the one that collapses; verify it correctly reports an
+    # empty prediction here rather than crashing on the raw path.
+    metric = CTCMetric(blank_id=blank_id)
+    assert metric._collapse_ctc_path(padded[0, :3].tolist(), blank_id) == []
+    assert metric._collapse_ctc_path(padded[1, :2].tolist(), blank_id) == []
+
+
+def test_pad_packed_sequences_keeps_one_padding_column_when_all_empty():
+    padding_value = 0
+    token_ids = torch.tensor([], dtype=torch.long)
+    lengths = torch.tensor([0, 0])
+
+    padded, output_lengths = SltTrainer._pad_packed_sequences(
+        token_ids, lengths, padding_value
+    )
+
+    assert padded.shape == (2, 1)
+    assert padded.numel() > 0
+    assert output_lengths.tolist() == [0, 0]

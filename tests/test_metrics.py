@@ -36,7 +36,10 @@ def _get_language_id(language: str) -> int:
 
 
 def test_ctc_metric_computes_corpus_wer_from_lengths():
-    metric = CTCMetric()
+    # blank_id=0 does not appear within either valid prediction span here
+    # ([1, 2] and [4]), so collapsing is a no-op and this reduces to a plain
+    # edit-distance check.
+    metric = CTCMetric(blank_id=0)
     output = SimpleNamespace(
         predictions=(
             np.array([[1, 2, 0], [4, 0, 0]]),
@@ -54,6 +57,31 @@ def test_ctc_metric_computes_corpus_wer_from_lengths():
         "ctc_wer": 0.5,
         "ctc_token_errors": 2,
         "ctc_reference_tokens": 4,
+    }
+
+
+def test_ctc_metric_collapses_repeats_and_drops_blank_before_scoring():
+    # Raw per-frame argmax paths, as SltTrainer now emits them: sample 0 is
+    # [1, 1, 0, 2] -> collapses to [1, 2] (exact match); sample 1 is
+    # [0, 0, 0] -> collapses to [] (fully wrong against a length-1 reference).
+    metric = CTCMetric(blank_id=0)
+    output = SimpleNamespace(
+        predictions=(
+            np.array([[1, 1, 0, 2], [0, 0, 0, 0]]),
+            np.array([4, 3]),
+        ),
+        label_ids=(
+            np.array([[1, 2], [5, 0]]),
+            np.array([2, 1]),
+        ),
+    )
+
+    results = metric(output)
+
+    assert results == {
+        "ctc_wer": 1 / 3,
+        "ctc_token_errors": 1,
+        "ctc_reference_tokens": 3,
     }
 
 

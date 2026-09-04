@@ -272,6 +272,10 @@ prefix 部分的 label 全部设为 `-100`,**loss 只在德语目标句上计算
 2. **德语**。mBART/XGLM 被选用的明文理由是多语种预训练。Qwen3 的德语能力弱于专门做翻译预训练的模型,**这是纯文本上界实验要测的核心变量**。
 3. **PH14T 基准本身**。训练/测试集重叠会虚高 BLEU 并掩盖过拟合。最终结论建议在 CSL-Daily 上交叉验证。
 4. **decoder-only 在小数据集上的劣势**。mBART decoder 每层可 cross-attention 回视觉侧重新取信息,decoder-only 只读一次 prefix。数据少时前者的归纳偏置是优势。本方案的收益预期应放在**可扩展到更大数据集**上,而非 PH14T 刷分。
+5. **【待处理,2026-09-04】blank 槽位稀释视觉序列**。3.3 节的软 collapse 是刻意不做的(保梯度),代价是 CTC 天然高比例的 blank 预测会原样变成一个 LLM token,长 blank run 稀释信息密度、浪费上下文预算——T≈75 时或许还好,但这个假设没有专门验证过。
+   - **硬约束**:视觉占位符数量在数据处理阶段(processor/collator)就已按 `video_token_scale` 定死(`int(L * video_token_scale) + 2`,与 CTC 预测内容无关,`prepare_for_casual_lm` 里 `assert text_visual_lengths == visual_lengths + 2` 强制这一点)。任何"按内容动态合并/丢弃 blank 槽位"的方案,都需要先把 collator 改成 model-in-the-loop 的两阶段流程(先跑一遍 CTC 再定占位符数量)——目前不具备,不是能顺手加的改动。
+   - 可行缓解分三档,代价递增:(a) 加一项 blank 比例的正则项(现成的 `blank_probability_mean` 日志可以直接拿来当目标),风险是可能压制"这里真的该是 blank"的正确预测,伤识别;(b) 调小 `video_token_scale` 降低 token 总量,治标不治本,且下采样太狠会丢动作细节;(c) 两阶段 collator 重构,真正解决,但工程量足够大,该单独立项而不是顺手做。
+   - 现状:暂缓未动。下一步建议是先跑 (b) 观察 `blank_probability_mean`/`ctc_wer`/dev BLEU-4 怎么变,再决定要不要碰 (a) 或认真评估 (c) 的立项价值。
 
 ---
 

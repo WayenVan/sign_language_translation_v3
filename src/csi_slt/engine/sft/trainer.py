@@ -17,7 +17,6 @@ import torch
 from torch.distributed.fsdp import FSDPModule, FullyShardedDataParallel
 from typing import Any, Optional, Union
 import contextlib
-from omegaconf import OmegaConf
 
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.integrations.fsdp import is_fsdp_managed_module
@@ -47,6 +46,8 @@ from csi_slt.engine.optimization import (
     OptimizationPlan,
     build_optimizer_parameter_groups,
 )
+from csi_slt.engine.schedule import ScalarAnnealSchedule
+from csi_slt.engine.schedule import value_at as schedule_value_at
 
 logger = logging.get_logger(__name__)
 
@@ -106,6 +107,11 @@ class SltTrainer(Seq2SeqTrainer):
 
     def __init__(
         self,
+        forward_mode: str = "joint",
+        optimization_plan: Optional[OptimizationPlan] = None,
+        ctc_temperature_schedule: Optional[ScalarAnnealSchedule] = None,
+        eval_information_kwargs: Optional[dict] = None,
+        train_probe_kwargs: Optional[dict] = None,
         hydra_config=None,
         eval_data_collator=None,
         train_data_collator=None,
@@ -136,61 +142,47 @@ class SltTrainer(Seq2SeqTrainer):
             test_data_collator if test_data_collator is not None else self.data_collator
         )
         self.train_probe_compute_metrics = train_probe_compute_metrics
-        self.forward_mode = (
-            OmegaConf.select(hydra_config, "engine.forward_mode", default="joint")
-            if hydra_config is not None
-            else "joint"
-        )
+        self.forward_mode = forward_mode
         if self.forward_mode not in ("ctc_only", "joint"):
             raise ValueError(
-                "engine.forward_mode must be 'ctc_only' or 'joint', got "
+                "forward_mode must be 'ctc_only' or 'joint', got "
                 f"{self.forward_mode!r}"
             )
-        optimization_config = (
-            OmegaConf.select(hydra_config, "engine.optimization", default={})
-            if hydra_config is not None
-            else {}
+        self.optimization_plan = (
+            optimization_plan
+            if optimization_plan is not None
+            else OptimizationPlan.from_mapping({})
         )
-        if OmegaConf.is_config(optimization_config):
-            optimization_config = OmegaConf.to_container(
-                optimization_config, resolve=True
-            )
-        self.optimization_plan = OptimizationPlan.from_mapping(optimization_config)
+        self.ctc_temperature_schedule = ctc_temperature_schedule
+        if self.ctc_temperature_schedule is not None:
+            # Fail at construction, not partway through a run: the codebook
+            # rejects any temperature below its own floor once training
+            # actually anneals down to `end`.
+            min_temperature = self.model.ctc_codebook.min_temperature
+            if self.ctc_temperature_schedule.end < min_temperature:
+                raise ValueError(
+                    "ctc_temperature_schedule.end "
+                    f"({self.ctc_temperature_schedule.end}) is below the "
+                    f"codebook's min_temperature ({min_temperature})"
+                )
 
         # NOTE: add custom callbacks
         # self.add_callback(
         #     SaveBestMetricCallback(metric_name="test_overall_sentence_bleu_4")
         # )
         self.add_callback(ModelInfoCallback())
+        # ``hydra_config`` is a snapshot for logging/checkpointing only (wandb,
+        # ``hydra_config.yaml``) -- it must not be mined for values that drive
+        # training behavior. Those are resolved by the caller (a ``commands/``
+        # script) into the explicit, typed arguments above.
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
         self.add_callback(ETACallback())
-        eval_information_kwargs = {}
-        if hydra_config is not None:
-            eval_information_config = OmegaConf.select(
-                hydra_config,
-                "engine.eval_information",
-                default=None,
-            )
-            if eval_information_config is not None:
-                eval_information_kwargs = OmegaConf.to_container(
-                    eval_information_config,
-                    resolve=True,
-                )
         self.add_callback(
-            EvalInformationVisualizationCallback(**eval_information_kwargs)
+            EvalInformationVisualizationCallback(**(eval_information_kwargs or {}))
         )
-        train_probe_kwargs = {}
-        if hydra_config is not None:
-            train_probe_config = OmegaConf.select(
-                hydra_config, "engine.train_probe", default=None
-            )
-            if train_probe_config is not None:
-                train_probe_kwargs = OmegaConf.to_container(
-                    train_probe_config, resolve=True
-                )
-        self.add_callback(TrainSubsetMetricsCallback(**train_probe_kwargs))
+        self.add_callback(TrainSubsetMetricsCallback(**(train_probe_kwargs or {})))
 
         # if _is_peft_model(unwrap_model(self.model)):
         #     self.add_callback(SaveBaseModelInPEFT())
@@ -515,6 +507,16 @@ class SltTrainer(Seq2SeqTrainer):
             if not name.startswith("generation_")
         }
         model_inputs["forward_mode"] = self.forward_mode
+        if self.forward_mode == "joint" and self.ctc_temperature_schedule is not None:
+            # ctc_only bypasses the codebook entirely, so there is nothing to
+            # anneal. Eval calls reach this too, but CTCCodebookBridge forces
+            # argmax selection outside of training and ignores temperature
+            # entirely then, so passing a value here is harmless.
+            model_inputs["ctc_codebook_temperature"] = schedule_value_at(
+                self.ctc_temperature_schedule,
+                step=self.state.global_step,
+                max_steps=self.state.max_steps,
+            )
         loss, outputs = super().compute_loss(
             model,
             model_inputs,
@@ -522,6 +524,19 @@ class SltTrainer(Seq2SeqTrainer):
             num_items_in_batch=num_items_in_batch,
         )
 
+        self._accumulate_logging_scalars(outputs)
+
+        return (loss, outputs) if return_outputs else loss
+
+    def _accumulate_logging_scalars(self, outputs: Any) -> None:
+        """Fold one forward's ``logging_scalars`` into the running average.
+
+        Shared by ``compute_loss`` (training) and ``prediction_step`` /
+        ``_prediction_step_ctc_only`` (eval): every path that runs the model
+        forward with ``labels`` produces these scalars, and they should all
+        feed the same averaged numbers ``log()`` reports -- eval forwards
+        were computing them and throwing them away before this existed.
+        """
         logging_scalars = getattr(outputs, "logging_scalars", None)
         if logging_scalars is None and isinstance(outputs, dict):
             logging_scalars = outputs.get("logging_scalars")
@@ -539,8 +554,6 @@ class SltTrainer(Seq2SeqTrainer):
                 self._logging_scalar_counts.get(name, 0) + 1
             )
 
-        return (loss, outputs) if return_outputs else loss
-
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         """Add component LRs and averaged model scalars to training logs."""
         if self.optimizer is not None and "learning_rate" in logs:
@@ -554,6 +567,12 @@ class SltTrainer(Seq2SeqTrainer):
                         else component
                     )
                     logs[f"learning_rate/{suffix}"] = float(group["lr"])
+        if "loss" in logs and self.ctc_temperature_schedule is not None:
+            logs["ctc_codebook_temperature"] = schedule_value_at(
+                self.ctc_temperature_schedule,
+                step=self.state.global_step,
+                max_steps=self.state.max_steps,
+            )
         if "loss" in logs and self._logging_scalar_totals:
             for name, total in self._logging_scalar_totals.items():
                 count = torch.tensor(
@@ -644,12 +663,25 @@ class SltTrainer(Seq2SeqTrainer):
         return teacher_forcing_inputs
 
     @staticmethod
-    def _padded_ctc_greedy_decode(
+    def _padded_ctc_argmax_paths(
         logits: torch.Tensor,
         lengths: torch.Tensor,
-        blank_id: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Collapse packed CTC argmax paths and return padded token sequences."""
+        """Pad each sample's raw per-frame CTC argmax path to the batch's width.
+
+        Deliberately stops at argmax: collapsing repeats and dropping blank
+        (the rest of greedy CTC decoding) is deferred to ``CTCMetric``, which
+        runs single-process, after this batch has already been padded and
+        gathered across devices. Doing that collapse here would make the
+        padded width depend on decode *content* instead of input length --
+        and a batch where every sample collapses to all-blank (an ordinary
+        CTC failure mode, not a malformed input) would then pad to width 0
+        and crash `accelerate`'s cross-process gather, whose `view(-1, 0)`
+        has no unique solution for -1. Padding to `max(lengths)` instead
+        only reaches 0 when every sample in the batch has zero input frames,
+        which is a data bug that should fail loudly elsewhere, not something
+        to paper over here.
+        """
         if logits.ndim != 2:
             raise ValueError("ctc_logits must have shape [sum(T_i), vocab_size].")
         lengths = lengths.to(device=logits.device, dtype=torch.long)
@@ -659,23 +691,13 @@ class SltTrainer(Seq2SeqTrainer):
             )
 
         paths = logits.argmax(dim=-1).split(lengths.tolist())
-        sequences = []
-        for path in paths:
-            collapsed = torch.unique_consecutive(path)
-            sequences.append(collapsed[collapsed.ne(blank_id)])
-        sequence_lengths = lengths.new_tensor(
-            [sequence.numel() for sequence in sequences]
+        max_length = int(lengths.max()) if lengths.numel() else 0
+        padded = torch.zeros(
+            (lengths.numel(), max_length), dtype=torch.long, device=logits.device
         )
-        max_length = max((sequence.numel() for sequence in sequences), default=0)
-        padded = torch.full(
-            (len(sequences), max_length),
-            blank_id,
-            dtype=torch.long,
-            device=logits.device,
-        )
-        for index, sequence in enumerate(sequences):
-            padded[index, : sequence.numel()] = sequence
-        return padded, sequence_lengths
+        for index, path in enumerate(paths):
+            padded[index, : path.numel()] = path
+        return padded, lengths
 
     @staticmethod
     def _pad_packed_sequences(
@@ -690,7 +712,10 @@ class SltTrainer(Seq2SeqTrainer):
         if int(lengths.sum()) != token_ids.numel():
             raise ValueError("pseudo_gloss_length does not match pseudo_gloss_ids.")
         sequences = token_ids.split(lengths.tolist())
-        max_length = int(lengths.max()) if lengths.numel() else 0
+        # An all-empty reference batch (or a batch of size 0) must still
+        # produce a gather-safe tensor -- see `_padded_ctc_argmax_paths` for
+        # why a width-0 padded tensor crashes accelerate's gather.
+        max_length = max(int(lengths.max()) if lengths.numel() else 0, 1)
         padded = torch.full(
             (lengths.numel(), max_length),
             padding_value,
@@ -725,6 +750,7 @@ class SltTrainer(Seq2SeqTrainer):
         with torch.no_grad():
             with self.compute_loss_context_manager():
                 outputs = model(**model_inputs)
+        self._accumulate_logging_scalars(outputs)
 
         def output_value(name: str):
             return (
@@ -746,8 +772,8 @@ class SltTrainer(Seq2SeqTrainer):
                 "ctc_only forward must return packed logits and sequence lengths."
             )
         blank_id = int(model.config.ctc_blank_id)
-        predictions = self._padded_ctc_greedy_decode(
-            ctc_logits.detach(), ctc_lengths.detach(), blank_id
+        predictions = self._padded_ctc_argmax_paths(
+            ctc_logits.detach(), ctc_lengths.detach()
         )
         references = self._pad_packed_sequences(
             inputs["pseudo_gloss_ids"],
@@ -836,6 +862,7 @@ class SltTrainer(Seq2SeqTrainer):
             with torch.no_grad():
                 with self.compute_loss_context_manager():
                     outputs = model(**teacher_forcing_inputs)
+            self._accumulate_logging_scalars(outputs)
             if self.label_smoother is not None:
                 loss = (
                     self.label_smoother(outputs, teacher_forcing_inputs["labels"])
@@ -868,8 +895,8 @@ class SltTrainer(Seq2SeqTrainer):
                         "CTC metrics require pseudo_gloss_ids and pseudo_gloss_length."
                     )
                 blank_id = int(model.config.ctc_blank_id)
-                ctc_predictions = self._padded_ctc_greedy_decode(
-                    ctc_logits.detach(), ctc_lengths.detach(), blank_id
+                ctc_predictions = self._padded_ctc_argmax_paths(
+                    ctc_logits.detach(), ctc_lengths.detach()
                 )
                 ctc_references = self._pad_packed_sequences(
                     pseudo_gloss_ids, pseudo_gloss_length, blank_id

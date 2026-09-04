@@ -10,7 +10,7 @@ from torch.utils.data import Dataset as TorchDataset
 from transformers import AutoTokenizer, set_seed
 
 from csi_slt.data.datamodule import DataModule
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.commands.config import instantiate_prompt_resolvers
 from csi_slt.engine.grpo.trainer import SltGRPOTrainer
 from csi_slt.engine.grpo.training_args import SltGRPOConfig
 from csi_slt.modeling_slt.slt import SltModel

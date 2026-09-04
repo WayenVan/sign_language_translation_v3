@@ -129,7 +129,16 @@ def test_ctc_only_forward_bypasses_codebook_and_llm():
     assert output.loss.ndim == 0
     assert output.logits.shape == (2, 3)
     assert output.lengths.tolist() == [2]
-    assert set(output.logging_scalars) == {"main_loss", "ctc_loss"}
+    # Blank-frequency diagnostics come from `CTCCodebookBridge.blank_frequency_scalars`
+    # called as a plain static function on the class, not through the
+    # (forbidden) `model.ctc_codebook` instance -- that's the whole point of
+    # it being computable straight from ctc_head's output.
+    assert set(output.logging_scalars) == {
+        "main_loss",
+        "ctc_loss",
+        "ctc_codebook/blank_probability_mean",
+        "ctc_codebook/blank_argmax_ratio",
+    }
 
 
 def test_ctc_only_inference_returns_logits_without_targets():

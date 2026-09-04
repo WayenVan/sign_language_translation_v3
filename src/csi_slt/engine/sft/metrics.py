@@ -38,7 +38,32 @@ class DecodedBatch:
 
 
 class CTCMetric:
-    """Corpus token error rate for already collapsed CTC predictions."""
+    """Corpus token error rate from raw per-frame CTC argmax predictions.
+
+    ``predictions`` carry one CTC vocab id per input frame, not yet decoded:
+    ``SltTrainer`` deliberately stops at argmax and defers collapsing repeats
+    and dropping blank to here, since that's content-dependent and this is
+    the first point after cross-process gathering where a batch that
+    happens to decode to all-blank is just an empty prediction, not a
+    tensor-shape crash. ``label_ids`` (the pseudo-gloss reference) is
+    already a clean target sequence and is used as-is.
+    """
+
+    def __init__(self, blank_id: int):
+        if isinstance(blank_id, bool) or not isinstance(blank_id, int):
+            raise TypeError("blank_id must be an int")
+        self.blank_id = blank_id
+
+    @staticmethod
+    def _collapse_ctc_path(path: Sequence[int], blank_id: int) -> list[int]:
+        """Standard CTC greedy decode: merge consecutive repeats, drop blank."""
+        collapsed = []
+        previous = None
+        for token in path:
+            if token != previous and token != blank_id:
+                collapsed.append(token)
+            previous = token
+        return collapsed
 
     @staticmethod
     def _to_numpy(value: Any) -> np.ndarray:
@@ -95,7 +120,8 @@ class CTCMetric:
         token_errors = 0
         reference_tokens = 0
         for index in range(prediction_ids.shape[0]):
-            prediction = prediction_ids[index, : int(prediction_lengths[index])]
+            raw_path = prediction_ids[index, : int(prediction_lengths[index])]
+            prediction = self._collapse_ctc_path(raw_path.tolist(), self.blank_id)
             reference = reference_ids[index, : int(reference_lengths[index])]
             token_errors += self._edit_distance(prediction, reference)
             reference_tokens += len(reference)

@@ -44,3 +44,16 @@ C-RADIOv4 逐层 patch 可分性诊断跑完了，三条结论推翻了之前的
 下一步：手型回归探针（现有 features.npz 就能跑，不用重跑 backbone）。
 
 #experiment #visual-adapter #diagnosis
+
+---
+
+## 2026-09-04 20:12
+
+CTC blank 槽位稀释视觉序列的问题：软 collapse 是刻意不做的（保梯度），但代价是高比例
+blank 预测原样变成 LLM token，长 blank run 浪费上下文预算。发现一个硬约束——视觉占位
+符数量在 collator 阶段就按 `video_token_scale` 定死、与 CTC 预测内容无关，所以任何
+「按内容动态合并 blank」的方案都要先把数据管线改成两阶段（先跑 CTC 再定占位符数量），
+目前不具备。三档缓解方案（blank 比例正则 / 调小 video_token_scale / 两阶段 collator
+重构）和取舍记在 [slt_ctc_design.md](slt_ctc_design.md) 第 8 节风险 5。暂缓未动，先记录。
+
+#todo #ctc #codebook #architecture

@@ -130,8 +130,13 @@ def test_blank_logging_scalars_are_detached_and_include_pad_drift():
     assert all(
         not value.requires_grad for value in output.logging_scalars.values()
     )
+    # blank_probability_mean is a plain temperature-1 softmax over the raw
+    # logits -- independent of eval's forced argmax selection mode, unlike
+    # the embedding path itself. Row 0 argmax is blank, row 1 argmax is not,
+    # so blank_argmax_ratio is still exactly 0.5.
+    expected_blank_probability = torch.softmax(logits.detach(), dim=-1)[:, 0].mean()
     torch.testing.assert_close(
-        output.logging_scalars["blank_probability_mean"], torch.tensor(0.5)
+        output.logging_scalars["blank_probability_mean"], expected_blank_probability
     )
     torch.testing.assert_close(
         output.logging_scalars["blank_argmax_ratio"], torch.tensor(0.5)
@@ -139,6 +144,29 @@ def test_blank_logging_scalars_are_detached_and_include_pad_drift():
     torch.testing.assert_close(
         output.logging_scalars["blank_pad_cosine_similarity"], torch.tensor(1.0)
     )
+
+
+def test_blank_frequency_scalars_are_independent_of_selection_mode_and_temperature():
+    # Phase-A (which never builds a codebook distribution) and joint
+    # training (whose distribution depends on training_mode/temperature/
+    # Gumbel noise) must report the same blank-frequency numbers for the
+    # same logits, or the two phases' curves would not be comparable.
+    logits = torch.tensor([[5.0, 0.0, 0.0, 0.0], [0.0, 4.0, 1.0, 0.0]])
+
+    baseline = CTCCodebookBridge.blank_frequency_scalars(logits, blank_id=0)
+    for bridge in (
+        _bridge(training_mode="soft"),
+        _bridge(training_mode="straight_through"),
+    ):
+        for mode_kwargs in ({}, {"temperature": 0.3}):
+            output = bridge(logits, torch.tensor([2]), **mode_kwargs)
+            torch.testing.assert_close(
+                (
+                    output.logging_scalars["blank_probability_mean"],
+                    output.logging_scalars["blank_argmax_ratio"],
+                ),
+                baseline,
+            )
 
 
 def test_rejects_temperature_below_straight_through_floor():

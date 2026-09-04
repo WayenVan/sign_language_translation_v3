@@ -25,6 +25,12 @@ engine:
     visual_adapter:
       learning_rate: 1.0e-4
       weight_decay: 0.05
+      parameter_groups:
+        gates:
+          # Scalar residual gates adapt faster than the rest of the adapter
+          # and remain exempt from weight decay.
+          learning_rate: 3.0e-4
+          weight_decay: 0.0
     ctc_head:
       learning_rate: 3.0e-4
       weight_decay: 0.01
@@ -39,6 +45,6 @@ engine:
     greater_is_better: false
     # Evaluate roughly ten times over the complete run, independent of the
     # eventual batch size and number of workers.
-    eval_steps: 0.1
+    eval_steps: 0.01
     # Only the adapter and CTC head participate in the graph.
     ddp_find_unused_parameters: false

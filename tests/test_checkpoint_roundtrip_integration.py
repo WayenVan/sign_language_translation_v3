@@ -26,7 +26,7 @@ import torch
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.commands.config import instantiate_prompt_resolvers
 from csi_slt.commands.train import cast_module_dtype
 from csi_slt.data.datamodule import DataModule
 from csi_slt.engine.sft.trainer import SltTrainer
