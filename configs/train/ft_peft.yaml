@@ -32,13 +32,6 @@ engine:
     output_dir: outputs/ft_peft
     num_train_epochs: 25
     learning_rate: 5e-5
-    # Optional component-specific rates. Null falls back to learning_rate.
-    llm_lora_learning_rate: null
-    visual_lora_learning_rate: null
-    visual_adapter_learning_rate: null
-    llm_lora_weight_decay: null
-    visual_lora_weight_decay: null
-    visual_adapter_weight_decay: null
     warmup_steps: 0.03
     weight_decay: 0.01
     eval_strategy: steps

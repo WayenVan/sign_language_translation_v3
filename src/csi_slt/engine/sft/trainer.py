@@ -43,6 +43,10 @@ from csi_slt.data.sampler import (
     get_dataset_lengths,
 )
 from csi_slt.modeling_slt.info_utils import InformationRequest
+from csi_slt.engine.optimization import (
+    OptimizationPlan,
+    build_optimizer_parameter_groups,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -89,17 +93,6 @@ def apply_fsdp2_autocast(accelerator, model: nn.Module) -> None:
 
 
 class SltTrainer(Seq2SeqTrainer):
-    _COMPONENT_LR_ARGUMENTS = {
-        "llm_lora": "llm_lora_learning_rate",
-        "visual_lora": "visual_lora_learning_rate",
-        "visual_adapter": "visual_adapter_learning_rate",
-    }
-    _COMPONENT_WEIGHT_DECAY_ARGUMENTS = {
-        "llm_lora": "llm_lora_weight_decay",
-        "visual_lora": "visual_lora_weight_decay",
-        "visual_adapter": "visual_adapter_weight_decay",
-    }
-
     # NOTE: Parameters whose zero point is not "this path is switched off".
     # Transformers only filters biases and normalization layers by name, which
     # misses SLT's marker tokens, learned positions, and adapter token-type
@@ -153,6 +146,16 @@ class SltTrainer(Seq2SeqTrainer):
                 "engine.forward_mode must be 'ctc_only' or 'joint', got "
                 f"{self.forward_mode!r}"
             )
+        optimization_config = (
+            OmegaConf.select(hydra_config, "engine.optimization", default={})
+            if hydra_config is not None
+            else {}
+        )
+        if OmegaConf.is_config(optimization_config):
+            optimization_config = OmegaConf.to_container(
+                optimization_config, resolve=True
+            )
+        self.optimization_plan = OptimizationPlan.from_mapping(optimization_config)
 
         # NOTE: add custom callbacks
         # self.add_callback(
@@ -248,78 +251,20 @@ class SltTrainer(Seq2SeqTrainer):
         ]
 
     def create_optimizer(self, model=None) -> torch.optim.Optimizer:
-        """Create weight-decay groups with optional per-component PEFT LRs."""
-        component_lrs = {
-            component: getattr(self.args, argument, None)
-            for component, argument in self._COMPONENT_LR_ARGUMENTS.items()
-        }
-        component_weight_decays = {
-            component: getattr(self.args, argument, None)
-            for component, argument in self._COMPONENT_WEIGHT_DECAY_ARGUMENTS.items()
-        }
-        if not any(
-            value is not None
-            for value in (*component_lrs.values(), *component_weight_decays.values())
-        ):
-            return super().create_optimizer(model=model)
+        """Create component groups, resolving overrides against global defaults."""
         if self.optimizer is not None:
             return self.optimizer
 
         opt_model = self.model if model is None else model
         unwrapped_model = self.accelerator.unwrap_model(opt_model)
-        component_parameter_ids = {
-            "llm_lora": {
-                id(parameter)
-                for name, parameter in unwrapped_model.llm.named_parameters()
-                if "lora_" in name
-            },
-            "visual_lora": {
-                id(parameter)
-                for name, parameter in unwrapped_model.visual_backbone.named_parameters()
-                if "lora_" in name
-            },
-            "visual_adapter": {
-                id(parameter)
-                for parameter in unwrapped_model.visual_adapter.parameters()
-            },
-        }
-        decay_parameters = self.get_decay_parameter_names(opt_model)
-        grouped_parameters: dict[tuple[str, bool], list[nn.Parameter]] = {}
-        for name, parameter in opt_model.named_parameters():
-            if not parameter.requires_grad:
-                continue
-            component = next(
-                (
-                    key
-                    for key, parameter_ids in component_parameter_ids.items()
-                    if id(parameter) in parameter_ids
-                ),
-                "default",
-            )
-            grouped_parameters.setdefault(
-                (component, name in decay_parameters), []
-            ).append(parameter)
-
-        optimizer_grouped_parameters = []
-        for (component, use_decay), parameters in grouped_parameters.items():
-            component_weight_decay = component_weight_decays.get(component)
-            group = {
-                "params": parameters,
-                "slt_component": component,
-                "weight_decay": (
-                    (
-                        self.args.weight_decay
-                        if component_weight_decay is None
-                        else component_weight_decay
-                    )
-                    if use_decay
-                    else 0.0
-                ),
-            }
-            component_lr = component_lrs.get(component)
-            if component_lr is not None:
-                group["lr"] = component_lr
-            optimizer_grouped_parameters.append(group)
+        optimizer_grouped_parameters = build_optimizer_parameter_groups(
+            model=opt_model,
+            ownership_model=unwrapped_model,
+            plan=self.optimization_plan,
+            default_learning_rate=self.args.learning_rate,
+            default_weight_decay=self.args.weight_decay,
+            decay_parameter_names=self.get_decay_parameter_names(opt_model),
+        )
 
         optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(
             self.args, opt_model
@@ -601,7 +546,7 @@ class SltTrainer(Seq2SeqTrainer):
         if self.optimizer is not None and "learning_rate" in logs:
             for group in self.optimizer.param_groups:
                 component = group.get("slt_component")
-                if component in self._COMPONENT_LR_ARGUMENTS:
+                if component is not None:
                     logs[f"learning_rate/{component}"] = float(group["lr"])
         if "loss" in logs and self._logging_scalar_totals:
             for name, total in self._logging_scalar_totals.items():

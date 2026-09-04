@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch import nn
 from omegaconf import OmegaConf
@@ -35,6 +36,11 @@ class _ComponentLearningRateModel(nn.Module):
         self.visual_backbone = nn.Module()
         self.visual_backbone.lora_A = nn.Linear(2, 2)
         self.visual_adapter = nn.Linear(2, 2)
+        self.ctc_head = nn.Linear(2, 3)
+        self.ctc_codebook = nn.Embedding(3, 2)
+        self.visual_position_embedding = nn.Embedding(4, 2)
+        self.start_video_embds = nn.Parameter(torch.zeros(1, 2))
+        self.end_video_embeds = nn.Parameter(torch.zeros(1, 2))
         self.config = SimpleNamespace()
 
     def forward(self, **kwargs):
@@ -48,15 +54,29 @@ def test_optimizer_uses_separate_component_learning_rates(tmp_path):
         auto_output_dir=False,
         report_to="none",
         learning_rate=1e-4,
-        llm_lora_learning_rate=2e-5,
-        visual_lora_learning_rate=3e-5,
-        visual_adapter_learning_rate=4e-5,
-        llm_lora_weight_decay=0.01,
-        visual_lora_weight_decay=0.02,
-        visual_adapter_weight_decay=0.03,
         weight_decay=0.1,
     )
-    trainer = SltTrainer(model=model, args=args)
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {
+                        "llm": {"learning_rate": 2e-5, "weight_decay": 0.01},
+                        "visual_backbone": {
+                            "learning_rate": 3e-5,
+                            "weight_decay": 0.02,
+                        },
+                        "visual_adapter": {
+                            "learning_rate": 4e-5,
+                            "weight_decay": 0.03,
+                        },
+                    }
+                }
+            }
+        ),
+    )
 
     optimizer = trainer.create_optimizer()
     parameter_lrs = {
@@ -97,9 +117,20 @@ def test_component_learning_rate_defaults_to_global_rate(tmp_path):
         auto_output_dir=False,
         report_to="none",
         learning_rate=1e-4,
-        visual_adapter_learning_rate=4e-5,
     )
-    trainer = SltTrainer(model=model, args=args)
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {
+                        "visual_adapter": {"learning_rate": 4e-5}
+                    }
+                }
+            }
+        ),
+    )
 
     optimizer = trainer.create_optimizer()
     parameter_lrs = {
@@ -120,9 +151,18 @@ def test_component_weight_decay_defaults_to_global_value(tmp_path):
         auto_output_dir=False,
         report_to="none",
         weight_decay=0.1,
-        visual_adapter_weight_decay=0.0,
     )
-    trainer = SltTrainer(model=model, args=args)
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {"visual_adapter": {"weight_decay": 0.0}}
+                }
+            }
+        ),
+    )
 
     optimizer = trainer.create_optimizer()
     parameter_weight_decays = {
@@ -136,24 +176,100 @@ def test_component_weight_decay_defaults_to_global_value(tmp_path):
     assert parameter_weight_decays[id(model.visual_adapter.weight)] == 0.0
 
 
+def test_ctc_components_support_independent_optimizer_overrides(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+        learning_rate=1e-4,
+        weight_decay=0.1,
+    )
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {
+                        "ctc_head": {"learning_rate": 3e-4},
+                        "ctc_codebook": {
+                            "learning_rate": 2e-5,
+                            "weight_decay": 0.0,
+                        },
+                    }
+                }
+            }
+        ),
+    )
+
+    optimizer = trainer.create_optimizer()
+    parameter_groups = {
+        id(parameter): group
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    assert parameter_groups[id(model.ctc_head.weight)]["lr"] == 3e-4
+    assert parameter_groups[id(model.ctc_head.weight)]["weight_decay"] == 0.1
+    assert parameter_groups[id(model.ctc_codebook.weight)]["lr"] == 2e-5
+    assert parameter_groups[id(model.ctc_codebook.weight)]["weight_decay"] == 0.0
+
+
+def test_optimizer_rejects_override_for_frozen_component(tmp_path):
+    model = _ComponentLearningRateModel()
+    model.ctc_codebook.requires_grad_(False)
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+    )
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {"ctc_codebook": {"learning_rate": 2e-5}}
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="frozen or absent components: ctc_codebook"):
+        trainer.create_optimizer()
+
+
 def test_training_log_includes_each_trainable_component_learning_rate(tmp_path):
     model = _ComponentLearningRateModel()
     args = SltTrainingArguments(
         output_dir=str(tmp_path),
         auto_output_dir=False,
         report_to="none",
-        llm_lora_learning_rate=2e-5,
-        visual_lora_learning_rate=3e-5,
-        visual_adapter_learning_rate=4e-5,
+        learning_rate=1e-4,
     )
-    trainer = SltTrainer(model=model, args=args)
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {
+                        "llm": {"learning_rate": 2e-5},
+                        "visual_backbone": {"learning_rate": 3e-5},
+                        "visual_adapter": {"learning_rate": 4e-5},
+                    }
+                }
+            }
+        ),
+    )
     trainer.create_optimizer()
 
     trainer.log({"loss": 1.0, "learning_rate": 2e-5})
 
     logged = trainer.state.log_history[-1]
-    assert logged["learning_rate/llm_lora"] == 2e-5
-    assert logged["learning_rate/visual_lora"] == 3e-5
+    assert logged["learning_rate/llm"] == 2e-5
+    assert logged["learning_rate/visual_backbone"] == 3e-5
     assert logged["learning_rate/visual_adapter"] == 4e-5
 
 

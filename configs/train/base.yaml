@@ -47,6 +47,9 @@ engine:
     # No module is constructed while visual_position_embedding_type=none.
     visual_position_embedding: { parameter_mode: frozen }
     visual_boundary_embeddings: { parameter_mode: full }
+  # Sparse per-component optimizer overrides. Missing components and fields
+  # inherit training_args.learning_rate / weight_decay.
+  optimization: {}
   evaluate_before_training: false
   train_probe:
     every_n_evaluations: 1

@@ -49,6 +49,14 @@ engine:
     # the discrete prefix.
     visual_boundary_embeddings: { parameter_mode: full }
 
+  optimization:
+    llm:
+      learning_rate: 1.0e-4
+      weight_decay: 0.0
+    visual_adapter:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+
   # Non-negotiable sanity gate. LoRA initializes to a zero-valued delta, so the
   # step-0 evaluation must reproduce the stage-1 checkpoint's dev score. The
   # v4.0 llora-all run logged before_train bleu4 = 0.0030 against a 0.1162
@@ -73,14 +81,6 @@ engine:
 
     # Fallback rate for anything without a component override.
     learning_rate: 1.0e-4
-    # LoRA needs a rate an order of magnitude above full fine-tuning; the
-    # adapter is already trained and only needs to track the LLM's drift.
-    llm_lora_learning_rate: 1.0e-4
-    visual_adapter_learning_rate: 1.0e-5
-    # LoRA's own decay is left off: its capacity is already bounded by r=8, and
-    # decay on B pulls the delta toward zero rather than toward the base model.
-    llm_lora_weight_decay: 0.0
-    visual_adapter_weight_decay: 0.01
     weight_decay: 0.01
     warmup_steps: 0.03
     lr_scheduler_type: cosine
