@@ -35,12 +35,14 @@ for arg in "$@"; do
 done
 
 if [[ "$DEBUG" == true ]]; then
-  echo "Debug mode: Disabling reporting to WandB."
+  echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
   REPORT_TO=none
+  OUTPUT_DIR="outputs/debug"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
   export WANDB_TAGS="next-frame-handroi,20m,diverse-prompts,no-dropout"
   REPORT_TO=wandb
+  OUTPUT_DIR="outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-diverse-hardmatch-wr3-gate1-roigate-2.0-0903.224x224"
 fi
 
 # 设置 TQDM_DISABLE 和 HG_TQDM_DISABLE 用于 accelerate launch
@@ -112,7 +114,7 @@ CMD_ARGS=(
   --config-name=train/cognition/baseline_ablation
   model=qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
   prompt=diverse_train
-  engine.training_args.output_dir=outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-diverse-hardmatch-wr3-gate1-roigate-2.0-0903.224x224
+  engine.training_args.output_dir="$OUTPUT_DIR"
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
