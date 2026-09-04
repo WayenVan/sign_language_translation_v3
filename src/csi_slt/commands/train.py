@@ -1,6 +1,7 @@
 """Unified SLT training entrypoint for full, connector, and PEFT training."""
 
 import os
+from typing import Callable, Sequence
 
 import hydra
 import torch
@@ -48,11 +49,44 @@ def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None
     module.to(dtype=dtype)
 
 
+def resolve_llm_token_ids(
+    token: str,
+    *,
+    llm_tokenizer,
+    surface_candidates: Callable[[str], Sequence[str]] | None,
+) -> list[int]:
+    """Resolve one CTC token to the LLM sub-token ids to average over.
+
+    ``surface_candidates`` rewrites a CTC token into the spellings the LLM
+    actually knows -- a dataset-specific mapping owned by that dataset's own
+    module (see ``csi_slt.data.ph14t.gloss_surface``). Which of them to keep is
+    a tokenizer question rather than a dataset one, and is settled here: the
+    candidate that segments into the fewest pieces wins, ties going to the
+    order the dataset proposed them in. Without a mapping the CTC token is
+    encoded verbatim, as it was before gloss supervision.
+    """
+    candidates = [token] if surface_candidates is None else list(surface_candidates(token))
+    if not candidates:
+        raise ValueError(f"no surface candidate was produced for CTC token {token!r}")
+
+    best_ids: list[int] | None = None
+    for candidate in candidates:
+        ids = llm_tokenizer.encode(candidate, add_special_tokens=False)
+        if not ids:
+            continue
+        if best_ids is None or len(ids) < len(best_ids):
+            best_ids = ids
+    if best_ids is None:
+        raise ValueError(f"CTC token {token!r} encodes to no LLM sub-tokens")
+    return best_ids
+
+
 def initialize_ctc_codebook_from_tokenizers(
     model: SltModel,
     *,
     llm_tokenizer,
     ctc_tokenizer,
+    surface_candidates: Callable[[str], Sequence[str]] | None = None,
 ) -> None:
     """Initialize a fresh codebook from the two tokenizer vocabularies."""
     if bool(model.ctc_codebook.codebook_initialized.item()):
@@ -76,7 +110,11 @@ def initialize_ctc_codebook_from_tokenizers(
         if not isinstance(token, str):
             raise ValueError(f"CTC token id {ctc_id} does not map to a token string")
         token_mapping.append(
-            llm_tokenizer.encode(token, add_special_tokens=False)
+            resolve_llm_token_ids(
+                token,
+                llm_tokenizer=llm_tokenizer,
+                surface_candidates=surface_candidates,
+            )
         )
 
     model.initialize_ctc_codebook(
@@ -186,6 +224,7 @@ def main(cfg: DictConfig) -> None:
         slt_model,
         llm_tokenizer=tokenizer,
         ctc_tokenizer=datamodule.ctc_tokenizer,
+        surface_candidates=datamodule.ctc_gloss_surface,
     )
 
     generation_config_args = OmegaConf.to_container(

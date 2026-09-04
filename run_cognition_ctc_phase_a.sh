@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=slt_ctc_phase_a_nextframe_handroi_conv20m
+#SBATCH --job-name=slt_ctc_phase_a_nextframe_handroi_conv20m_gloss
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -40,7 +40,7 @@ if [[ "$DEBUG" == true ]]; then
   REPORT_TO=none
 else
   export WANDB_PROJECT=sign_language_translation_ctc
-  export WANDB_TAGS="phase-a,ctc-only,next-frame-handroi,conv,20m,gated"
+  export WANDB_TAGS="phase-a,ctc-only,next-frame-handroi,conv,20m,gated,real-gloss"
   REPORT_TO=wandb
 fi
 

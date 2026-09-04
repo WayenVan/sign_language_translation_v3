@@ -42,7 +42,7 @@ def _model_shell():
     model.ctc_head = _CountingCtcHead()
     model.ctc_codebook = CTCCodebookBridge(
         ctc_vocab_size=3,
-        qwen_hidden_size=4,
+        llm_hidden_size=4,
         blank_id=0,
         training_mode="soft",
     )
@@ -67,7 +67,7 @@ def _model_shell():
     return model
 
 
-def test_prepare_routes_one_ctc_head_result_through_codebook_and_into_qwen():
+def test_prepare_routes_one_ctc_head_result_through_codebook_and_into_the_llm():
     model = _model_shell()
     input_ids = torch.tensor([[4, 15, 15, 15, 15, 5]])
 

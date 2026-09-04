@@ -6,13 +6,14 @@ config:
   # Adapter-side temporal position of each visual token, added before the
   # LLM applies its own RoPE: learned (trainable table) | none | sincos.
   visual_position_embedding_type: learned
-  # CTC head over visual tokens, supervised by outputs/ctc_tokenizer's
-  # word-level pseudo-gloss vocab (data.ctc_tokenizer_dir). vocab_size/
-  # blank_id must match that tokenizer exactly (len(tokenizer)=2417,
-  # convert_tokens_to_ids("<blank>")=2) -- update both together if the
-  # tokenizer is ever retrained.
+  # CTC head over visual tokens, supervised by outputs/ctc_tokenizer_real's
+  # word-level vocab over the dataset's annotated glosses ("orth"; see
+  # data.ctc_tokenizer_dir and data.*.dataset.pseudo_gloss_column).
+  # vocab_size/blank_id must match that tokenizer exactly
+  # (len(tokenizer)=1118, convert_tokens_to_ids("<blank>")=2) -- update both
+  # together if the tokenizer is ever retrained.
   ctc_loss_weight: 1.0
-  ctc_vocab_size: 2417
+  ctc_vocab_size: 1118
   ctc_blank_id: 2
   llm_model_name_or_path: google/gemma-4-12b-it
   visual_backbone_type: c_radio_v4

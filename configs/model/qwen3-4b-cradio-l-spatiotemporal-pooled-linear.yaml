@@ -20,7 +20,7 @@ config:
   # CTC consumes the adapter output before its codebook becomes the LLM prefix. Its time
   # length is therefore T/2, matching video_token_scale above.
   ctc_loss_weight: 1.0
-  ctc_vocab_size: 2417
+  ctc_vocab_size: 1118
   ctc_blank_id: 2
 
   llm_model_name_or_path: Qwen/Qwen3-4B

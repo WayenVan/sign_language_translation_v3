@@ -22,7 +22,7 @@ config:
 
   # CTC consumes the adapter output at T/2; its codebook becomes the LLM prefix.
   ctc_loss_weight: 1.0
-  ctc_vocab_size: 2417
+  ctc_vocab_size: 1118
   ctc_blank_id: 2
 
   llm_model_name_or_path: Qwen/Qwen3-4B

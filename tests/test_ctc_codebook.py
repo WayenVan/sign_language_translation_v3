@@ -10,14 +10,14 @@ def _bridge(*, training_mode="soft"):
     torch.manual_seed(0)
     bridge = CTCCodebookBridge(
         ctc_vocab_size=4,
-        qwen_hidden_size=8,
+        llm_hidden_size=8,
         blank_id=0,
         training_mode=training_mode,
     )
-    bridge.initialize_from_qwen_embeddings(
+    bridge.initialize_from_llm_embeddings(
         nn.Embedding(6, 8),
         [[], [1], [2, 4], [5]],
-        qwen_pad_token_id=3,
+        llm_pad_token_id=3,
     )
     return bridge
 
@@ -72,26 +72,55 @@ def test_eval_forces_argmax_when_training_mode_is_soft():
     torch.testing.assert_close(output.blank_probability, torch.ones(2))
 
 
-def test_initialization_averages_qwen_subtokens_and_uses_pad_for_blank():
+def test_initialization_averages_llm_subtokens_and_uses_pad_for_blank():
     bridge = _bridge()
-    qwen_embeddings = nn.Embedding(6, 8)
+    llm_embeddings = nn.Embedding(6, 8)
     with torch.no_grad():
-        qwen_embeddings.weight.copy_(torch.arange(48).reshape(6, 8))
+        llm_embeddings.weight.copy_(torch.arange(48).reshape(6, 8))
 
-    bridge.initialize_from_qwen_embeddings(
-        qwen_embeddings,
+    bridge.initialize_from_llm_embeddings(
+        llm_embeddings,
         [[], [1], [2, 4], [5]],
-        qwen_pad_token_id=3,
+        llm_pad_token_id=3,
     )
 
+    # The blank and single-sub-token rows are the real embeddings, untouched by
+    # the norm calibration.
     torch.testing.assert_close(
-        bridge.codebook.weight[0], qwen_embeddings.weight[3]
+        bridge.codebook.weight[0], llm_embeddings.weight[3]
     )
-    torch.testing.assert_close(bridge.codebook.weight[1], qwen_embeddings.weight[1])
+    torch.testing.assert_close(bridge.codebook.weight[1], llm_embeddings.weight[1])
+    # A multi-sub-token row keeps the direction of the plain mean...
+    sub_tokens = llm_embeddings.weight[[2, 4]]
+    mean = sub_tokens.mean(dim=0)
     torch.testing.assert_close(
-        bridge.codebook.weight[2],
-        qwen_embeddings.weight[[2, 4]].mean(dim=0),
+        torch.nn.functional.cosine_similarity(
+            bridge.codebook.weight[2], mean, dim=0
+        ),
+        torch.tensor(1.0),
     )
+    # ...and carries the mean norm of the sub-tokens it was built from.
+    torch.testing.assert_close(
+        bridge.codebook.weight[2].norm(),
+        sub_tokens.norm(dim=-1).mean(),
+    )
+
+
+def test_initialization_keeps_a_degenerate_mean_unscaled():
+    bridge = _bridge()
+    llm_embeddings = nn.Embedding(6, 8)
+    with torch.no_grad():
+        llm_embeddings.weight[2] = torch.ones(8)
+        llm_embeddings.weight[4] = -torch.ones(8)
+
+    bridge.initialize_from_llm_embeddings(
+        llm_embeddings,
+        [[], [1], [2, 4], [5]],
+        llm_pad_token_id=3,
+    )
+
+    assert torch.isfinite(bridge.codebook.weight).all()
+    torch.testing.assert_close(bridge.codebook.weight[2], torch.zeros(8))
 
 
 def test_blank_codebook_row_is_trainable():
@@ -107,11 +136,11 @@ def test_blank_codebook_row_is_trainable():
 
 def test_blank_logging_scalars_are_detached_and_include_pad_drift():
     bridge = _bridge().eval()
-    qwen_embeddings = nn.Embedding(6, 8)
-    bridge.initialize_from_qwen_embeddings(
-        qwen_embeddings,
+    llm_embeddings = nn.Embedding(6, 8)
+    bridge.initialize_from_llm_embeddings(
+        llm_embeddings,
         [[], [1], [2, 4], [5]],
-        qwen_pad_token_id=3,
+        llm_pad_token_id=3,
     )
     logits = torch.tensor(
         [[5.0, 0.0, 0.0, 0.0], [0.0, 4.0, 1.0, 0.0]],
@@ -156,7 +185,7 @@ def test_rejects_lengths_that_do_not_match_packed_logits():
 def test_uninitialized_codebook_fails_before_first_forward():
     bridge = CTCCodebookBridge(
         ctc_vocab_size=4,
-        qwen_hidden_size=8,
+        llm_hidden_size=8,
         blank_id=0,
     )
 
@@ -168,7 +197,7 @@ def test_initialized_state_survives_checkpoint_loading():
     source = _bridge()
     restored = CTCCodebookBridge(
         ctc_vocab_size=4,
-        qwen_hidden_size=8,
+        llm_hidden_size=8,
         blank_id=0,
     )
 
@@ -192,7 +221,7 @@ def test_slt_model_exposes_codebook_initialization_without_tokenizers():
     model.llm = FakeLlm()
     model.ctc_codebook = CTCCodebookBridge(
         ctc_vocab_size=4,
-        qwen_hidden_size=8,
+        llm_hidden_size=8,
         blank_id=0,
     )
 

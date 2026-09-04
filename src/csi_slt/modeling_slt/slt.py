@@ -330,7 +330,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
         self.ctc_codebook = CTCCodebookBridge(
             ctc_vocab_size=config.ctc_vocab_size,
-            qwen_hidden_size=self.llm.get_input_embeddings().embedding_dim,
+            llm_hidden_size=self.llm.get_input_embeddings().embedding_dim,
             blank_id=config.ctc_blank_id,
             training_mode=config.ctc_codebook_training_mode,
         )
@@ -399,21 +399,21 @@ class SltModel(PreTrainedModel, GenerationMixin):
     @torch.no_grad()
     def initialize_ctc_codebook(
         self,
-        qwen_token_ids_by_ctc_id: Sequence[Sequence[int]],
+        llm_token_ids_by_ctc_id: Sequence[Sequence[int]],
         *,
         blank_init_token_id: int,
     ) -> None:
-        """Initialize the CTC codebook once from this model's Qwen embeddings.
+        """Initialize the CTC codebook once from this model's LLM embeddings.
 
         Tokenizers stay outside the model boundary: the construction workflow
-        resolves each CTC token to Qwen sub-token ids and passes only those ids
+        resolves each CTC token to LLM sub-token ids and passes only those ids
         here. The initialized weights and initialization marker are then saved
         by the ordinary Hugging Face checkpoint path.
         """
-        self.ctc_codebook.initialize_from_qwen_embeddings(
-            qwen_embeddings=self.llm.get_input_embeddings(),
-            qwen_token_ids_by_ctc_id=qwen_token_ids_by_ctc_id,
-            qwen_pad_token_id=blank_init_token_id,
+        self.ctc_codebook.initialize_from_llm_embeddings(
+            llm_embeddings=self.llm.get_input_embeddings(),
+            llm_token_ids_by_ctc_id=llm_token_ids_by_ctc_id,
+            llm_pad_token_id=blank_init_token_id,
         )
 
     def _validate_attention_support(self) -> None:

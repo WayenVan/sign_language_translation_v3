@@ -1,6 +1,14 @@
 data_root: dataset/PHOENIX-2014-T-release-v3
 
-ctc_tokenizer_dir: outputs/ctc_tokenizer
+ctc_tokenizer_dir: outputs/ctc_tokenizer_real
+
+# PHOENIX spells its glosses in upper case with transliterated umlauts
+# (KOENNEN), hyphenated compounds (WIE-AUSSEHEN) and morphological prefixes
+# (neg-, poss-). This rewrites them into spellings the LLM tokenizer knows,
+# and is read only when seeding the CTC codebook -- never by training itself.
+ctc_gloss_surface:
+  _target_: csi_slt.data.ph14t.gloss_surface.phoenix_gloss_surface_candidates
+  _partial_: true
 
 processor:
   _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
@@ -31,7 +39,7 @@ train:
     _target_: csi_slt.data.ph14t.Ph14TMultiLinglDataset
     data_root: ${data.data_root}
     mode: train
-    pseudo_gloss_column: orig_pseudo_gloss_strict
+    pseudo_gloss_column: orth
   collator: &collator
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: false

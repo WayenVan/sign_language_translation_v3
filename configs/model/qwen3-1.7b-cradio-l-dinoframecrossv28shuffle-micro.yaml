@@ -9,10 +9,11 @@ config:
   # Adapter-side temporal position of each visual token, added before the
   # LLM applies its own RoPE: learned (trainable table) | none | sincos.
   visual_position_embedding_type: learned
-  # CTC head over visual tokens, supervised by outputs/ctc_tokenizer's
-  # word-level pseudo-gloss vocab. These values must match that tokenizer.
+  # CTC head over visual tokens, supervised by outputs/ctc_tokenizer_real's
+  # word-level vocab over the dataset's annotated glosses ("orth").
+  # These values must match that tokenizer.
   ctc_loss_weight: 1.0
-  ctc_vocab_size: 2417
+  ctc_vocab_size: 1118
   ctc_blank_id: 2
   llm_model_name_or_path: Qwen/Qwen3-1.7B
   visual_backbone_type: c_radio_v4

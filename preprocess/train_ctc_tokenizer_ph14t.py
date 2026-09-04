@@ -8,7 +8,7 @@ from datasets import load_dataset, concatenate_datasets
 from transformers import PreTrainedTokenizerFast
 
 
-TEXT_COLUMN = "orig_pseudo_gloss_relaxed"
+TEXT_COLUMN = "orth"
 
 
 # =========================
@@ -106,7 +106,7 @@ print("blank:", blank_token_id)
 # 6. 测试
 # =========================
 
-text = "nun wettervorhersage morgen donnerstag zwölfter august"
+text = "JETZT WETTER MORGEN DONNERSTAG ZWOELF FEBRUAR"
 
 encoded = hf_tokenizer(
     text,
@@ -121,4 +121,4 @@ print(hf_tokenizer.convert_ids_to_tokens(encoded["input_ids"]))
 # 7. 保存
 # =========================
 
-hf_tokenizer.save_pretrained("./outputs/ctc_tokenizer")
+hf_tokenizer.save_pretrained("./outputs/ctc_tokenizer_real")

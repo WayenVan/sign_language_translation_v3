@@ -134,7 +134,7 @@ def test_ctc_hidden_size_drives_pre_ctc_modules(registered_stub_components):
 
     assert model.ctc_head.in_features == 8
     assert model.visual_position_embedding.embedding_dim == 8
-    assert model.ctc_codebook.qwen_hidden_size == HIDDEN_SIZE
+    assert model.ctc_codebook.llm_hidden_size == HIDDEN_SIZE
 
 
 # --------------------------------------------------------------------------

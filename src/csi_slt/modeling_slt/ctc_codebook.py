@@ -1,4 +1,4 @@
-"""Differentiable bridge from CTC logits to Qwen-compatible embeddings."""
+"""Differentiable bridge from CTC logits to LLM-compatible embeddings."""
 
 from dataclasses import dataclass
 from typing import Literal, Sequence
@@ -16,7 +16,7 @@ _SELECTION_MODES = frozenset({"soft", "straight_through", "argmax"})
 class CTCCodebookOutput:
     """Outputs of :class:`CTCCodebookBridge`, kept in packed-token layout."""
 
-    embeddings: torch.Tensor  # [sum(T_i), qwen_hidden_size]
+    embeddings: torch.Tensor  # [sum(T_i), llm_hidden_size]
     lengths: torch.Tensor  # [B]
     token_distribution: torch.Tensor  # [sum(T_i), ctc_vocab_size]
     predicted_ids: torch.Tensor  # [sum(T_i)]
@@ -25,7 +25,7 @@ class CTCCodebookOutput:
 
 
 class CTCCodebookBridge(nn.Module):
-    """Map packed CTC logits into the input-embedding space of Qwen.
+    """Map packed CTC logits into the input-embedding space of the LLM.
 
     The CTC classifier and this codebook deliberately do not share weights.
     Training supports a stable soft path and a straight-through Gumbel path;
@@ -37,7 +37,7 @@ class CTCCodebookBridge(nn.Module):
         self,
         *,
         ctc_vocab_size: int,
-        qwen_hidden_size: int,
+        llm_hidden_size: int,
         blank_id: int,
         training_mode: SelectionMode = "soft",
         min_temperature: float = 0.1,
@@ -45,26 +45,28 @@ class CTCCodebookBridge(nn.Module):
         super().__init__()
         self._validate_init_args(
             ctc_vocab_size=ctc_vocab_size,
-            qwen_hidden_size=qwen_hidden_size,
+            llm_hidden_size=llm_hidden_size,
             blank_id=blank_id,
             training_mode=training_mode,
             min_temperature=min_temperature,
         )
 
         self.ctc_vocab_size = ctc_vocab_size
-        self.qwen_hidden_size = qwen_hidden_size
+        self.llm_hidden_size = llm_hidden_size
         self.blank_id = blank_id
         self.training_mode = training_mode
         self.min_temperature = float(min_temperature)
 
-        # The codebook width intentionally equals Qwen's hidden size so each
-        # row can be initialized directly from Qwen sub-token embeddings.
-        self.codebook = nn.Embedding(ctc_vocab_size, qwen_hidden_size)
-        # Set by initialize_from_qwen_embeddings. Keeping the original pad
+        # The codebook width intentionally equals the language model's hidden
+        # size so each row can be initialized directly from its sub-token
+        # embeddings. Nothing here is specific to one language model: the
+        # bridge only ever sees an embedding table, sub-token ids and a pad id.
+        self.codebook = nn.Embedding(ctc_vocab_size, llm_hidden_size)
+        # Set by initialize_from_llm_embeddings. Keeping the original pad
         # vector lets logging expose whether the trainable blank row drifts.
         self.register_buffer(
             "initial_blank_embedding",
-            torch.zeros(qwen_hidden_size),
+            torch.zeros(llm_hidden_size),
         )
         # Persist this state with the weights: a fresh model must be initialized
         # explicitly, while a checkpoint restores both the learned codebook and
@@ -92,8 +94,8 @@ class CTCCodebookBridge(nn.Module):
         distribution = self._select_distribution(ctc_logits, mode, temperature)
         blank_probability = distribution[:, self.blank_id]
 
-        # Blank owns a normal, trainable codebook row initialized from Qwen's
-        # pad embedding. It remains a real prefix slot rather than pretending
+        # Blank owns a normal, trainable codebook row initialized from the
+        # LLM's pad embedding. It remains a real prefix slot rather than pretending
         # that an all-zero vector is invisible to the language model.
         embeddings = distribution @ self.codebook.weight
 
@@ -112,38 +114,51 @@ class CTCCodebookBridge(nn.Module):
             return
         if not bool(self.codebook_initialized.item()):
             raise RuntimeError(
-                "CTC codebook has not been initialized from the Qwen and CTC "
+                "CTC codebook has not been initialized from the LLM and CTC "
                 "tokenizers. Initialize it before training or prediction."
             )
         self._initialization_verified = True
 
     @torch.no_grad()
-    def initialize_from_qwen_embeddings(
+    def initialize_from_llm_embeddings(
         self,
-        qwen_embeddings: nn.Embedding,
-        qwen_token_ids_by_ctc_id: Sequence[Sequence[int]],
+        llm_embeddings: nn.Embedding,
+        llm_token_ids_by_ctc_id: Sequence[Sequence[int]],
         *,
-        qwen_pad_token_id: int,
+        llm_pad_token_id: int,
     ) -> None:
-        """Initialize each non-blank codebook row from mean Qwen embeddings.
+        """Initialize each non-blank codebook row from mean LLM embeddings.
 
-        ``qwen_token_ids_by_ctc_id[i]`` contains the Qwen sub-token ids for CTC
+        ``llm_token_ids_by_ctc_id[i]`` contains the LLM sub-token ids for CTC
         token ``i``. The blank sequence is ignored and its row is initialized
-        from Qwen's pad-token embedding.
+        from the LLM's pad-token embedding.
+
+        Averaging several sub-token embeddings shortens the result -- roughly
+        by 1/sqrt(k) for k unrelated directions -- so an uncorrected row lands
+        well inside the shell the language model's own embeddings occupy, by a
+        factor that varies with how many pieces the token happened to split
+        into. Each averaged row is therefore rescaled to the mean norm of the
+        sub-token embeddings it was built from: a no-op for the single-piece
+        rows, which stay exactly equal to the real embedding, and a restoration
+        of that word's own natural scale for the rest. The pad-initialized
+        blank row is left untouched for the same reason -- it is already a real
+        embedding, and ``initial_blank_embedding`` records it as the reference
+        for the drift diagnostics.
         """
-        self._validate_qwen_initialization(
-            qwen_embeddings,
-            qwen_token_ids_by_ctc_id,
-            qwen_pad_token_id,
+        self._validate_llm_initialization(
+            llm_embeddings,
+            llm_token_ids_by_ctc_id,
+            llm_pad_token_id,
         )
-        source_weight = qwen_embeddings.weight.detach()
+        source_weight = llm_embeddings.weight.detach()
         initialized = torch.empty_like(self.codebook.weight)
-        for ctc_id, qwen_ids in enumerate(qwen_token_ids_by_ctc_id):
+        for ctc_id, llm_ids in enumerate(llm_token_ids_by_ctc_id):
             if ctc_id == self.blank_id:
-                initialized[ctc_id].copy_(source_weight[qwen_pad_token_id])
+                initialized[ctc_id].copy_(source_weight[llm_pad_token_id])
                 continue
-            ids = torch.as_tensor(qwen_ids, device=source_weight.device)
-            initialized[ctc_id].copy_(source_weight.index_select(0, ids).mean(dim=0))
+            ids = torch.as_tensor(llm_ids, device=source_weight.device)
+            sub_tokens = source_weight.index_select(0, ids)
+            initialized[ctc_id].copy_(self._scaled_mean(sub_tokens))
 
         self.codebook.weight.copy_(
             initialized.to(
@@ -152,10 +167,24 @@ class CTCCodebookBridge(nn.Module):
             )
         )
         self.initial_blank_embedding.copy_(
-            source_weight[qwen_pad_token_id].to(self.initial_blank_embedding)
+            source_weight[llm_pad_token_id].to(self.initial_blank_embedding)
         )
         self.codebook_initialized.fill_(True)
         self._initialization_verified = True
+
+    @staticmethod
+    def _scaled_mean(sub_tokens: torch.Tensor) -> torch.Tensor:
+        """Mean of ``sub_tokens`` carrying their mean norm.
+
+        Exactly the input row when there is only one sub-token. A degenerate
+        mean (sub-token embeddings that cancel out) keeps the raw average
+        rather than being rescaled by a near-zero divisor.
+        """
+        mean = sub_tokens.mean(dim=0)
+        mean_norm = mean.norm()
+        if mean_norm <= torch.finfo(mean.dtype).eps:
+            return mean
+        return mean * (sub_tokens.norm(dim=-1).mean() / mean_norm)
 
     def _build_logging_scalars(self) -> dict[str, torch.Tensor]:
         """Diagnostics that genuinely depend on the codebook's own weights.
@@ -219,29 +248,29 @@ class CTCCodebookBridge(nn.Module):
                 f"temperature must be >= {self.min_temperature} for {mode} mode"
             )
 
-    def _validate_qwen_initialization(
+    def _validate_llm_initialization(
         self,
         embeddings: nn.Embedding,
         token_ids: Sequence[Sequence[int]],
         pad_token_id: int,
     ) -> None:
         if not isinstance(embeddings, nn.Embedding):
-            raise TypeError("qwen_embeddings must be an nn.Embedding")
-        if embeddings.embedding_dim != self.qwen_hidden_size:
-            raise ValueError("Qwen embedding width must equal qwen_hidden_size")
+            raise TypeError("llm_embeddings must be an nn.Embedding")
+        if embeddings.embedding_dim != self.llm_hidden_size:
+            raise ValueError("LLM embedding width must equal llm_hidden_size")
         if len(token_ids) != self.ctc_vocab_size:
-            raise ValueError("one Qwen token-id sequence is required per CTC token")
+            raise ValueError("one LLM token-id sequence is required per CTC token")
         if isinstance(pad_token_id, bool) or not isinstance(pad_token_id, int):
-            raise TypeError("qwen_pad_token_id must be an int")
+            raise TypeError("llm_pad_token_id must be an int")
         if not 0 <= pad_token_id < embeddings.num_embeddings:
-            raise ValueError("qwen_pad_token_id is outside the embedding vocabulary")
+            raise ValueError("llm_pad_token_id is outside the embedding vocabulary")
         for ctc_id, ids in enumerate(token_ids):
             if ctc_id != self.blank_id and not ids:
-                raise ValueError(f"CTC token {ctc_id} has no Qwen token ids")
+                raise ValueError(f"CTC token {ctc_id} has no LLM token ids")
             if any(not isinstance(token_id, int) for token_id in ids):
-                raise TypeError("Qwen token ids must be integers")
+                raise TypeError("LLM token ids must be integers")
             if any(token_id < 0 or token_id >= embeddings.num_embeddings for token_id in ids):
-                raise ValueError("a Qwen token id is outside the embedding vocabulary")
+                raise ValueError("an LLM token id is outside the embedding vocabulary")
 
     @staticmethod
     def _validate_selection_mode(mode: str) -> None:
@@ -255,14 +284,14 @@ class CTCCodebookBridge(nn.Module):
         cls,
         *,
         ctc_vocab_size: int,
-        qwen_hidden_size: int,
+        llm_hidden_size: int,
         blank_id: int,
         training_mode: str,
         min_temperature: float,
     ) -> None:
         for name, value in (
             ("ctc_vocab_size", ctc_vocab_size),
-            ("qwen_hidden_size", qwen_hidden_size),
+            ("llm_hidden_size", llm_hidden_size),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an int")

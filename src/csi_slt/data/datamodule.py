@@ -141,7 +141,7 @@ class DataModule:
 
     @cached_property
     def ctc_tokenizer(self):
-        """Load the optional word-level CTC tokenizer used for pseudo-gloss supervision."""
+        """Load the optional word-level CTC tokenizer used for gloss supervision."""
         path = self.data_cfg.get("ctc_tokenizer_dir")
         if path is None:
             return None
@@ -151,6 +151,21 @@ class DataModule:
             raise FileNotFoundError(f"CTC tokenizer directory not found: {path}")
 
         return AutoTokenizer.from_pretrained(path)
+
+    @cached_property
+    def ctc_gloss_surface(self):
+        """Optional gloss -> LLM-readable spellings map for codebook seeding.
+
+        The CTC tokenizer's tokens are spelled the way this dataset annotates
+        glosses, which is not how the LLM's tokenizer spells words. The mapping
+        that bridges the two is a property of the dataset, so the data config
+        names it, and only the codebook initialization consumes it -- training
+        and the CTC targets never see these strings.
+        """
+        node = self.data_cfg.get("ctc_gloss_surface")
+        if node is None:
+            return None
+        return instantiate(node)
 
     @cached_property
     def processor(self):

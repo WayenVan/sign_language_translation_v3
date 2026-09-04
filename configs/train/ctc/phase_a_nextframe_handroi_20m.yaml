@@ -33,7 +33,7 @@ model:
 
 engine:
   training_args:
-    output_dir: outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-20m
+    output_dir: outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-20m-gloss
     dataloader_num_workers: 8
     logging_steps: 15
 
