@@ -119,13 +119,13 @@ class SltTrainabilityPlan:
     ctc_head: ComponentTrainabilityPlan = field(
         default_factory=ComponentTrainabilityPlan
     )
+    ctc_codebook: ComponentTrainabilityPlan = field(
+        default_factory=ComponentTrainabilityPlan
+    )
     visual_position_embedding: ComponentTrainabilityPlan = field(
         default_factory=ComponentTrainabilityPlan
     )
     visual_boundary_embeddings: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
-    )
-    visual_scale: ComponentTrainabilityPlan = field(
         default_factory=ComponentTrainabilityPlan
     )
 
@@ -140,9 +140,9 @@ class SltTrainabilityPlan:
             "visual_backbone",
             "visual_adapter",
             "ctc_head",
+            "ctc_codebook",
             "visual_position_embedding",
             "visual_boundary_embeddings",
-            "visual_scale",
         }
         missing = expected.difference(config)
         unknown = set(config).difference(expected)
@@ -168,11 +168,11 @@ class SltTrainabilityPlan:
             visual_backbone=VisualBackboneTrainabilityPlan(**values("visual_backbone")),
             visual_adapter=VisualAdapterTrainabilityPlan(**values("visual_adapter")),
             ctc_head=ComponentTrainabilityPlan(**values("ctc_head")),
+            ctc_codebook=ComponentTrainabilityPlan(**values("ctc_codebook")),
             visual_position_embedding=ComponentTrainabilityPlan(
                 **values("visual_position_embedding")
             ),
             visual_boundary_embeddings=ComponentTrainabilityPlan(
                 **values("visual_boundary_embeddings")
             ),
-            visual_scale=ComponentTrainabilityPlan(**values("visual_scale")),
         )

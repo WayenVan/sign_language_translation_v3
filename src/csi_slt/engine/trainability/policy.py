@@ -167,6 +167,7 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
 
     for name, component_plan in (
         ("ctc_head", plan.ctc_head),
+        ("ctc_codebook", plan.ctc_codebook),
         ("visual_position_embedding", plan.visual_position_embedding),
     ):
         _set_module_trainable(getattr(model, name, None), component_plan.mode == "full")
@@ -175,10 +176,6 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
         parameter = getattr(model, name, None)
         if parameter is not None:
             parameter.requires_grad_(plan.visual_boundary_embeddings.mode == "full")
-
-    visual_scale = getattr(model, "visual_scale", None)
-    if visual_scale is not None:
-        visual_scale.requires_grad_(plan.visual_scale.mode == "full")
 
     # After every plan decision, and before counting: a plan may have unfrozen a
     # component that holds one of these.
