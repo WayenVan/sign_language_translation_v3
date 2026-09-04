@@ -48,14 +48,33 @@ class PrepareForCausalLMOutput(NamedTuple):
     visual_mask: torch.Tensor  # [B, L]
     visual_lengths: Optional[torch.Tensor] = None  # [B]
     packed_visual_position_ids: Optional[torch.Tensor] = None  # [sum(Lv)]
-    # Pre-scale visual features/lengths, i.e. before `* self.visual_scale`,
-    # kept for the CTC head so its input isn't affected by that LLM-embedding
-    # scale factor.
-    ctc_visual_features: Optional[torch.Tensor] = None  # [sum(Lv), D]
-    ctc_visual_lengths: Optional[torch.Tensor] = None  # [B]
+    # The same packed logits feed the codebook path and the CTC objective.
+    ctc_logits: Optional[torch.Tensor] = None  # [sum(Lv), ctc_vocab_size]
+    ctc_lengths: Optional[torch.Tensor] = None  # [B]
+    ctc_codebook_logging_scalars: Optional[dict[str, torch.Tensor]] = None
     # Carried through so SltModel.forward can merge them into its own
     # logging_scalars; the adapter output itself does not reach that far.
     visual_adapter_logging_scalars: Optional[dict[str, torch.Tensor]] = None
+
+
+class CTCEncoderOutput(NamedTuple):
+    """Shared video-to-CTC result used by both forward modes."""
+
+    logits: torch.Tensor  # [sum(T_i), ctc_vocab_size]
+    lengths: torch.Tensor  # [B]
+    packed_position_ids: torch.Tensor  # [sum(T_i)]
+    visual_adapter_logging_scalars: Optional[dict[str, torch.Tensor]] = None
+    visual_backbone_extras: Optional[dict] = None
+
+
+@dataclass
+class SltCTCOutput(ModelOutput):
+    """Output of the explicit CTC-only forward path."""
+
+    loss: Optional[torch.Tensor] = None
+    logits: Optional[torch.Tensor] = None
+    lengths: Optional[torch.Tensor] = None
+    logging_scalars: Optional[dict[str, torch.Tensor]] = None
 
 
 @dataclass
@@ -64,3 +83,7 @@ class SltCausalLMOutputWithPast(CausalLMOutputWithPast):
 
     logging_scalars: Optional[dict[str, torch.Tensor]] = None
     information: Optional[InformationOutput] = None
+    # Packed CTC outputs from the same teacher-forcing pass. They are exposed
+    # for evaluation and are not consumed by the language model.
+    ctc_logits: Optional[torch.Tensor] = None  # [sum(T_i), ctc_vocab_size]
+    ctc_lengths: Optional[torch.Tensor] = None  # [B]

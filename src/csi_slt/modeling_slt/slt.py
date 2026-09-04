@@ -1,7 +1,7 @@
 import math
 from copy import deepcopy
 from enum import Enum
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional, Sequence
 
 import torch
 from torch import nn
@@ -21,9 +21,12 @@ from csi_slt.modeling_slt.info_utils import (
 )
 from peft import LoraConfig, inject_adapter_in_model
 from ..configuration_slt.configuration import SltConfig
+from .ctc_codebook import CTCCodebookBridge
 from .output_utils import (
+    CTCEncoderOutput,
     PrepareForCausalLMOutput,
     SltCausalLMOutputWithPast,
+    SltCTCOutput,
     VisualAdapterOutput,
     VisualBackboneOutput,
 )
@@ -37,6 +40,9 @@ from .registry import (
 )
 
 logger = logging.get_logger(__name__)
+
+ForwardMode = Literal["ctc_only", "joint"]
+_FORWARD_MODES = frozenset({"ctc_only", "joint"})
 
 
 def _serialize_lora_config(config: LoraConfig) -> dict:
@@ -288,17 +294,18 @@ class SltModel(PreTrainedModel, GenerationMixin):
             else None,
             persistent=False,
         )
-        # Global learnable scale, initialized as an identity transform. Shape
-        # (1,) rather than a scalar: FSDP2 shards along dim 0 and rejects 0-dim
-        # parameters. Broadcasting against the visual features is unchanged.
-        self.visual_scale = nn.Parameter(torch.tensor([1.0]))
-        # CTC head over visual tokens, predicting the word-level pseudo-gloss
-        # vocabulary. Only constructed when the CTC objective is enabled;
-        # otherwise the model carries no extra CTC parameters.
-        self.ctc_head = (
-            nn.Linear(self.config.hidden_size, config.ctc_vocab_size)
-            if config.ctc_enabled
-            else None
+        # CTC is the mandatory discrete interface between visual tokens and
+        # the language model. Its classifier and semantic codebook stay
+        # separate because they optimize different geometry.
+        self.ctc_head = nn.Linear(
+            self.config.hidden_size,
+            config.ctc_vocab_size,
+        )
+        self.ctc_codebook = CTCCodebookBridge(
+            ctc_vocab_size=config.ctc_vocab_size,
+            qwen_hidden_size=self.llm.get_input_embeddings().embedding_dim,
+            blank_id=config.ctc_blank_id,
+            training_mode=config.ctc_codebook_training_mode,
         )
         # The adapter projection and learned visual positions can have a
         # different scale from the frozen LLM's token embeddings. Normalize the
@@ -361,6 +368,26 @@ class SltModel(PreTrainedModel, GenerationMixin):
             )
         self.visual_adapter_runtime_mode = runtime_mode
         self.visual_adapter.train(self.training and runtime_mode == "train")
+
+    @torch.no_grad()
+    def initialize_ctc_codebook(
+        self,
+        qwen_token_ids_by_ctc_id: Sequence[Sequence[int]],
+        *,
+        blank_init_token_id: int,
+    ) -> None:
+        """Initialize the CTC codebook once from this model's Qwen embeddings.
+
+        Tokenizers stay outside the model boundary: the construction workflow
+        resolves each CTC token to Qwen sub-token ids and passes only those ids
+        here. The initialized weights and initialization marker are then saved
+        by the ordinary Hugging Face checkpoint path.
+        """
+        self.ctc_codebook.initialize_from_qwen_embeddings(
+            qwen_embeddings=self.llm.get_input_embeddings(),
+            qwen_token_ids_by_ctc_id=qwen_token_ids_by_ctc_id,
+            qwen_pad_token_id=blank_init_token_id,
+        )
 
     def _validate_attention_support(self) -> None:
         """Reject at construction an attention that cannot carry the overlay."""
@@ -717,16 +744,15 @@ class SltModel(PreTrainedModel, GenerationMixin):
             return visual_adapter_output, visual_backbone_output.extras
         return visual_adapter_output
 
-    def prepare_for_casual_lm(
+    def _encode_ctc(
         self,
-        text_input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <start_of_image>, ...]
-        video: torch.Tensor,  # [BT, C, H, W]
-        video_length: torch.Tensor,  # [B], length of each video in the batch
-        permute_video_tokens: Optional[bool] = False,
+        video: torch.Tensor,
+        video_length: torch.Tensor,
+        *,
+        permute_video_tokens: bool = False,
         return_visual_backbone_extras: bool = False,
-    ):
-        batch_size = video_length.shape[0]
-
+    ) -> CTCEncoderOutput:
+        """Run the one shared video-to-CTC path for every forward mode."""
         visual_result = self.get_visual_feats(
             video,
             video_length,
@@ -739,32 +765,60 @@ class SltModel(PreTrainedModel, GenerationMixin):
             visual_output = visual_result
             visual_backbone_extras = None
 
-        visual_feats = visual_output.visual_features
+        visual_features = visual_output.visual_features
         visual_lengths = visual_output.visual_length
         if visual_lengths is None:
-            raise ValueError("video_length is required for prepare_for_casual_lm")
-        visual_position_ids = visual_output.position_ids
-        if visual_position_ids is None:
-            visual_position_ids = torch.cat(
+            raise ValueError("visual adapter output must include visual_length")
+        position_ids = visual_output.position_ids
+        if position_ids is None:
+            position_ids = torch.cat(
                 [
-                    torch.arange(length, device=visual_feats.device)
+                    torch.arange(length, device=visual_features.device)
                     for length in visual_lengths
                 ]
             )
-        visual_feats = self.visual_position_embedding_forward(
-            visual_feats,
+        visual_features = self.visual_position_embedding_forward(
+            visual_features,
             visual_lengths,
-            visual_position_ids,
-        )  # [BT, D]
-        # visual_feats = self.visual_output_norm(visual_feats)
+            position_ids,
+        )
+        return CTCEncoderOutput(
+            logits=self.ctc_head(visual_features),
+            lengths=visual_lengths,
+            packed_position_ids=position_ids,
+            visual_adapter_logging_scalars=visual_output.logging_scalars,
+            visual_backbone_extras=visual_backbone_extras,
+        )
 
-        # Keep the pre-scale features/lengths for the CTC head, so its input
-        # is unaffected by the LLM-embedding scale factor applied below.
-        ctc_visual_features = visual_feats
-        ctc_visual_lengths = visual_lengths
+    def prepare_for_casual_lm(
+        self,
+        text_input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <start_of_image>, ...]
+        video: torch.Tensor,  # [BT, C, H, W]
+        video_length: torch.Tensor,  # [B], length of each video in the batch
+        permute_video_tokens: Optional[bool] = False,
+        return_visual_backbone_extras: bool = False,
+        ctc_codebook_temperature: Optional[float] = None,
+    ):
+        batch_size = video_length.shape[0]
 
-        # Scale adapted visual features before injecting them into the LLM.
-        visual_feats = visual_feats * self.visual_scale
+        ctc_output = self._encode_ctc(
+            video,
+            video_length,
+            permute_video_tokens=permute_video_tokens,
+            return_visual_backbone_extras=return_visual_backbone_extras,
+        )
+        temperature = (
+            self.config.ctc_codebook_default_temperature
+            if ctc_codebook_temperature is None
+            else ctc_codebook_temperature
+        )
+        codebook_output = self.ctc_codebook(
+            ctc_output.logits,
+            ctc_output.lengths,
+            temperature=temperature,
+        )
+        visual_feats = codebook_output.embeddings
+        visual_lengths = ctc_output.lengths
 
         _, hidden_size = visual_feats.shape
         visual_feats_by_video = torch.split(
@@ -819,13 +873,16 @@ class SltModel(PreTrainedModel, GenerationMixin):
             inputs_embeds=inputs_embeds,  # [B, L, D]
             visual_mask=visual_token_mask,  # [B, L]
             visual_lengths=visual_lengths,  # [B]
-            packed_visual_position_ids=visual_position_ids,
-            ctc_visual_features=ctc_visual_features,  # [sum(Lv), D]
-            ctc_visual_lengths=ctc_visual_lengths,  # [B]
-            visual_adapter_logging_scalars=visual_output.logging_scalars,
+            packed_visual_position_ids=ctc_output.packed_position_ids,
+            ctc_logits=ctc_output.logits,
+            ctc_lengths=visual_lengths,
+            ctc_codebook_logging_scalars=codebook_output.logging_scalars,
+            visual_adapter_logging_scalars=(
+                ctc_output.visual_adapter_logging_scalars
+            ),
         )
         if return_visual_backbone_extras:
-            return prepare_output, visual_backbone_extras
+            return prepare_output, ctc_output.visual_backbone_extras
         return prepare_output
 
     @staticmethod
@@ -856,32 +913,87 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
     def _compute_ctc_loss(
         self,
-        ctc_visual_features: torch.Tensor,  # [sum(Lv), D]
-        ctc_visual_lengths: torch.Tensor,  # [B]
+        ctc_logits: torch.Tensor,  # [sum(Lv), V]
+        ctc_lengths: torch.Tensor,  # [B]
         pseudo_gloss_ids: torch.Tensor,  # [sum(pseudo_gloss_length)]
         pseudo_gloss_length: torch.Tensor,  # [B]
     ) -> torch.Tensor:
-        """Compute the CTC loss between visual tokens and packed pseudo-gloss targets."""
-        logits = self.ctc_head(ctc_visual_features)  # [sum(Lv), V]
+        """Compute CTC loss from the logits already consumed by the codebook."""
         # Compute in fp32 for numerical stability under mixed-precision training.
-        log_probs = nn.functional.log_softmax(logits.float(), dim=-1)
+        log_probs = nn.functional.log_softmax(ctc_logits.float(), dim=-1)
         padded_log_probs, _ = packed_to_padded(
-            log_probs, ctc_visual_lengths
+            log_probs, ctc_lengths
         )  # [B, T, V]
         log_probs = padded_log_probs.transpose(0, 1)  # [T, B, V], required by ctc_loss
         return nn.functional.ctc_loss(
             log_probs,
             pseudo_gloss_ids,
-            ctc_visual_lengths,
+            ctc_lengths,
             pseudo_gloss_length,
             blank=self.config.ctc_blank_id,
             reduction="mean",
             zero_infinity=True,
         )
 
+    def _forward_ctc_only(
+        self,
+        *,
+        pixel_values: torch.Tensor,
+        pixel_values_length: torch.Tensor,
+        pseudo_gloss_ids: Optional[torch.Tensor],
+        pseudo_gloss_length: Optional[torch.Tensor],
+        permute_video_tokens: bool,
+    ) -> SltCTCOutput:
+        """Run Phase-A CTC without constructing codebook or LLM inputs."""
+        if (pseudo_gloss_ids is None) != (pseudo_gloss_length is None):
+            raise ValueError(
+                "ctc_only requires pseudo_gloss_ids and pseudo_gloss_length "
+                "to be provided together"
+            )
+        ctc_output = self._encode_ctc(
+            pixel_values,
+            pixel_values_length,
+            permute_video_tokens=permute_video_tokens,
+        )
+        ctc_loss = (
+            self._compute_ctc_loss(
+                ctc_output.logits,
+                ctc_output.lengths,
+                pseudo_gloss_ids,
+                pseudo_gloss_length,
+            )
+            if pseudo_gloss_ids is not None
+            else None
+        )
+        logging_scalars = _prefixed_logging_scalars(
+            ctc_output.visual_adapter_logging_scalars,
+            "visual_adapter",
+        )
+        if ctc_loss is not None:
+            logging_scalars.update(
+                {
+                    "main_loss": ctc_loss.detach(),
+                    "ctc_loss": ctc_loss.detach(),
+                }
+            )
+        return SltCTCOutput(
+            loss=ctc_loss,
+            logits=ctc_output.logits,
+            lengths=ctc_output.lengths,
+            logging_scalars=logging_scalars or None,
+        )
+
+    @staticmethod
+    def _validate_forward_mode(forward_mode: str) -> None:
+        if forward_mode not in _FORWARD_MODES:
+            raise ValueError(
+                f"forward_mode must be one of {sorted(_FORWARD_MODES)}, "
+                f"got {forward_mode!r}"
+            )
+
     def forward(
         self,
-        input_ids: torch.Tensor,  # [B, L] [<pad>, ..., <bos>, .... <video_soft_token>, ...]
+        input_ids: Optional[torch.Tensor] = None,  # [B, L]
         pixel_values: Optional[torch.Tensor] = None,  # [BT, C, H, W]
         pixel_values_length: Optional[
             torch.Tensor
@@ -901,9 +1013,47 @@ class SltModel(PreTrainedModel, GenerationMixin):
         cache_position: Optional[torch.Tensor] = None,
         # ------------ NOTE: special kwars for experimental features ------------
         permute_video_tokens: Optional[bool] = False,
+        ctc_codebook_temperature: Optional[float] = None,
+        forward_mode: ForwardMode = "joint",
         information_request: Optional[InformationRequest] = None,
         **llm_forward_kwargs: dict,
     ):
+        self._validate_forward_mode(forward_mode)
+        # Without explicit lengths, pixel_values must represent one video.
+        if pixel_values_length is None and pixel_values is not None:
+            assert input_ids is None or input_ids.shape[0] == 1, (
+                "When pixel_values_length is not provided, input_ids batch size must be 1."
+            )
+            pixel_values_length = torch.tensor(
+                [pixel_values.shape[0]], dtype=torch.long, device=pixel_values.device
+            )
+
+        # Each length must align with the configured temporal downsampling ratio.
+        # WARN: Divisibility is only meaningful for temporal downsampling.
+        # V2 can emit multiple tokens per input frame (video_token_scale > 1).
+        if pixel_values_length is not None and self.config.video_token_scale <= 1.0:
+            assert (
+                pixel_values_length % int(1.0 / self.config.video_token_scale) == 0
+            ).all(), (
+                "The length of pixel_values_length must be a multiple of (1/video_token_scale)."
+            )
+
+        if forward_mode == "ctc_only":
+            if pixel_values is None or pixel_values_length is None:
+                raise ValueError(
+                    "ctc_only requires pixel_values and pixel_values_length"
+                )
+            return self._forward_ctc_only(
+                pixel_values=pixel_values,
+                pixel_values_length=pixel_values_length,
+                pseudo_gloss_ids=pseudo_gloss_ids,
+                pseudo_gloss_length=pseudo_gloss_length,
+                permute_video_tokens=bool(permute_video_tokens),
+            )
+
+        if input_ids is None:
+            raise ValueError("joint forward requires input_ids")
+
         if information_request is None:
             information_request = InformationRequest()
         elif not isinstance(information_request, InformationRequest):
@@ -925,25 +1075,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if information_request.llm_attentions:
             llm_forward_kwargs["output_attentions"] = True
 
-        # Without explicit lengths, pixel_values must represent one video.
-        if pixel_values_length is None and pixel_values is not None:
-            assert input_ids.shape[0] == 1, (
-                "When pixel_values_length is not provided, input_ids batch size must be 1."
-            )
-            pixel_values_length = torch.tensor(
-                [pixel_values.shape[0]], dtype=torch.long, device=pixel_values.device
-            )
-
-        # Each length must align with the configured temporal downsampling ratio.
-        # WARN: Divisibility is only meaningful for temporal downsampling.
-        # V2 can emit multiple tokens per input frame (video_token_scale > 1).
-        if pixel_values_length is not None and self.config.video_token_scale <= 1.0:
-            assert (
-                pixel_values_length % int(1.0 / self.config.video_token_scale) == 0
-            ).all(), (
-                "The length of pixel_values_length must be a multiple of (1/video_token_scale)."
-            )
-
         past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
@@ -959,6 +1090,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     return_visual_backbone_extras=(
                         information_request.visual_backbone_extras
                     ),
+                    ctc_codebook_temperature=ctc_codebook_temperature,
                 )
                 if information_request.visual_backbone_extras:
                     prepare_output, visual_backbone_extras = visual_prepare_result
@@ -1068,7 +1200,6 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if (
             loss is not None
             and self.training
-            and self.config.ctc_enabled
             and self.config.ctc_loss_weight > 0.0
         ):
             if (
@@ -1077,12 +1208,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 or prepare_output is None
             ):
                 raise ValueError(
-                    "ctc_enabled with ctc_loss_weight > 0 requires pseudo_gloss_ids, "
+                    "ctc_loss_weight > 0 requires pseudo_gloss_ids, "
                     "pseudo_gloss_length, and pixel_values to be provided."
                 )
             ctc_loss = self._compute_ctc_loss(
-                prepare_output.ctc_visual_features,
-                prepare_output.ctc_visual_lengths,
+                prepare_output.ctc_logits,
+                prepare_output.ctc_lengths,
                 pseudo_gloss_ids,
                 pseudo_gloss_length,
             )
@@ -1123,6 +1254,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if logging_scalars is not None and prepare_output is not None:
             logging_scalars.update(
                 _prefixed_logging_scalars(
+                    prepare_output.ctc_codebook_logging_scalars, "ctc_codebook"
+                )
+            )
+            logging_scalars.update(
+                _prefixed_logging_scalars(
                     prepare_output.visual_adapter_logging_scalars, "visual_adapter"
                 )
             )
@@ -1131,6 +1267,12 @@ class SltModel(PreTrainedModel, GenerationMixin):
             loss=loss,
             logging_scalars=logging_scalars,
             information=information,
+            ctc_logits=(
+                prepare_output.ctc_logits if prepare_output is not None else None
+            ),
+            ctc_lengths=(
+                prepare_output.ctc_lengths if prepare_output is not None else None
+            ),
             logits=outputs.logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
@@ -1146,6 +1288,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         attention_mask=None,
         token_type_ids=None,
         labels=None,
+        ctc_codebook_temperature=None,
         is_first_iteration=False,
         **kwargs,
     ):
@@ -1164,6 +1307,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         if is_first_iteration:
             model_inputs["pixel_values"] = pixel_values
             model_inputs["pixel_values_length"] = pixel_values_length
+            model_inputs["ctc_codebook_temperature"] = ctc_codebook_temperature
 
         return model_inputs
 
