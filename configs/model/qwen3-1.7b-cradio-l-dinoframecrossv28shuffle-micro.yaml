@@ -11,7 +11,6 @@ config:
   visual_position_embedding_type: learned
   # CTC head over visual tokens, supervised by outputs/ctc_tokenizer's
   # word-level pseudo-gloss vocab. These values must match that tokenizer.
-  ctc_enabled: true
   ctc_loss_weight: 1.0
   ctc_vocab_size: 2417
   ctc_blank_id: 2

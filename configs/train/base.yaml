@@ -26,6 +26,9 @@ model:
     visual_position_embedding_type: none
 
 engine:
+  # `ctc_only` bypasses the codebook and LLM for CTC pretraining. `joint`
+  # trains/evaluates the complete translation path.
+  forward_mode: joint
   # Which parameters this run optimizes. Applied by
   # `apply_trainability_plan`: everything is frozen first, then exactly the
   # components selected here are re-enabled. All seven components must be
@@ -39,10 +42,10 @@ engine:
     visual_backbone: { mode: frozen, runtime_mode: eval }
     visual_adapter: { mode: full, runtime_mode: train }
     ctc_head: { mode: full }
+    ctc_codebook: { mode: full }
     # No module is constructed while visual_position_embedding_type=none.
     visual_position_embedding: { mode: frozen }
     visual_boundary_embeddings: { mode: full }
-    visual_scale: { mode: full }
   evaluate_before_training: false
   train_probe:
     every_n_evaluations: 1

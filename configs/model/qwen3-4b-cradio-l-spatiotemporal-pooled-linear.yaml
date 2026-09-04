@@ -17,9 +17,8 @@ config:
   # its normal RoPE to the resulting ordered visual-token sequence.
   visual_position_embedding_type: none
 
-  # CTC consumes the adapter output before visual_scale is applied. Its time
+  # CTC consumes the adapter output before its codebook becomes the LLM prefix. Its time
   # length is therefore T/2, matching video_token_scale above.
-  ctc_enabled: true
   ctc_loss_weight: 1.0
   ctc_vocab_size: 2417
   ctc_blank_id: 2

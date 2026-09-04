@@ -8,7 +8,6 @@ config:
   video_bidirectional_attention: false
   visual_position_embedding_type: none
 
-  ctc_enabled: true
   ctc_loss_weight: 1.0
   ctc_vocab_size: 2417
   ctc_blank_id: 2

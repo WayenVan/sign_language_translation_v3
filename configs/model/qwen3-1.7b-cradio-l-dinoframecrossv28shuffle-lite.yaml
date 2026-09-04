@@ -14,7 +14,6 @@ config:
   # blank_id must match that tokenizer exactly (len(tokenizer)=2417,
   # convert_tokens_to_ids("<blank>")=2) -- update both together if the
   # tokenizer is ever retrained.
-  ctc_enabled: true
   ctc_loss_weight: 1.0
   ctc_vocab_size: 2417
   ctc_blank_id: 2

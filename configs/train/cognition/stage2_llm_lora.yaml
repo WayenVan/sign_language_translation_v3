@@ -19,10 +19,10 @@
 #      rank -- see configs/peft/qwen3-4b-llm-all-qv-r8.yaml.
 #
 # The CTC head stays frozen while ctc_loss_weight stays at 1.0, so the auxiliary
-# loss is still computed (SltModel gates it on ctc_enabled and the weight, not
-# on the head's requires_grad). A frozen head makes it a fixed probe: the
-# adapter must keep producing features stage 1's gloss classifier can still
-# decode, which is the cheapest anti-drift anchor available here.
+# loss is still computed (SltModel gates it on the weight, not on the head's
+# requires_grad). A frozen head makes it a fixed probe: the adapter must keep
+# producing features stage 1's gloss classifier can still decode, which is the
+# cheapest anti-drift anchor available here.
 
 defaults:
   - /train/cognition/baseline_ablation
@@ -43,12 +43,11 @@ engine:
     visual_backbone: { mode: frozen, runtime_mode: eval }
     visual_adapter: { mode: full, runtime_mode: train }
     ctc_head: { mode: frozen }
+    ctc_codebook: { mode: full }
     visual_position_embedding: { mode: frozen }
-    # ~5k parameters between them. Left trainable because the useful magnitude
-    # of the visual stream relative to the text stream is exactly what changes
-    # once the LLM stops being frozen.
+    # ~5k parameters between them. Left trainable as the LLM starts adapting to
+    # the discrete prefix.
     visual_boundary_embeddings: { mode: full }
-    visual_scale: { mode: full }
 
   # Non-negotiable sanity gate. LoRA initializes to a zero-valued delta, so the
   # step-0 evaluation must reproduce the stage-1 checkpoint's dev score. The
