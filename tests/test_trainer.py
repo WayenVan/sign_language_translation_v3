@@ -365,6 +365,71 @@ class _TeacherForcingGenerationModel(_GenerationModel):
         return {"loss": self.weight * 0 + 2.5, "logits": torch.empty(0)}
 
 
+class _CTCGenerationModel(_GenerationModel):
+    def __init__(self):
+        super().__init__()
+        self.config.ctc_blank_id = 0
+        self.forward_calls = 0
+
+    def forward(self, input_ids=None, **kwargs):
+        self.forward_calls += 1
+        # Paths: [blank, 1, 1, blank] and [2, blank].
+        paths = torch.tensor([0, 1, 1, 0, 2, 0])
+        logits = torch.nn.functional.one_hot(paths, num_classes=3).float()
+        return SimpleNamespace(
+            loss=self.weight * 0 + 1.5,
+            logits=torch.empty(0),
+            ctc_logits=logits,
+            ctc_lengths=torch.tensor([4, 2]),
+        )
+
+
+class _CTCOnlyModel(_CTCGenerationModel):
+    def forward(self, pixel_values=None, pixel_values_length=None, **kwargs):
+        assert kwargs["forward_mode"] == "ctc_only"
+        assert "input_ids" not in kwargs
+        return super().forward(**kwargs)
+
+    def generate(self, **kwargs):
+        raise AssertionError("ctc_only prediction must not call generate()")
+
+
+class _RequiresCTCMetric:
+    requires_ctc_outputs = True
+
+    def __call__(self, output):
+        return {}
+
+
+class _ForwardModeModel(_GenerationModel):
+    def __init__(self):
+        super().__init__()
+        self.forward_mode = None
+
+    def forward(self, input_ids=None, forward_mode="joint", **kwargs):
+        self.forward_mode = forward_mode
+        return {"loss": self.weight * 0, "logits": torch.empty(0)}
+
+
+def test_compute_loss_injects_explicit_engine_forward_mode(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+    )
+    model = _ForwardModeModel()
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {"engine": {"forward_mode": "ctc_only"}}
+        ),
+    )
+
+    trainer.compute_loss(model, {"input_ids": torch.tensor([[1]])})
+
+    assert model.forward_mode == "ctc_only"
+
+
 def test_prediction_step_uses_prompt_only_generation_fields(tmp_path):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),
@@ -456,3 +521,78 @@ def test_prediction_step_optionally_computes_teacher_forcing_loss(tmp_path):
         model.teacher_forcing_kwargs["labels"],
         torch.tensor([[-100, -100, -100, 6]]),
     )
+
+
+def test_prediction_step_returns_ctc_sequences_for_combined_metric(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+        predict_with_generate=True,
+    )
+    model = _CTCGenerationModel()
+    trainer = SltTrainer(model=model, args=args, compute_metrics=_RequiresCTCMetric())
+    full_input_ids = torch.tensor([[3, 4], [3, 4]])
+    prompt_input_ids = torch.tensor([[3], [3]])
+
+    loss, predictions, label_output = trainer.prediction_step(
+        model,
+        {
+            "input_ids": full_input_ids,
+            "attention_mask": torch.ones_like(full_input_ids),
+            "position_ids": torch.arange(2).expand(2, -1),
+            "token_type_ids": torch.zeros_like(full_input_ids),
+            "labels": torch.tensor([[-100, 4], [-100, 4]]),
+            "lang_ids": torch.tensor([1, 1]),
+            "pixel_values": torch.zeros(6, 3, 1, 1),
+            "pixel_values_length": torch.tensor([4, 2]),
+            "generation_input_ids": prompt_input_ids,
+            "generation_attention_mask": torch.ones_like(prompt_input_ids),
+            "generation_token_type_ids": torch.zeros_like(prompt_input_ids),
+            "pseudo_gloss_ids": torch.tensor([1, 3, 2]),
+            "pseudo_gloss_length": torch.tensor([2, 1]),
+        },
+        prediction_loss_only=False,
+    )
+
+    assert loss.item() == 1.5
+    assert model.forward_calls == 1
+    ctc_ids, ctc_lengths = predictions[3:5]
+    assert ctc_ids.tolist() == [[1], [2]]
+    assert ctc_lengths.tolist() == [1, 1]
+    reference_ids, reference_lengths = label_output[2:4]
+    assert reference_ids.tolist() == [[1, 3], [2, 0]]
+    assert reference_lengths.tolist() == [2, 1]
+
+
+def test_ctc_only_prediction_step_skips_generation_and_joint_inputs(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+        predict_with_generate=True,
+    )
+    model = _CTCOnlyModel()
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create({"engine": {"forward_mode": "ctc_only"}}),
+    )
+
+    loss, predictions, references = trainer.prediction_step(
+        model,
+        {
+            "pixel_values": torch.zeros(6, 3, 1, 1),
+            "pixel_values_length": torch.tensor([4, 2]),
+            "pseudo_gloss_ids": torch.tensor([1, 3, 2]),
+            "pseudo_gloss_length": torch.tensor([2, 1]),
+        },
+        prediction_loss_only=False,
+    )
+
+    assert loss.item() == 1.5
+    assert model.forward_calls == 1
+    prediction_ids, prediction_lengths = predictions
+    assert prediction_ids.tolist() == [[1], [2]]
+    assert prediction_lengths.tolist() == [1, 1]
+    reference_ids, reference_lengths = references
+    assert reference_ids.tolist() == [[1, 3], [2, 0]]
+    assert reference_lengths.tolist() == [2, 1]

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 from transformers import AutoTokenizer
 
-from csi_slt.engine.sft.metrics import DecodedBatch, SLTMetric
+from csi_slt.engine.sft.metrics import CTCMetric, DecodedBatch, SLTMetric
 from csi_slt.constants import LANGUAGE_MAP
 
 
@@ -33,6 +33,28 @@ def _get_language_id(language: str) -> int:
             return int(language_id)
 
     raise KeyError(f"Language {language!r} is not defined in LANGUAGE_MAP.")
+
+
+def test_ctc_metric_computes_corpus_wer_from_lengths():
+    metric = CTCMetric()
+    output = SimpleNamespace(
+        predictions=(
+            np.array([[1, 2, 0], [4, 0, 0]]),
+            np.array([2, 1]),
+        ),
+        label_ids=(
+            np.array([[1, 3, 0], [4, 5, 0]]),
+            np.array([2, 2]),
+        ),
+    )
+
+    results = metric(output)
+
+    assert results == {
+        "ctc_wer": 0.5,
+        "ctc_token_errors": 2,
+        "ctc_reference_tokens": 4,
+    }
 
 
 def test_bert_score_treats_empty_text_as_zero():

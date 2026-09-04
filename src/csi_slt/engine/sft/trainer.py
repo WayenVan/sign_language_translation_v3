@@ -143,6 +143,16 @@ class SltTrainer(Seq2SeqTrainer):
             test_data_collator if test_data_collator is not None else self.data_collator
         )
         self.train_probe_compute_metrics = train_probe_compute_metrics
+        self.forward_mode = (
+            OmegaConf.select(hydra_config, "engine.forward_mode", default="joint")
+            if hydra_config is not None
+            else "joint"
+        )
+        if self.forward_mode not in ("ctc_only", "joint"):
+            raise ValueError(
+                "engine.forward_mode must be 'ctc_only' or 'joint', got "
+                f"{self.forward_mode!r}"
+            )
 
         # NOTE: add custom callbacks
         # self.add_callback(
@@ -559,6 +569,7 @@ class SltTrainer(Seq2SeqTrainer):
             for name, value in inputs.items()
             if not name.startswith("generation_")
         }
+        model_inputs["forward_mode"] = self.forward_mode
         loss, outputs = super().compute_loss(
             model,
             model_inputs,
@@ -675,7 +686,120 @@ class SltTrainer(Seq2SeqTrainer):
                 "Evaluation batches are missing required teacher-forcing fields: "
                 + ", ".join(missing_fields)
             )
-        return {name: inputs[name] for name in required_fields}
+        teacher_forcing_inputs = {name: inputs[name] for name in required_fields}
+        for name in ("pseudo_gloss_ids", "pseudo_gloss_length"):
+            if name in inputs:
+                teacher_forcing_inputs[name] = inputs[name]
+        return teacher_forcing_inputs
+
+    @staticmethod
+    def _padded_ctc_greedy_decode(
+        logits: torch.Tensor,
+        lengths: torch.Tensor,
+        blank_id: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Collapse packed CTC argmax paths and return padded token sequences."""
+        if logits.ndim != 2:
+            raise ValueError("ctc_logits must have shape [sum(T_i), vocab_size].")
+        lengths = lengths.to(device=logits.device, dtype=torch.long)
+        if lengths.ndim != 1 or int(lengths.sum()) != logits.shape[0]:
+            raise ValueError("ctc_lengths must describe every row of packed ctc_logits.")
+
+        paths = logits.argmax(dim=-1).split(lengths.tolist())
+        sequences = []
+        for path in paths:
+            collapsed = torch.unique_consecutive(path)
+            sequences.append(collapsed[collapsed.ne(blank_id)])
+        sequence_lengths = lengths.new_tensor([sequence.numel() for sequence in sequences])
+        max_length = max((sequence.numel() for sequence in sequences), default=0)
+        padded = torch.full(
+            (len(sequences), max_length),
+            blank_id,
+            dtype=torch.long,
+            device=logits.device,
+        )
+        for index, sequence in enumerate(sequences):
+            padded[index, : sequence.numel()] = sequence
+        return padded, sequence_lengths
+
+    @staticmethod
+    def _pad_packed_sequences(
+        token_ids: torch.Tensor,
+        lengths: torch.Tensor,
+        padding_value: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Turn packed references into gather-safe padded sequences."""
+        lengths = lengths.to(device=token_ids.device, dtype=torch.long)
+        if token_ids.ndim != 1 or lengths.ndim != 1:
+            raise ValueError("Packed CTC references require 1-D token_ids and lengths.")
+        if int(lengths.sum()) != token_ids.numel():
+            raise ValueError("pseudo_gloss_length does not match pseudo_gloss_ids.")
+        sequences = token_ids.split(lengths.tolist())
+        max_length = int(lengths.max()) if lengths.numel() else 0
+        padded = torch.full(
+            (lengths.numel(), max_length),
+            padding_value,
+            dtype=token_ids.dtype,
+            device=token_ids.device,
+        )
+        for index, sequence in enumerate(sequences):
+            padded[index, : sequence.numel()] = sequence
+        return padded, lengths
+
+    def _prediction_step_ctc_only(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Any],
+        prediction_loss_only: bool,
+    ):
+        """Evaluate Phase A with one CTC forward and no language generation."""
+        required_fields = (
+            "pixel_values",
+            "pixel_values_length",
+            "pseudo_gloss_ids",
+            "pseudo_gloss_length",
+        )
+        missing_fields = [name for name in required_fields if name not in inputs]
+        if missing_fields:
+            raise ValueError(
+                "CTC-only evaluation batches are missing required fields: "
+                + ", ".join(missing_fields)
+            )
+        model_inputs = {name: inputs[name] for name in required_fields}
+        model_inputs["forward_mode"] = "ctc_only"
+        with torch.no_grad():
+            with self.compute_loss_context_manager():
+                outputs = model(**model_inputs)
+
+        def output_value(name: str):
+            return (
+                outputs.get(name)
+                if isinstance(outputs, dict)
+                else getattr(outputs, name, None)
+            )
+
+        loss = output_value("loss")
+        if loss is not None:
+            loss = loss.detach().mean()
+        if prediction_loss_only:
+            return loss, None, None
+
+        ctc_logits = output_value("logits")
+        ctc_lengths = output_value("lengths")
+        if ctc_logits is None or ctc_lengths is None:
+            raise RuntimeError(
+                "ctc_only forward must return packed logits and sequence lengths."
+            )
+        blank_id = int(model.config.ctc_blank_id)
+        predictions = self._padded_ctc_greedy_decode(
+            ctc_logits.detach(), ctc_lengths.detach(), blank_id
+        )
+        references = self._pad_packed_sequences(
+            inputs["pseudo_gloss_ids"],
+            inputs["pseudo_gloss_length"],
+            blank_id,
+        )
+        return loss, predictions, references
 
     def prediction_step(
         self,
@@ -714,12 +838,22 @@ class SltTrainer(Seq2SeqTrainer):
             labels (each being optional).
         """
 
-        if not self.args.predict_with_generate or prediction_loss_only:
+        if not self.args.predict_with_generate and self.forward_mode != "ctc_only":
             raise NotImplementedError(
                 "Only `predict_with_generate=True` is implemented in SltTrainer."
             )
 
         inputs = self._prepare_inputs(inputs)
+        if self.forward_mode == "ctc_only":
+            return self._prediction_step_ctc_only(
+                model,
+                inputs,
+                prediction_loss_only,
+            )
+        if prediction_loss_only:
+            raise NotImplementedError(
+                "Joint prediction_loss_only without generation is not implemented."
+            )
         gen_kwargs = self._prepare_generation_kwargs(gen_kwargs)
         generation_inputs = self._build_generation_inputs(inputs)
         lang_ids = inputs.get("lang_ids")
@@ -733,9 +867,16 @@ class SltTrainer(Seq2SeqTrainer):
             generated_tokens = self.model.generate(**generation_inputs, **gen_kwargs)
 
         loss = None
-        if self._is_predicting and getattr(
-            self.args, "predict_with_teacher_forcing", False
-        ):
+        ctc_predictions = None
+        ctc_references = None
+        needs_ctc_metrics = bool(
+            getattr(self.compute_metrics, "requires_ctc_outputs", False)
+        )
+        needs_teacher_forcing = needs_ctc_metrics or (
+            self._is_predicting
+            and getattr(self.args, "predict_with_teacher_forcing", False)
+        )
+        if needs_teacher_forcing:
             teacher_forcing_inputs = self._build_teacher_forcing_inputs(inputs)
             with torch.no_grad():
                 with self.compute_loss_context_manager():
@@ -758,6 +899,27 @@ class SltTrainer(Seq2SeqTrainer):
                     )
                 loss = loss_value.detach().mean()
 
+            if needs_ctc_metrics:
+                ctc_logits = getattr(outputs, "ctc_logits", None)
+                ctc_lengths = getattr(outputs, "ctc_lengths", None)
+                pseudo_gloss_ids = inputs.get("pseudo_gloss_ids")
+                pseudo_gloss_length = inputs.get("pseudo_gloss_length")
+                if ctc_logits is None or ctc_lengths is None:
+                    raise RuntimeError(
+                        "CTC metrics require forward() to return ctc_logits and ctc_lengths."
+                    )
+                if pseudo_gloss_ids is None or pseudo_gloss_length is None:
+                    raise ValueError(
+                        "CTC metrics require pseudo_gloss_ids and pseudo_gloss_length."
+                    )
+                blank_id = int(model.config.ctc_blank_id)
+                ctc_predictions = self._padded_ctc_greedy_decode(
+                    ctc_logits.detach(), ctc_lengths.detach(), blank_id
+                )
+                ctc_references = self._pad_packed_sequences(
+                    pseudo_gloss_ids, pseudo_gloss_length, blank_id
+                )
+
         # Avoid rebuilding GenerationConfig from the model config for every batch.
         if self.model.generation_config._from_model_config:
             self.model.generation_config._from_model_config = False
@@ -778,11 +940,13 @@ class SltTrainer(Seq2SeqTrainer):
             device=generated_tokens.device,
         )
 
-        return (
-            loss,
-            (generated_tokens, generated_sequence_lengths, prompt_lengths),
-            (labels, lang_ids if lang_ids is not None else None),
-        )
+        predictions = (generated_tokens, generated_sequence_lengths, prompt_lengths)
+        label_output = (labels, lang_ids if lang_ids is not None else None)
+        if needs_ctc_metrics:
+            predictions = (*predictions, *ctc_predictions)
+            label_output = (*label_output, *ctc_references)
+
+        return loss, predictions, label_output
 
     def _get_dataloader(
         self,

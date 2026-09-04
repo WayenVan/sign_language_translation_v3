@@ -7,7 +7,11 @@ from peft import LoraConfig, TaskType
 from torch import nn
 
 import csi_slt.commands.train as train_command
-from csi_slt.commands.train import cast_module_dtype, initialize_model
+from csi_slt.commands.train import (
+    cast_module_dtype,
+    initialize_ctc_codebook_from_tokenizers,
+    initialize_model,
+)
 from csi_slt.engine.trainability import (
     LlmTrainabilityPlan,
     SltTrainabilityPlan,
@@ -30,10 +34,10 @@ class _ModelWithLoRA(nn.Module):
         self.visual_backbone.lora_B = nn.Linear(2, 4, bias=False)
         self.visual_adapter = nn.Linear(3, 4)
         self.ctc_head = nn.Linear(4, 8)
+        self.ctc_codebook = nn.Embedding(8, 4)
         self.visual_position_embedding = nn.Embedding(16, 4)
         self.start_video_embds = nn.Parameter(torch.zeros(1, 4))
         self.end_video_embeds = nn.Parameter(torch.zeros(1, 4))
-        self.visual_scale = nn.Parameter(torch.ones(1))
 
 
 def test_trainability_plan_independently_selects_llm_lora():
@@ -159,6 +163,53 @@ def test_cast_module_dtype_auto_preserves_checkpoint_dtype():
 def test_cast_module_dtype_rejects_unknown_dtype():
     with pytest.raises(ValueError, match="Unsupported dtype"):
         cast_module_dtype(nn.Linear(3, 4), "not_a_dtype")
+
+
+def test_initialize_ctc_codebook_builds_mapping_from_tokenizers():
+    class _Codebook:
+        codebook_initialized = torch.tensor([False])
+
+    class _Model:
+        ctc_codebook = _Codebook()
+        config = SimpleNamespace(ctc_vocab_size=3, ctc_blank_id=1)
+
+        def initialize_ctc_codebook(self, mapping, *, blank_init_token_id):
+            self.initialization = (mapping, blank_init_token_id)
+
+    class _CtcTokenizer:
+        def __len__(self):
+            return 3
+
+        def convert_ids_to_tokens(self, token_id):
+            return ["regen", "<blank>", "morgen"][token_id]
+
+    class _LlmTokenizer:
+        pad_token_id = 7
+
+        def encode(self, token, *, add_special_tokens):
+            assert add_special_tokens is False
+            return {"regen": [10, 11], "morgen": [12]}[token]
+
+    model = _Model()
+    initialize_ctc_codebook_from_tokenizers(
+        model,
+        llm_tokenizer=_LlmTokenizer(),
+        ctc_tokenizer=_CtcTokenizer(),
+    )
+
+    assert model.initialization == ([[10, 11], [], [12]], 7)
+
+
+def test_initialize_ctc_codebook_skips_restored_checkpoint():
+    model = SimpleNamespace(
+        ctc_codebook=SimpleNamespace(codebook_initialized=torch.tensor([True]))
+    )
+
+    initialize_ctc_codebook_from_tokenizers(
+        model,
+        llm_tokenizer=None,
+        ctc_tokenizer=None,
+    )
 
 
 def test_initialize_model_loads_checkpoint_and_uses_its_tokenizer(monkeypatch):

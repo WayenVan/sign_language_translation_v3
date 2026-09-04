@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, set_seed
 
 from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
 from csi_slt.data.datamodule import DataModule
-from csi_slt.engine.sft.metrics import SLTMetric
+from csi_slt.engine.sft.metrics import CTCMetric, SLTMetric, SLTWithCTCMetric
 from csi_slt.engine.sft.trainer import SltTrainer
 from csi_slt.engine.sft.training_args import SltTrainingArguments
 from csi_slt.engine.trainability import (
@@ -46,6 +46,43 @@ def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None
     if not (dtype.is_floating_point or dtype.is_complex):
         raise ValueError(f"dtype must be floating point or complex, got {dtype}")
     module.to(dtype=dtype)
+
+
+def initialize_ctc_codebook_from_tokenizers(
+    model: SltModel,
+    *,
+    llm_tokenizer,
+    ctc_tokenizer,
+) -> None:
+    """Initialize a fresh codebook from the two tokenizer vocabularies."""
+    if bool(model.ctc_codebook.codebook_initialized.item()):
+        return
+    if ctc_tokenizer is None:
+        raise ValueError("a CTC tokenizer is required to initialize the codebook")
+    if len(ctc_tokenizer) != model.config.ctc_vocab_size:
+        raise ValueError(
+            "CTC tokenizer size does not match model.config.ctc_vocab_size: "
+            f"{len(ctc_tokenizer)} != {model.config.ctc_vocab_size}"
+        )
+    if llm_tokenizer.pad_token_id is None:
+        raise ValueError("the LLM tokenizer needs a pad_token_id for CTC blank")
+
+    token_mapping = []
+    for ctc_id in range(model.config.ctc_vocab_size):
+        if ctc_id == model.config.ctc_blank_id:
+            token_mapping.append([])
+            continue
+        token = ctc_tokenizer.convert_ids_to_tokens(ctc_id)
+        if not isinstance(token, str):
+            raise ValueError(f"CTC token id {ctc_id} does not map to a token string")
+        token_mapping.append(
+            llm_tokenizer.encode(token, add_special_tokens=False)
+        )
+
+    model.initialize_ctc_codebook(
+        token_mapping,
+        blank_init_token_id=llm_tokenizer.pad_token_id,
+    )
 
 
 def initialize_model(
@@ -145,6 +182,11 @@ def main(cfg: DictConfig) -> None:
         ),
     )
     datamodule.setup()
+    initialize_ctc_codebook_from_tokenizers(
+        slt_model,
+        llm_tokenizer=tokenizer,
+        ctc_tokenizer=datamodule.ctc_tokenizer,
+    )
 
     generation_config_args = OmegaConf.to_container(
         cfg.engine.generation_config, resolve=True
@@ -156,13 +198,28 @@ def main(cfg: DictConfig) -> None:
         ),
         **cfg.engine.training_args,
     )
-    metrics = SLTMetric(processor=datamodule.processor)
+    ctc_only = cfg.engine.forward_mode == "ctc_only"
+    metrics = (
+        CTCMetric()
+        if ctc_only
+        else SLTWithCTCMetric(
+            SLTMetric(processor=datamodule.processor),
+            CTCMetric(),
+        )
+    )
     train_probe_metrics = None
     train_probe_interval = OmegaConf.select(
         cfg, "engine.train_probe.every_n_evaluations", default=-1
     )
     if train_probe_interval != -1:
-        train_probe_metrics = SLTMetric(processor=datamodule.processor)
+        train_probe_metrics = (
+            CTCMetric()
+            if ctc_only
+            else SLTWithCTCMetric(
+                SLTMetric(processor=datamodule.processor),
+                CTCMetric(),
+            )
+        )
 
     trainer = SltTrainer(
         model=slt_model,
@@ -224,7 +281,8 @@ def main(cfg: DictConfig) -> None:
             test_dataset=datamodule.test_dataset,
             test_collator=datamodule.test_collator,
         )
-        trainer.save_predictions(predictions)
+        if not ctc_only:
+            trainer.save_predictions(predictions)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import unicodedata
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 import evaluate
@@ -34,6 +35,123 @@ class DecodedBatch:
 
     def __len__(self) -> int:
         return len(self.predictions)
+
+
+class CTCMetric:
+    """Corpus token error rate for already collapsed CTC predictions."""
+
+    @staticmethod
+    def _to_numpy(value: Any) -> np.ndarray:
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()
+        return np.asarray(value)
+
+    @staticmethod
+    def _edit_distance(prediction: Sequence[int], reference: Sequence[int]) -> int:
+        # Keep only one row: CTC references are short, so the memory cost is
+        # O(reference length) rather than O(prediction * reference).
+        previous = list(range(len(reference) + 1))
+        for prediction_index, prediction_token in enumerate(prediction, start=1):
+            current = [prediction_index]
+            for reference_index, reference_token in enumerate(reference, start=1):
+                current.append(
+                    min(
+                        current[-1] + 1,
+                        previous[reference_index] + 1,
+                        previous[reference_index - 1]
+                        + int(prediction_token != reference_token),
+                    )
+                )
+            previous = current
+        return previous[-1]
+
+    @staticmethod
+    def _unpack_sequences(values: Any, name: str) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            token_ids, lengths = values
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be (token_ids, lengths).") from exc
+
+        token_ids = CTCMetric._to_numpy(token_ids)
+        lengths = CTCMetric._to_numpy(lengths).reshape(-1)
+        if token_ids.ndim != 2:
+            raise ValueError(f"{name} token_ids must have shape [batch_size, max_length].")
+        if token_ids.shape[0] != lengths.shape[0]:
+            raise ValueError(f"{name} token_ids and lengths have different batch sizes.")
+        if np.any(lengths < 0) or np.any(lengths > token_ids.shape[1]):
+            raise ValueError(f"{name} contains an invalid sequence length.")
+        return token_ids, lengths
+
+    def __call__(self, output: PredictionOutput) -> dict[str, float | int]:
+        prediction_ids, prediction_lengths = self._unpack_sequences(
+            output.predictions, "CTC predictions"
+        )
+        reference_ids, reference_lengths = self._unpack_sequences(
+            output.label_ids, "CTC references"
+        )
+        if prediction_ids.shape[0] != reference_ids.shape[0]:
+            raise ValueError("CTC predictions and references have different batch sizes.")
+
+        token_errors = 0
+        reference_tokens = 0
+        for index in range(prediction_ids.shape[0]):
+            prediction = prediction_ids[index, : int(prediction_lengths[index])]
+            reference = reference_ids[index, : int(reference_lengths[index])]
+            token_errors += self._edit_distance(prediction, reference)
+            reference_tokens += len(reference)
+
+        return {
+            "ctc_wer": (
+                float(token_errors / reference_tokens)
+                if reference_tokens > 0
+                else 0.0
+            ),
+            "ctc_token_errors": token_errors,
+            "ctc_reference_tokens": reference_tokens,
+        }
+
+
+class SLTWithCTCMetric:
+    """One Trainer metric entry point backed by separate SLT and CTC metrics."""
+
+    requires_ctc_outputs = True
+
+    def __init__(self, slt_metric: "SLTMetric", ctc_metric: CTCMetric) -> None:
+        self.slt_metric = slt_metric
+        self.ctc_metric = ctc_metric
+
+    def __call__(self, output: PredictionOutput) -> dict[str, float | int]:
+        try:
+            translation_predictions = output.predictions[:3]
+            ctc_predictions = output.predictions[3:5]
+            translation_labels = output.label_ids[:2]
+            ctc_labels = output.label_ids[2:4]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Joint SLT/CTC evaluation output has an invalid structure.") from exc
+        if len(ctc_predictions) != 2 or len(ctc_labels) != 2:
+            raise ValueError("Joint SLT/CTC evaluation output is missing CTC sequences.")
+
+        metrics = self.slt_metric(
+            SimpleNamespace(
+                predictions=translation_predictions,
+                label_ids=translation_labels,
+            )
+        )
+        metrics.update(
+            self.ctc_metric(
+                SimpleNamespace(predictions=ctc_predictions, label_ids=ctc_labels)
+            )
+        )
+        return metrics
+
+    def decode_batch(self, output: PredictionOutput) -> DecodedBatch:
+        """Preserve the interface used by SltTrainer.save_predictions."""
+        return self.slt_metric.decode_batch(
+            SimpleNamespace(
+                predictions=output.predictions[:3],
+                label_ids=output.label_ids[:2],
+            )
+        )
 
 
 class SLTMetric:

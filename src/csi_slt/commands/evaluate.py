@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, set_seed
 
 from csi_slt.data.datamodule import DataModule
 from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
-from csi_slt.engine.sft.metrics import SLTMetric
+from csi_slt.engine.sft.metrics import CTCMetric, SLTMetric, SLTWithCTCMetric
 from csi_slt.engine.sft.trainer import SltTrainer, apply_fsdp2_autocast
 from csi_slt.engine.sft.training_args import SltTrainingArguments
 from csi_slt.modeling_slt.slt import SltModel
@@ -84,7 +84,17 @@ def main(cfg: DictConfig) -> None:
         ),
         **OmegaConf.to_container(cfg.engine.training_args, resolve=True),
     )
-    metrics = SLTMetric(processor=datamodule.processor)
+    ctc_only = (
+        OmegaConf.select(cfg, "engine.forward_mode", default="joint") == "ctc_only"
+    )
+    metrics = (
+        CTCMetric()
+        if ctc_only
+        else SLTWithCTCMetric(
+            SLTMetric(processor=datamodule.processor),
+            CTCMetric(),
+        )
+    )
     trainer = SltTrainer(
         model=slt_model,
         args=training_args,
@@ -107,7 +117,8 @@ def main(cfg: DictConfig) -> None:
     )
     trainer.log_metrics("test", predictions.metrics)
     trainer.save_metrics("test", predictions.metrics)
-    trainer.save_predictions(predictions)
+    if not ctc_only:
+        trainer.save_predictions(predictions)
 
 
 if __name__ == "__main__":
