@@ -1,63 +1,105 @@
 import pytest
 
-from csi_slt.engine.trainability import (
-    ComponentTrainabilityPlan,
-    LlmTrainabilityPlan,
-    SltTrainabilityPlan,
-    VisualAdapterTrainabilityPlan,
-    VisualBackboneTrainabilityPlan,
-)
+from csi_slt.engine.trainability import SltTrainabilityPlan
 
 
-def test_slt_plan_defaults_to_frozen_components():
-    plan = SltTrainabilityPlan()
+def _mapping(**overrides):
+    mapping = {
+        "llm": {"parameter_mode": "frozen"},
+        "visual_backbone": {"parameter_mode": "frozen"},
+        "visual_adapter": {"parameter_mode": "frozen"},
+        "ctc_head": {"parameter_mode": "frozen"},
+        "ctc_codebook": {"parameter_mode": "frozen"},
+        "visual_position_embedding": {"parameter_mode": "frozen"},
+        "visual_boundary_embeddings": {"parameter_mode": "frozen"},
+    }
+    mapping.update(overrides)
+    return mapping
 
-    assert plan.llm.mode == "frozen"
-    assert plan.llm.runtime_mode == "eval"
-    assert plan.visual_backbone.mode == "frozen"
-    assert plan.visual_backbone.runtime_mode == "eval"
-    assert plan.visual_adapter.mode == "frozen"
-    assert plan.visual_adapter.runtime_mode == "eval"
+
+def test_slt_plan_defaults_frozen_runtime_components_to_eval():
+    plan = SltTrainabilityPlan.from_mapping(_mapping())
+
+    assert plan["llm"].parameter_mode == "frozen"
+    assert plan["llm"].resolved_runtime_mode == "eval"
+    assert plan["visual_backbone"].resolved_runtime_mode == "eval"
+    assert plan["visual_adapter"].resolved_runtime_mode == "eval"
+    assert plan["ctc_head"].resolved_runtime_mode is None
 
 
-def test_visual_last_n_layers_requires_a_positive_layer_count():
+def test_auto_runtime_tracks_parameter_mode_and_can_be_overridden():
+    plan = SltTrainabilityPlan.from_mapping(
+        _mapping(
+            llm={"parameter_mode": "lora"},
+            visual_adapter={"parameter_mode": "full", "runtime_mode": "eval"},
+        )
+    )
+
+    assert plan["llm"].resolved_runtime_mode == "train"
+    assert plan["visual_adapter"].resolved_runtime_mode == "eval"
+
+
+@pytest.mark.parametrize("n_layers", [None, 0, True])
+def test_visual_last_n_layers_requires_a_positive_layer_count(n_layers):
     with pytest.raises(ValueError, match="positive integer"):
-        VisualBackboneTrainabilityPlan(mode="last_n_layers")
-
-    with pytest.raises(ValueError, match="positive integer"):
-        VisualBackboneTrainabilityPlan(mode="last_n_layers", n_layers=0)
+        SltTrainabilityPlan.from_mapping(
+            _mapping(
+                visual_backbone={
+                    "parameter_mode": "last_n_layers",
+                    "options": {"n_layers": n_layers},
+                }
+            )
+        )
 
 
 def test_visual_layer_count_is_only_valid_for_last_n_layers():
-    with pytest.raises(ValueError, match="only be set"):
-        VisualBackboneTrainabilityPlan(mode="full", n_layers=2)
+    with pytest.raises(ValueError, match="only valid"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(
+                visual_backbone={
+                    "parameter_mode": "full",
+                    "options": {"n_layers": 2},
+                }
+            )
+        )
 
 
-def test_plans_reject_unknown_modes():
-    with pytest.raises(ValueError, match="component trainability mode"):
-        ComponentTrainabilityPlan(mode="partial")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="visual backbone trainability mode"):
-        VisualBackboneTrainabilityPlan(mode="partial")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="visual backbone runtime mode"):
-        VisualBackboneTrainabilityPlan(runtime_mode="auto")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="LLM trainability mode"):
-        LlmTrainabilityPlan(mode="partial")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="LLM runtime mode"):
-        LlmTrainabilityPlan(runtime_mode="auto")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="visual adapter trainability mode"):
-        VisualAdapterTrainabilityPlan(mode="lora")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="visual adapter runtime mode"):
-        VisualAdapterTrainabilityPlan(runtime_mode="auto")  # type: ignore[arg-type]
+def test_component_rules_reject_unsupported_modes_and_runtime():
+    with pytest.raises(ValueError, match="parameter_mode for ctc_head"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(ctc_head={"parameter_mode": "lora"})
+        )
+    with pytest.raises(ValueError, match="does not support runtime_mode"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(ctc_codebook={"parameter_mode": "frozen", "runtime_mode": "eval"})
+        )
+    with pytest.raises(ValueError, match="runtime_mode for llm"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(llm={"parameter_mode": "frozen", "runtime_mode": "sometimes"})
+        )
 
 
-def test_lora_mode_is_specific_to_llm_plan():
-    assert LlmTrainabilityPlan(mode="lora").mode == "lora"
+def test_component_rules_reject_unknown_fields_and_options():
+    with pytest.raises(ValueError, match="unknown fields"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(llm={"parameter_mode": "frozen", "mode": "full"})
+        )
+    with pytest.raises(ValueError, match="unsupported keys"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(
+                visual_adapter={
+                    "parameter_mode": "full",
+                    "options": {"n_layers": 2},
+                }
+            )
+        )
 
-    with pytest.raises(ValueError, match="component trainability mode"):
-        ComponentTrainabilityPlan(mode="lora")  # type: ignore[arg-type]
+
+def test_plan_requires_exactly_the_known_components():
+    missing = _mapping()
+    missing.pop("ctc_head")
+    with pytest.raises(ValueError, match="missing components"):
+        SltTrainabilityPlan.from_mapping(missing)
+
+    with pytest.raises(ValueError, match="unknown components"):
+        SltTrainabilityPlan.from_mapping({**_mapping(), "extra": {}})

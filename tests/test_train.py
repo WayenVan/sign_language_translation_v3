@@ -13,10 +13,7 @@ from csi_slt.commands.train import (
     initialize_model,
 )
 from csi_slt.engine.trainability import (
-    LlmTrainabilityPlan,
     SltTrainabilityPlan,
-    VisualAdapterTrainabilityPlan,
-    VisualBackboneTrainabilityPlan,
     apply_trainability_plan,
 )
 
@@ -40,12 +37,26 @@ class _ModelWithLoRA(nn.Module):
         self.end_video_embeds = nn.Parameter(torch.zeros(1, 4))
 
 
+def _trainability_plan(**overrides):
+    components = {
+        "llm": {"parameter_mode": "frozen"},
+        "visual_backbone": {"parameter_mode": "frozen"},
+        "visual_adapter": {"parameter_mode": "frozen"},
+        "ctc_head": {"parameter_mode": "frozen"},
+        "ctc_codebook": {"parameter_mode": "frozen"},
+        "visual_position_embedding": {"parameter_mode": "frozen"},
+        "visual_boundary_embeddings": {"parameter_mode": "frozen"},
+    }
+    components.update(overrides)
+    return SltTrainabilityPlan.from_mapping(components)
+
+
 def test_trainability_plan_independently_selects_llm_lora():
     model = _ModelWithLoRA()
 
     trainable_count = apply_trainability_plan(
         model,
-        SltTrainabilityPlan(llm=LlmTrainabilityPlan(mode="lora")),
+        _trainability_plan(llm={"parameter_mode": "lora"}),
     )
 
     assert trainable_count == sum(
@@ -67,9 +78,7 @@ def test_trainability_plan_rejects_missing_requested_visual_lora():
     with pytest.raises(ValueError, match="visual LoRA training was requested"):
         apply_trainability_plan(
             model,
-            SltTrainabilityPlan(
-                visual_backbone=VisualBackboneTrainabilityPlan(mode="lora")
-            ),
+            _trainability_plan(visual_backbone={"parameter_mode": "lora"}),
         )
 
 
@@ -78,7 +87,7 @@ def test_trainability_plan_can_select_only_visual_adapter():
 
     trainable_count = apply_trainability_plan(
         model,
-        SltTrainabilityPlan(visual_adapter=VisualAdapterTrainabilityPlan(mode="full")),
+        _trainability_plan(visual_adapter={"parameter_mode": "full"}),
     )
 
     assert trainable_count == sum(
@@ -431,7 +440,7 @@ def test_always_frozen_modules_survive_a_plan_that_trains_their_parent():
 
     trainable_count = apply_trainability_plan(
         model,
-        SltTrainabilityPlan(visual_adapter=VisualAdapterTrainabilityPlan(mode="full")),
+        _trainability_plan(visual_adapter={"parameter_mode": "full"}),
     )
 
     assert all(
@@ -454,7 +463,7 @@ def test_always_frozen_is_an_instance_marker_so_it_can_be_turned_off():
 
     apply_trainability_plan(
         model,
-        SltTrainabilityPlan(visual_adapter=VisualAdapterTrainabilityPlan(mode="full")),
+        _trainability_plan(visual_adapter={"parameter_mode": "full"}),
     )
 
     assert all(

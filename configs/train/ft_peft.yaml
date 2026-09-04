@@ -19,13 +19,13 @@ engine:
   # visual adapter; every other component stays at the checkpoint's weights.
   trainability:
     # Preserve standard LoRA training behavior, including configured dropout.
-    llm: {mode: lora, runtime_mode: train}
-    visual_backbone: {mode: frozen}
-    visual_adapter: {mode: full, runtime_mode: train}
-    ctc_head: {mode: frozen}
-    ctc_codebook: {mode: full}
-    visual_position_embedding: {mode: frozen}
-    visual_boundary_embeddings: {mode: frozen}
+    llm: {parameter_mode: lora, runtime_mode: train}
+    visual_backbone: {parameter_mode: frozen}
+    visual_adapter: {parameter_mode: full, runtime_mode: train}
+    ctc_head: {parameter_mode: frozen}
+    ctc_codebook: {parameter_mode: full}
+    visual_position_embedding: {parameter_mode: frozen}
+    visual_boundary_embeddings: {parameter_mode: frozen}
   # Log a step-0 baseline into the same eval_* series as periodic evaluation.
   evaluate_before_training: true
   training_args:

@@ -39,15 +39,15 @@ model:
 engine:
   trainability:
     # runtime_mode=train is what activates lora_dropout.
-    llm: { mode: lora, runtime_mode: train }
-    visual_backbone: { mode: frozen, runtime_mode: eval }
-    visual_adapter: { mode: full, runtime_mode: train }
-    ctc_head: { mode: frozen }
-    ctc_codebook: { mode: full }
-    visual_position_embedding: { mode: frozen }
+    llm: { parameter_mode: lora, runtime_mode: train }
+    visual_backbone: { parameter_mode: frozen, runtime_mode: eval }
+    visual_adapter: { parameter_mode: full, runtime_mode: train }
+    ctc_head: { parameter_mode: frozen }
+    ctc_codebook: { parameter_mode: full }
+    visual_position_embedding: { parameter_mode: frozen }
     # ~5k parameters between them. Left trainable as the LLM starts adapting to
     # the discrete prefix.
-    visual_boundary_embeddings: { mode: full }
+    visual_boundary_embeddings: { parameter_mode: full }
 
   # Non-negotiable sanity gate. LoRA initializes to a zero-valued delta, so the
   # step-0 evaluation must reproduce the stage-1 checkpoint's dev score. The

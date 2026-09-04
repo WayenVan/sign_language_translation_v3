@@ -36,7 +36,8 @@ class CRadioV4Backbone(nn.Module):
         if "freeze_visual_encoder" in config:
             logger.warning(
                 "Ignoring retired C-RADIO freeze_visual_encoder=%r; configure "
-                "engine.trainability.visual_backbone.mode and runtime_mode instead",
+                "engine.trainability.visual_backbone.parameter_mode and "
+                "runtime_mode instead",
                 config["freeze_visual_encoder"],
             )
         # Construction starts from the safest standalone state. The training
