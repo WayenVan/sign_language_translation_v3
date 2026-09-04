@@ -388,7 +388,12 @@ class _CTCOnlyModel(_CTCGenerationModel):
     def forward(self, pixel_values=None, pixel_values_length=None, **kwargs):
         assert kwargs["forward_mode"] == "ctc_only"
         assert "input_ids" not in kwargs
-        return super().forward(**kwargs)
+        output = super().forward(**kwargs)
+        return SimpleNamespace(
+            loss=output.loss,
+            logits=output.ctc_logits,
+            lengths=output.ctc_lengths,
+        )
 
     def generate(self, **kwargs):
         raise AssertionError("ctc_only prediction must not call generate()")

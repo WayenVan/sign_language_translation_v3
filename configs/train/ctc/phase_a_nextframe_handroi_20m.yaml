@@ -1,0 +1,50 @@
+# @package _global_
+
+# Phase-A CTC pretraining template for the visual architecture used by:
+#
+#   v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-lm1-
+#   hardmatch-wr3-gate1-roigate-2.0-0903.224x224
+#
+# This constructs the new mandatory-CTC model from pretrained components; it
+# does not load the v5.0 SLT checkpoint. The selected adapter keeps that run's
+# architecture and ~20M adapter budget exactly. Whether the CTC head should be
+# counted inside a new 20M total budget is intentionally left as a separate
+# capacity decision.
+
+defaults:
+  - /train/cognition/baseline_ablation
+  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
+  - override /prompt: diverse_train
+  - _self_
+
+model:
+  load_from_checkpoint: false
+  checkpoint_dir: null
+  config:
+    # Fixed for the first template. Training uses a differentiable soft
+    # codebook only in joint mode; Phase A bypasses the codebook entirely.
+    ctc_codebook_training_mode: soft
+    ctc_codebook_default_temperature: 1.0
+
+engine:
+  # One visual/CTC forward, no codebook and no Qwen execution.
+  forward_mode: ctc_only
+
+  trainability:
+    llm: { mode: frozen, runtime_mode: eval }
+    visual_backbone: { mode: frozen, runtime_mode: eval }
+    visual_adapter: { mode: full, runtime_mode: train }
+    ctc_head: { mode: full }
+    # Constructed and initialized for checkpoint completeness, but unused by
+    # the ctc_only forward path.
+    ctc_codebook: { mode: frozen }
+    visual_position_embedding: { mode: frozen }
+    visual_boundary_embeddings: { mode: frozen }
+
+  training_args:
+    output_dir: outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-20m
+    metric_for_best_model: eval_ctc_wer
+    greater_is_better: false
+    # The LLM is bypassed, so unused-parameter discovery is unnecessary.
+    ddp_find_unused_parameters: false
+
