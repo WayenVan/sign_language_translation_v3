@@ -8,7 +8,7 @@ processor:
   num_extra_video_tokens: 2
   video_start_token: <unused1>
   video_soft_token: <unused0>
-  pseudo_gloss_dropout: 0.2
+  pseudo_gloss_dropout: 0.0
   video_processor:
     _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
     size:

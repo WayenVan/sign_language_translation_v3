@@ -28,6 +28,15 @@ class _MeanReducedModelWithKwargs(nn.Module):
         return {"loss": self.weight * 0 + 8.0}
 
 
+class _AdapterWithGate(nn.Linear):
+    def __init__(self):
+        super().__init__(2, 2)
+        self.gate = nn.Parameter(torch.zeros(1))
+
+    def optimization_parameter_groups(self):
+        return {"gates": (self.gate,)}
+
+
 class _ComponentLearningRateModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -35,7 +44,7 @@ class _ComponentLearningRateModel(nn.Module):
         self.llm.lora_A = nn.Linear(2, 2)
         self.visual_backbone = nn.Module()
         self.visual_backbone.lora_A = nn.Linear(2, 2)
-        self.visual_adapter = nn.Linear(2, 2)
+        self.visual_adapter = _AdapterWithGate()
         self.ctc_head = nn.Linear(2, 3)
         self.ctc_codebook = nn.Embedding(3, 2)
         self.visual_position_embedding = nn.Embedding(4, 2)
@@ -91,16 +100,14 @@ def test_optimizer_uses_separate_component_learning_rates(tmp_path):
     }
 
     assert {
-        parameter_lrs[id(parameter)]
-        for parameter in model.llm.lora_A.parameters()
+        parameter_lrs[id(parameter)] for parameter in model.llm.lora_A.parameters()
     } == {2e-5}
     assert {
         parameter_lrs[id(parameter)]
         for parameter in model.visual_backbone.lora_A.parameters()
     } == {3e-5}
     assert {
-        parameter_lrs[id(parameter)]
-        for parameter in model.visual_adapter.parameters()
+        parameter_lrs[id(parameter)] for parameter in model.visual_adapter.parameters()
     } == {4e-5}
     assert parameter_weight_decays[id(model.llm.lora_A.weight)] == 0.01
     assert parameter_weight_decays[id(model.visual_backbone.lora_A.weight)] == 0.02
@@ -122,13 +129,7 @@ def test_component_learning_rate_defaults_to_global_rate(tmp_path):
         model=model,
         args=args,
         hydra_config=OmegaConf.create(
-            {
-                "engine": {
-                    "optimization": {
-                        "visual_adapter": {"learning_rate": 4e-5}
-                    }
-                }
-            }
+            {"engine": {"optimization": {"visual_adapter": {"learning_rate": 4e-5}}}}
         ),
     )
 
@@ -144,6 +145,120 @@ def test_component_learning_rate_defaults_to_global_rate(tmp_path):
     assert parameter_lrs[id(model.visual_adapter.weight)] == 4e-5
 
 
+def test_semantic_group_overrides_component_and_global_defaults(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path),
+        auto_output_dir=False,
+        report_to="none",
+        learning_rate=1e-4,
+        weight_decay=0.1,
+    )
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {
+                        "visual_adapter": {
+                            "learning_rate": 4e-5,
+                            "weight_decay": 0.03,
+                            "parameter_groups": {"gates": {"learning_rate": 5e-4}},
+                        }
+                    }
+                }
+            }
+        ),
+    )
+
+    optimizer = trainer.create_optimizer()
+    parameter_groups = {
+        id(parameter): group
+        for group in optimizer.param_groups
+        for parameter in group["params"]
+    }
+
+    assert parameter_groups[id(model.visual_adapter.gate)]["lr"] == 5e-4
+    assert parameter_groups[id(model.visual_adapter.gate)]["weight_decay"] == 0.0
+    assert (
+        parameter_groups[id(model.visual_adapter.gate)]["slt_parameter_group"]
+        == "gates"
+    )
+    assert parameter_groups[id(model.visual_adapter.weight)]["lr"] == 4e-5
+
+
+def test_optimizer_rejects_unregistered_semantic_group(tmp_path):
+    model = _ComponentLearningRateModel()
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path), auto_output_dir=False, report_to="none"
+    )
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {
+                        "visual_adapter": {
+                            "parameter_groups": {"missing": {"learning_rate": 5e-4}}
+                        }
+                    }
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unregistered groups: missing"):
+        trainer.create_optimizer()
+
+
+@pytest.mark.parametrize(
+    "invalid_registration,match",
+    [
+        ("outside", "outside the component"),
+        ("overlap", "overlap"),
+        ("frozen", "is frozen"),
+    ],
+)
+def test_optimizer_rejects_invalid_semantic_group_registration(
+    tmp_path, invalid_registration, match
+):
+    model = _ComponentLearningRateModel()
+    if invalid_registration == "outside":
+        model.visual_adapter.optimization_parameter_groups = lambda: {
+            "gates": (model.ctc_head.weight,)
+        }
+    elif invalid_registration == "overlap":
+        model.visual_adapter.optimization_parameter_groups = lambda: {
+            "gates": (model.visual_adapter.gate,),
+            "duplicate": (model.visual_adapter.gate,),
+        }
+    else:
+        model.visual_adapter.gate.requires_grad_(False)
+
+    groups = {"gates": {"learning_rate": 5e-4}}
+    if invalid_registration == "overlap":
+        groups["duplicate"] = {"learning_rate": 5e-4}
+    args = SltTrainingArguments(
+        output_dir=str(tmp_path), auto_output_dir=False, report_to="none"
+    )
+    trainer = SltTrainer(
+        model=model,
+        args=args,
+        hydra_config=OmegaConf.create(
+            {
+                "engine": {
+                    "optimization": {"visual_adapter": {"parameter_groups": groups}}
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match=match):
+        trainer.create_optimizer()
+
+
 def test_component_weight_decay_defaults_to_global_value(tmp_path):
     model = _ComponentLearningRateModel()
     args = SltTrainingArguments(
@@ -156,11 +271,7 @@ def test_component_weight_decay_defaults_to_global_value(tmp_path):
         model=model,
         args=args,
         hydra_config=OmegaConf.create(
-            {
-                "engine": {
-                    "optimization": {"visual_adapter": {"weight_decay": 0.0}}
-                }
-            }
+            {"engine": {"optimization": {"visual_adapter": {"weight_decay": 0.0}}}}
         ),
     )
 
@@ -228,11 +339,7 @@ def test_optimizer_rejects_override_for_frozen_component(tmp_path):
         model=model,
         args=args,
         hydra_config=OmegaConf.create(
-            {
-                "engine": {
-                    "optimization": {"ctc_codebook": {"learning_rate": 2e-5}}
-                }
-            }
+            {"engine": {"optimization": {"ctc_codebook": {"learning_rate": 2e-5}}}}
         ),
     )
 
@@ -541,9 +648,7 @@ def test_compute_loss_injects_explicit_engine_forward_mode(tmp_path):
     trainer = SltTrainer(
         model=model,
         args=args,
-        hydra_config=OmegaConf.create(
-            {"engine": {"forward_mode": "ctc_only"}}
-        ),
+        hydra_config=OmegaConf.create({"engine": {"forward_mode": "ctc_only"}}),
     )
 
     trainer.compute_loss(model, {"input_ids": torch.tensor([[1]])})

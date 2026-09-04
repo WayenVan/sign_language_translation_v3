@@ -18,11 +18,27 @@ def test_sparse_component_overrides_preserve_missing_values():
     assert plan.get("ctc_head").learning_rate is None
 
 
+def test_parameter_group_overrides_are_sparse():
+    plan = OptimizationPlan.from_mapping(
+        {
+            "visual_adapter": {
+                "learning_rate": 1e-4,
+                "parameter_groups": {"gates": {"learning_rate": 5e-4}},
+            }
+        }
+    )
+
+    gates = plan.get("visual_adapter").parameter_groups["gates"]
+    assert gates.learning_rate == 5e-4
+    assert gates.weight_decay is None
+
+
 @pytest.mark.parametrize(
     "config",
     [
         {"unknown": {"learning_rate": 1e-4}},
         {"ctc_head": {"momentum": 0.9}},
+        {"visual_adapter": {"parameter_groups": {"gates": {"momentum": 0.9}}}},
     ],
 )
 def test_optimization_plan_rejects_unknown_names(config):

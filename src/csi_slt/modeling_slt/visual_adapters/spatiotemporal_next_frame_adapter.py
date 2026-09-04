@@ -176,6 +176,10 @@ class SpatiotemporalNextFrameAdapter(nn.Module):
         """Mean |displacement| of the last forward, forwarded for logging."""
         return self.next_frame_patch_fusion.mean_displacement
 
+    def optimization_parameter_groups(self) -> dict[str, tuple[nn.Parameter, ...]]:
+        """Expose the patch-motion residual gate to optimizer policies."""
+        return {"gates": (self.next_frame_patch_fusion.fusion_gate,)}
+
     def forward(
         self,
         visual_backbone_output: VisualBackboneOutput,

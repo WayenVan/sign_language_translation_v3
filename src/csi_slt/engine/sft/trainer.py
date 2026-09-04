@@ -547,7 +547,13 @@ class SltTrainer(Seq2SeqTrainer):
             for group in self.optimizer.param_groups:
                 component = group.get("slt_component")
                 if component is not None:
-                    logs[f"learning_rate/{component}"] = float(group["lr"])
+                    parameter_group = group.get("slt_parameter_group")
+                    suffix = (
+                        f"{component}/{parameter_group}"
+                        if parameter_group is not None
+                        else component
+                    )
+                    logs[f"learning_rate/{suffix}"] = float(group["lr"])
         if "loss" in logs and self._logging_scalar_totals:
             for name, total in self._logging_scalar_totals.items():
                 count = torch.tensor(
@@ -648,14 +654,18 @@ class SltTrainer(Seq2SeqTrainer):
             raise ValueError("ctc_logits must have shape [sum(T_i), vocab_size].")
         lengths = lengths.to(device=logits.device, dtype=torch.long)
         if lengths.ndim != 1 or int(lengths.sum()) != logits.shape[0]:
-            raise ValueError("ctc_lengths must describe every row of packed ctc_logits.")
+            raise ValueError(
+                "ctc_lengths must describe every row of packed ctc_logits."
+            )
 
         paths = logits.argmax(dim=-1).split(lengths.tolist())
         sequences = []
         for path in paths:
             collapsed = torch.unique_consecutive(path)
             sequences.append(collapsed[collapsed.ne(blank_id)])
-        sequence_lengths = lengths.new_tensor([sequence.numel() for sequence in sequences])
+        sequence_lengths = lengths.new_tensor(
+            [sequence.numel() for sequence in sequences]
+        )
         max_length = max((sequence.numel() for sequence in sequences), default=0)
         padded = torch.full(
             (len(sequences), max_length),

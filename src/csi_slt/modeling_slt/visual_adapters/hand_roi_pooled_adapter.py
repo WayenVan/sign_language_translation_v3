@@ -356,6 +356,12 @@ class HandRoiPooledAdapter(nn.Module):
             raise AttributeError("roi_weight is only defined in gated fusion mode")
         return float(torch.sigmoid(self.fusion_gate).item())
 
+    def optimization_parameter_groups(self) -> dict[str, tuple[nn.Parameter, ...]]:
+        """Expose the optional ROI residual gate to optimizer policies."""
+        if self.fusion_gate is None:
+            return {}
+        return {"gates": (self.fusion_gate,)}
+
     @staticmethod
     def _build_projection(
         in_dim: int,

@@ -29,6 +29,7 @@ tensor while pooling another.
 """
 
 import torch
+from torch import nn
 
 from csi_slt.modeling_slt.misc import (
     mark_module_tree_as_initialized,
@@ -117,6 +118,13 @@ class SpatiotemporalNextFrameHandRoiAdapter(HandRoiPooledAdapter):
     def mean_displacement(self) -> float | None:
         """Mean matched displacement from the most recent forward pass."""
         return self.next_frame_patch_fusion.mean_displacement
+
+    def optimization_parameter_groups(self) -> dict[str, tuple[nn.Parameter, ...]]:
+        """Expose semantic optimizer groups without coupling the model to LRs."""
+        gates = [self.next_frame_patch_fusion.fusion_gate]
+        if self.fusion_gate is not None:
+            gates.append(self.fusion_gate)
+        return {"gates": tuple(gates)}
 
     def forward(
         self,

@@ -1,0 +1,44 @@
+# @package _global_
+
+# Shared Phase-A CTC training behavior. Architecture, dataset, capacity,
+# optimizer overrides, and output paths belong to child experiment configs.
+
+defaults:
+  - /train/base
+  - _self_
+
+engine:
+  # Phase A evaluates with one CTC forward and never calls Qwen.generate().
+  forward_mode: ctc_only
+
+  trainability:
+    llm: { parameter_mode: frozen }
+    visual_backbone: { parameter_mode: frozen }
+    visual_adapter: { parameter_mode: full }
+    ctc_head: { parameter_mode: full }
+    # Constructed and checkpointed, but bypassed by ctc_only forward.
+    ctc_codebook: { parameter_mode: frozen }
+    visual_position_embedding: { parameter_mode: frozen }
+    visual_boundary_embeddings: { parameter_mode: frozen }
+
+  optimization:
+    visual_adapter:
+      learning_rate: 1.0e-4
+      weight_decay: 0.05
+    ctc_head:
+      learning_rate: 3.0e-4
+      weight_decay: 0.01
+
+  training_args:
+    # Standard CTC jobs use 2 GPUs, giving an effective batch of 4. Keep
+    # accumulation disabled for the first run so update cadence matches the
+    # previous training setup.
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 1
+    metric_for_best_model: eval_ctc_wer
+    greater_is_better: false
+    # Evaluate roughly ten times over the complete run, independent of the
+    # eventual batch size and number of workers.
+    eval_steps: 0.1
+    # Only the adapter and CTC head participate in the graph.
+    ddp_find_unused_parameters: false

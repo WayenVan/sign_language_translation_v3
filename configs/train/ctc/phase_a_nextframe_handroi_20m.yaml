@@ -7,13 +7,14 @@
 #
 # This constructs the new mandatory-CTC model from pretrained components; it
 # does not load the v5.0 SLT checkpoint. The selected adapter keeps that run's
-# architecture and ~20M adapter budget exactly. Whether the CTC head should be
-# counted inside a new 20M total budget is intentionally left as a separate
-# capacity decision.
+# fusion architecture while narrowing its output/CTC representation from 2560
+# to 1024. Projection ranks remain unchanged so this experiment isolates that
+# representation-width decision.
 
 defaults:
-  - /train/cognition/baseline_ablation
+  - /train/ctc/base
   - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
+  - override /data: ph14t_*x224x224_qwen_single_language
   - override /prompt: diverse_train
   - _self_
 
@@ -21,32 +22,23 @@ model:
   load_from_checkpoint: false
   checkpoint_dir: null
   config:
-    # Capacity knob kept at the checkpoint-compatible width for this first
-    # template. It can now be reduced independently of Qwen's 2560 width.
-    ctc_hidden_size: 2560
+    # Decoupled visual/CTC width. The codebook still emits Qwen's 2560 width.
+    ctc_hidden_size: 1024
+    visual_adapter_kwargs:
+      output_dim: 1024
     # Fixed for the first template. Training uses a differentiable soft
     # codebook only in joint mode; Phase A bypasses the codebook entirely.
     ctc_codebook_training_mode: soft
     ctc_codebook_default_temperature: 1.0
 
 engine:
-  # One visual/CTC forward, no codebook and no Qwen execution.
-  forward_mode: ctc_only
-
-  trainability:
-    llm: { parameter_mode: frozen, runtime_mode: eval }
-    visual_backbone: { parameter_mode: frozen, runtime_mode: eval }
-    visual_adapter: { parameter_mode: full, runtime_mode: train }
-    ctc_head: { parameter_mode: full }
-    # Constructed and initialized for checkpoint completeness, but unused by
-    # the ctc_only forward path.
-    ctc_codebook: { parameter_mode: frozen }
-    visual_position_embedding: { parameter_mode: frozen }
-    visual_boundary_embeddings: { parameter_mode: frozen }
-
   training_args:
     output_dir: outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-20m
-    metric_for_best_model: eval_ctc_wer
-    greater_is_better: false
-    # The LLM is bypassed, so unused-parameter discovery is unnecessary.
-    ddp_find_unused_parameters: false
+    dataloader_num_workers: 8
+    logging_steps: 15
+
+data:
+  language: de
+  processor:
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
