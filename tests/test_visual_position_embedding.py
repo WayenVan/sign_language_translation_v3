@@ -122,6 +122,21 @@ def test_a_non_string_mode_is_rejected():
         _slt_config(visual_position_embedding_type=3)
 
 
+def test_ctc_hidden_size_drives_pre_ctc_modules(registered_stub_components):
+    config = _slt_config(
+        ctc_hidden_size=8,
+        visual_position_embedding_type="learned",
+    )
+    llm = Qwen3ForCausalLM(_llm_config())
+    mark_module_tree_as_initialized(llm)
+
+    model = SltModel(config, llm=llm)
+
+    assert model.ctc_head.in_features == 8
+    assert model.visual_position_embedding.embedding_dim == 8
+    assert model.ctc_codebook.qwen_hidden_size == HIDDEN_SIZE
+
+
 # --------------------------------------------------------------------------
 # What each mode puts in the model and in the checkpoint
 # --------------------------------------------------------------------------

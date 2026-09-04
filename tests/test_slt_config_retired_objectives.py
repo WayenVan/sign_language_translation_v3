@@ -60,6 +60,38 @@ def test_ctc_codebook_training_modes_are_serialized(mode):
     assert config.ctc_codebook_default_temperature == 0.5
 
 
+def test_ctc_hidden_size_defaults_to_llm_width_and_can_be_decoupled():
+    default_config = SltConfig(
+        llm_model_name_or_path="Qwen/Qwen3-test",
+        llm_config=_llm_config(),
+        ctc_vocab_size=4,
+        ctc_blank_id=0,
+    )
+    decoupled_config = SltConfig(
+        llm_model_name_or_path="Qwen/Qwen3-test",
+        llm_config=_llm_config(),
+        ctc_vocab_size=4,
+        ctc_blank_id=0,
+        ctc_hidden_size=8,
+    )
+
+    assert default_config.ctc_hidden_size == 16
+    assert decoupled_config.hidden_size == 16
+    assert decoupled_config.ctc_hidden_size == 8
+
+
+def test_ctc_hidden_size_must_match_declared_adapter_output_width():
+    with pytest.raises(ValueError, match="output_dim must match ctc_hidden_size"):
+        SltConfig(
+            llm_model_name_or_path="Qwen/Qwen3-test",
+            llm_config=_llm_config(),
+            visual_adapter_kwargs={"output_dim": 16},
+            ctc_vocab_size=4,
+            ctc_blank_id=0,
+            ctc_hidden_size=8,
+        )
+
+
 def test_ctc_codebook_rejects_invalid_runtime_config():
     with pytest.raises(ValueError, match="ctc_codebook_training_mode"):
         SltConfig(

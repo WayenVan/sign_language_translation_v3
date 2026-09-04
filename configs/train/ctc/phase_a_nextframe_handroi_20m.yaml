@@ -21,6 +21,9 @@ model:
   load_from_checkpoint: false
   checkpoint_dir: null
   config:
+    # Capacity knob kept at the checkpoint-compatible width for this first
+    # template. It can now be reduced independently of Qwen's 2560 width.
+    ctc_hidden_size: 2560
     # Fixed for the first template. Training uses a differentiable soft
     # codebook only in joint mode; Phase A bypasses the codebook entirely.
     ctc_codebook_training_mode: soft

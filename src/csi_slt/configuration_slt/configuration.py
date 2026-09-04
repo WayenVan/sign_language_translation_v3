@@ -66,6 +66,7 @@ class SltConfig(PretrainedConfig):
         ctc_loss_weight: float = 0.0,
         ctc_vocab_size: Optional[int] = None,
         ctc_blank_id: Optional[int] = None,
+        ctc_hidden_size: Optional[int] = None,
         ctc_codebook_training_mode: str = "soft",
         ctc_codebook_default_temperature: float = 1.0,
         video_bidirectional_attention: Optional[bool] = None,
@@ -116,7 +117,8 @@ class SltConfig(PretrainedConfig):
                 ``"token_sampler_v2"``, and ``"dinoframe"``. The historical
                 default ``"linear"`` is not a registered key.
             visual_adapter_kwargs: Keyword arguments unpacked into the selected
-                adapter constructor. Its output width must match ``hidden_size``
+                adapter constructor. Its output width must match
+                ``ctc_hidden_size``
                 and its temporal downsampling must agree with
                 ``video_token_scale``.
             ctc_loss_weight: Coefficient applied to the CTC loss when summed
@@ -129,6 +131,10 @@ class SltConfig(PretrainedConfig):
             ctc_blank_id: Token id used as the CTC blank symbol, valid within
                 ``[0, ctc_vocab_size)``. Required for every model; it is
                 dataset-tokenizer-specific and not assumed to be ``0``.
+            ctc_hidden_size: Width of the visual adapter output and CTC head
+                input. It is independent of the language-model hidden size;
+                ``None`` preserves the previous behavior by using the language
+                model hidden size.
             ctc_codebook_training_mode: Codebook selection rule used while the
                 model is in training mode: differentiable ``"soft"``,
                 straight-through Gumbel ``"straight_through"``, or hard
@@ -150,7 +156,7 @@ class SltConfig(PretrainedConfig):
                 model, which applies its own RoPE on top of it. ``"learned"``
                 (the default, and what ``None`` resolves to, so existing
                 checkpoints are unaffected) adds a trainable
-                ``MAX_TOKEN_LENGTH x hidden_size`` table. ``"none"`` adds
+                ``MAX_TOKEN_LENGTH x ctc_hidden_size`` table. ``"none"`` adds
                 nothing and leaves the temporal order entirely to RoPE.
                 ``"sincos"`` adds a fixed sinusoidal table, whose rows are
                 L2-normalized so its magnitude matches the learned table at
@@ -297,6 +303,19 @@ class SltConfig(PretrainedConfig):
         # Compatibility alias for the SLT projection modules. Its source of
         # truth is the embedded LLM text configuration.
         self.hidden_size = text_hidden_size
+        if ctc_hidden_size is None:
+            ctc_hidden_size = text_hidden_size
+        if isinstance(ctc_hidden_size, bool) or not isinstance(ctc_hidden_size, int):
+            raise TypeError("ctc_hidden_size must be an int or None")
+        if ctc_hidden_size <= 0:
+            raise ValueError("ctc_hidden_size must be positive")
+        self.ctc_hidden_size = ctc_hidden_size
+        adapter_output_dim = self.visual_adapter_kwargs.get("output_dim")
+        if adapter_output_dim is not None and adapter_output_dim != ctc_hidden_size:
+            raise ValueError(
+                "visual_adapter_kwargs.output_dim must match ctc_hidden_size: "
+                f"{adapter_output_dim} != {ctc_hidden_size}"
+            )
 
         self.video_token_scale = video_token_scale
         self.num_extra_tokens = None

@@ -278,17 +278,17 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # a ``visual_position_embedding.*`` entry at all.
         position_embedding_type = config.visual_position_embedding_type
         self.visual_position_embedding = (
-            nn.Embedding(self.MAX_TOKEN_LENGTH, self.config.hidden_size)
+            nn.Embedding(self.MAX_TOKEN_LENGTH, self.config.ctc_hidden_size)
             if position_embedding_type == "learned"
             else None
         )
         # Non-persistent: the table is a pure function of MAX_TOKEN_LENGTH and
-        # hidden_size, so serializing it would only add weight to every
+        # ctc_hidden_size, so serializing it would only add weight to every
         # checkpoint and let a stale copy override the formula on reload.
         self.register_buffer(
             "visual_position_table",
             self._build_sincos_position_table(
-                self.MAX_TOKEN_LENGTH, self.config.hidden_size
+                self.MAX_TOKEN_LENGTH, self.config.ctc_hidden_size
             )
             if position_embedding_type == "sincos"
             else None,
@@ -298,7 +298,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # the language model. Its classifier and semantic codebook stay
         # separate because they optimize different geometry.
         self.ctc_head = nn.Linear(
-            self.config.hidden_size,
+            self.config.ctc_hidden_size,
             config.ctc_vocab_size,
         )
         self.ctc_codebook = CTCCodebookBridge(
