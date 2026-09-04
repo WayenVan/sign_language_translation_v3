@@ -111,6 +111,8 @@ def test_native_llm_tied_weights_survive_full_checkpoint_round_trip(
         visual_adapter_kwargs={},
         video_bidirectional_attention=False,
         visual_position_embedding_type="none",
+        ctc_vocab_size=4,
+        ctc_blank_id=0,
     )
     model = SltModel(config)
 

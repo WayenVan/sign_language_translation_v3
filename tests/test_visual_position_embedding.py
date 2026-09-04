@@ -47,6 +47,8 @@ def _slt_config(**kwargs):
         visual_backbone_type="test",
         visual_adapter_type="test",
         video_soft_token_id=0,
+        ctc_vocab_size=4,
+        ctc_blank_id=0,
         **kwargs,
     )
 

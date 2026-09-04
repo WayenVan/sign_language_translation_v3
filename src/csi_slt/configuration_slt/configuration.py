@@ -7,6 +7,7 @@ from transformers import AutoConfig
 # injected into the language model. The language model already applies RoPE over
 # the whole sequence, so this is a *second*, adapter-side position signal.
 VISUAL_POSITION_EMBEDDING_TYPES = ("learned", "none", "sincos")
+CTC_CODEBOOK_TRAINING_MODES = ("soft", "straight_through", "argmax")
 
 
 class SltConfig(PretrainedConfig):
@@ -62,10 +63,11 @@ class SltConfig(PretrainedConfig):
         visual_backbone_config: Optional[Dict[str, Any]] = None,
         visual_adapter_type: str = "linear",
         visual_adapter_kwargs: Optional[Dict[str, Any]] = None,
-        ctc_enabled: bool = False,
         ctc_loss_weight: float = 0.0,
         ctc_vocab_size: Optional[int] = None,
         ctc_blank_id: Optional[int] = None,
+        ctc_codebook_training_mode: str = "soft",
+        ctc_codebook_default_temperature: float = 1.0,
         video_bidirectional_attention: Optional[bool] = None,
         visual_position_embedding_type: Optional[str] = None,
         **kwargs: Any,
@@ -117,21 +119,23 @@ class SltConfig(PretrainedConfig):
                 adapter constructor. Its output width must match ``hidden_size``
                 and its temporal downsampling must agree with
                 ``video_token_scale``.
-            ctc_enabled: Whether the model builds and trains a CTC head over
-                the visual tokens. When ``False`` (the default) no CTC head is
-                constructed and ``ctc_loss_weight``/``ctc_vocab_size`` are
-                inert.
             ctc_loss_weight: Coefficient applied to the CTC loss when summed
-                with the other training objectives. Only meaningful when
-                ``ctc_enabled`` is ``True``.
+                with the language-model loss. Set it to zero for a phase that
+                does not optimize the CTC objective; the CTC head and codebook
+                remain mandatory model components.
             ctc_vocab_size: Vocabulary size of the CTC head's output
                 projection, i.e. the size of the word-level CTC tokenizer
-                (including the blank token). Required when ``ctc_enabled`` is
-                ``True``.
+                (including the blank token). Required for every model.
             ctc_blank_id: Token id used as the CTC blank symbol, valid within
-                ``[0, ctc_vocab_size)``. Required when ``ctc_enabled`` is
-                ``True``; it is dataset-tokenizer-specific and not assumed to
-                be ``0``.
+                ``[0, ctc_vocab_size)``. Required for every model; it is
+                dataset-tokenizer-specific and not assumed to be ``0``.
+            ctc_codebook_training_mode: Codebook selection rule used while the
+                model is in training mode: differentiable ``"soft"``,
+                straight-through Gumbel ``"straight_through"``, or hard
+                ``"argmax"``. Evaluation always uses argmax.
+            ctc_codebook_default_temperature: Default softmax/Gumbel
+                temperature used during training when forward does not provide
+                a step-specific override. Ignored by argmax and evaluation.
             video_bidirectional_attention: Whether video tokens attend to each
                 other in both directions during prefill, instead of only
                 causally. ``None`` means "not recorded by this checkpoint" and
@@ -181,6 +185,10 @@ class SltConfig(PretrainedConfig):
             "visual_semantic_encoder_type",
             "visual_semantic_encoder_config",
             "attention_diversity_loss_weight",
+            # CTC is mandatory in this model generation. Accept the retired
+            # switch from older YAML/config files without restoring an
+            # attribute that appears capable of disabling the architecture.
+            "ctc_enabled",
         ):
             kwargs.pop(retired_key, None)
 
@@ -218,38 +226,41 @@ class SltConfig(PretrainedConfig):
         self.visual_adapter_kwargs = (
             visual_adapter_kwargs if visual_adapter_kwargs is not None else {}
         )
-        if not isinstance(ctc_enabled, bool):
-            raise TypeError("ctc_enabled must be a bool")
         if isinstance(ctc_loss_weight, bool) or not isinstance(
             ctc_loss_weight, (int, float)
         ):
             raise TypeError("ctc_loss_weight must be a real number")
         if ctc_loss_weight < 0.0:
             raise ValueError("ctc_loss_weight must be non-negative")
-        if ctc_vocab_size is not None and (
-            isinstance(ctc_vocab_size, bool) or not isinstance(ctc_vocab_size, int)
-        ):
-            raise TypeError("ctc_vocab_size must be an int or None")
-        if ctc_vocab_size is not None and ctc_vocab_size <= 0:
+        if isinstance(ctc_vocab_size, bool) or not isinstance(ctc_vocab_size, int):
+            raise TypeError("ctc_vocab_size must be an int")
+        if ctc_vocab_size <= 0:
             raise ValueError("ctc_vocab_size must be positive")
-        if ctc_enabled and ctc_vocab_size is None:
-            raise ValueError("ctc_vocab_size is required when ctc_enabled is True")
-        if ctc_blank_id is not None and (
-            isinstance(ctc_blank_id, bool) or not isinstance(ctc_blank_id, int)
-        ):
-            raise TypeError("ctc_blank_id must be an int or None")
-        if ctc_enabled and ctc_blank_id is None:
-            raise ValueError("ctc_blank_id is required when ctc_enabled is True")
-        if (
-            ctc_blank_id is not None
-            and ctc_vocab_size is not None
-            and not 0 <= ctc_blank_id < ctc_vocab_size
-        ):
+        if isinstance(ctc_blank_id, bool) or not isinstance(ctc_blank_id, int):
+            raise TypeError("ctc_blank_id must be an int")
+        if not 0 <= ctc_blank_id < ctc_vocab_size:
             raise ValueError("ctc_blank_id must be in [0, ctc_vocab_size)")
-        self.ctc_enabled = ctc_enabled
         self.ctc_loss_weight = float(ctc_loss_weight)
         self.ctc_vocab_size = ctc_vocab_size
         self.ctc_blank_id = ctc_blank_id
+        if not isinstance(ctc_codebook_training_mode, str):
+            raise TypeError("ctc_codebook_training_mode must be a str")
+        if ctc_codebook_training_mode not in CTC_CODEBOOK_TRAINING_MODES:
+            raise ValueError(
+                "ctc_codebook_training_mode must be one of "
+                f"{CTC_CODEBOOK_TRAINING_MODES}, got "
+                f"{ctc_codebook_training_mode!r}"
+            )
+        if isinstance(ctc_codebook_default_temperature, bool) or not isinstance(
+            ctc_codebook_default_temperature, (int, float)
+        ):
+            raise TypeError("ctc_codebook_default_temperature must be a real number")
+        if ctc_codebook_default_temperature < 0.1:
+            raise ValueError("ctc_codebook_default_temperature must be >= 0.1")
+        self.ctc_codebook_training_mode = ctc_codebook_training_mode
+        self.ctc_codebook_default_temperature = float(
+            ctc_codebook_default_temperature
+        )
 
         if video_bidirectional_attention is None:
             # A deserialized configuration always carries ``transformers_version``;
