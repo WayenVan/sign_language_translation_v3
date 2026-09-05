@@ -1,0 +1,19 @@
+# @package _global_
+
+# Phase B, concrete run: continue the PH14T gloss codebook from Phase A's best
+# checkpoint and train ONLY the codebook (+ boundary embeddings) against a
+# frozen Qwen3-4B. All behaviour lives in phase_b_base; this file only binds a
+# checkpoint and an output directory. It is architecture-agnostic on purpose --
+# the visual model is whatever the checkpoint holds.
+
+defaults:
+  - /train/ctc/phase_b_base
+  - _self_
+
+model:
+  # Override on the CLI to resume from a different Phase-A checkpoint.
+  checkpoint_dir: /mnt/scratch/users/2533494w/slt_outputs/ctc-phase-a-qwen3-4b-cradio-l-nextframe-handroi-conv-20m-gloss/checkpoint-29548
+
+engine:
+  training_args:
+    output_dir: outputs/ctc-phase-b-gloss-codebook-frozen-llm

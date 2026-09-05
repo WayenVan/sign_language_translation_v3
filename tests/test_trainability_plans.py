@@ -27,16 +27,36 @@ def test_slt_plan_defaults_frozen_runtime_components_to_eval():
     assert plan["ctc_head"].resolved_runtime_mode is None
 
 
-def test_auto_runtime_tracks_parameter_mode_and_can_be_overridden():
+def test_derived_runtime_tracks_parameter_mode_and_can_be_overridden():
     plan = SltTrainabilityPlan.from_mapping(
         _mapping(
             llm={"parameter_mode": "lora"},
             visual_adapter={"parameter_mode": "full", "runtime_mode": "eval"},
+            visual_backbone={"parameter_mode": "full", "runtime_mode": "follow"},
         )
     )
 
-    assert plan["llm"].resolved_runtime_mode == "train"
+    assert plan["llm"].resolved_runtime_mode == "follow"
     assert plan["visual_adapter"].resolved_runtime_mode == "eval"
+    assert plan["visual_backbone"].resolved_runtime_mode == "follow"
+
+
+def test_frozen_component_can_still_be_asked_to_follow():
+    plan = SltTrainabilityPlan.from_mapping(
+        _mapping(llm={"parameter_mode": "frozen", "runtime_mode": "follow"})
+    )
+    assert plan["llm"].resolved_runtime_mode == "follow"
+
+
+@pytest.mark.parametrize("retired", ["auto", "train"])
+def test_retired_runtime_vocabulary_is_rejected(retired):
+    """``auto`` is now spelled by omission, and ``train`` by ``follow``."""
+    with pytest.raises(ValueError, match="must be follow or eval"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(
+                visual_adapter={"parameter_mode": "full", "runtime_mode": retired}
+            )
+        )
 
 
 @pytest.mark.parametrize("n_layers", [None, 0, True])

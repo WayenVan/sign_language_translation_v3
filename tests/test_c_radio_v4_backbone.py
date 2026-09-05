@@ -123,7 +123,7 @@ def test_trainable_adapter_does_not_implicitly_change_runtime_mode():
     assert encoder.radio_model.weight.requires_grad is False
     assert encoder.radio_model.lora_adapter.weight.requires_grad is True
 
-    backbone.set_runtime_mode("train")
+    backbone.set_runtime_mode("follow")
     assert encoder.training is True
 
 
@@ -210,11 +210,13 @@ def test_runtime_mode_is_validated():
 
     with pytest.raises(ValueError, match="runtime_mode"):
         backbone.set_runtime_mode("auto")
+    with pytest.raises(ValueError, match="runtime_mode"):
+        backbone.set_runtime_mode("train")
 
 
 @pytest.mark.parametrize(
     ("runtime_mode", "expected_training"),
-    [("eval", False), ("train", True)],
+    [("eval", False), ("follow", True)],
 )
 def test_engine_plan_controls_lora_runtime_mode(runtime_mode, expected_training):
     backbone = CRadioV4Backbone({"id": "fake"}, c_radio_v4=_FakeEncoder())

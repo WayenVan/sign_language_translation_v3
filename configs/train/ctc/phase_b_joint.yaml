@@ -1,0 +1,57 @@
+# @package _global_
+
+# Phase B, joint variant: identical to phase_b_codebook except the visual
+# adapter is unfrozen and co-adapts to the translation objective alongside the
+# codebook. The SINGLE variable versus phase_b_codebook is
+# visual_adapter (frozen -> full) -- run both and read their dev BLEU against
+# each other.
+#
+# Hypothesis: a fixed Phase-A gloss front-end caps translation quality, and
+# letting the adapter move toward what actually helps the LLM read the codebook
+# beats freezing it. Repo precedent points this way --
+# configs/train/cognition/stage2_llm_lora.yaml documents that every v4.0
+# continuation that froze the adapter lost ground and every one that kept it
+# trainable gained (there the co-moving consumer was LLM LoRA; here it is the
+# codebook -> LLM path).
+#
+# Anti-drift, from that same recipe:
+#   * adapter body at 1e-5 -- 10x below the codebook's 1e-4, so the front-end
+#     drifts slowly relative to the codebook settling and the two do not chase
+#     each other.
+#   * residual gates stay responsive at 1e-4 (10x the adapter body, matching
+#     Phase A), decay-free.
+#   * ctc_head stays FROZEN as a fixed gloss probe -- the adapter must keep
+#     producing features Phase A's classifier can still decode. ctc_loss_weight
+#     is locked at 1.0 by the checkpoint (load_from_checkpoint ignores
+#     model.config), so the CTC term is a strong, always-on anchor on the
+#     adapter, which is the point.
+#
+# LLM still frozen: this isolates front-end co-adaptation from LLM adaptation.
+# LLM LoRA is the next stage, not this one. Overfitting watch: the adapter takes
+# gradient against only ~7k sentences -- if the train-probe / dev BLEU gap opens
+# early, cut num_train_epochs or drop the adapter rate to 5e-6.
+
+defaults:
+  - /train/ctc/phase_b_codebook
+  - _self_
+
+engine:
+  trainability:
+    # The only line that differs from phase_b_codebook.
+    visual_adapter: { parameter_mode: full }
+
+  optimization:
+    # ctc_codebook (lr 1e-4, wd 0) is inherited from phase_b_base.
+    visual_adapter:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+      parameter_groups:
+        gates:
+          learning_rate: 1.0e-4
+          weight_decay: 0.0
+
+  training_args:
+    output_dir: outputs/ctc-phase-b-nextframe-handroi-conv-20m-gloss-codebook-jointadapter-ep30-anneal0.25-0905
+    # A pretrained adapter takes gradient from step 0; ramp a little longer than
+    # the codebook-only run's 0.03.
+    warmup_steps: 0.05

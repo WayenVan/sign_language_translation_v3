@@ -14,10 +14,12 @@ hydra:
 
 engine:
   trainability:
-    # Preserve standard LoRA training behavior, including configured dropout.
-    llm: {parameter_mode: lora, runtime_mode: train}
+    # Both follow the model's train/eval state, which is what an omitted
+    # runtime_mode derives for a non-frozen component; that is also what keeps
+    # the configured LoRA dropout active.
+    llm: {parameter_mode: lora}
     visual_backbone: {parameter_mode: frozen}
-    visual_adapter: {parameter_mode: full, runtime_mode: train}
+    visual_adapter: {parameter_mode: full}
     ctc_head: {parameter_mode: frozen}
     ctc_codebook: {parameter_mode: full}
     visual_position_embedding: {parameter_mode: frozen}

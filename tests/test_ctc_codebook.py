@@ -158,6 +158,8 @@ def test_blank_logging_scalars_are_detached_and_include_pad_drift():
     assert set(output.logging_scalars) == {
         "blank_embedding_norm",
         "blank_pad_cosine_similarity",
+        "mean_top1_prob",
+        "mean_top1_prob_nonblank",
     }
     assert all(value.numel() == 1 for value in output.logging_scalars.values())
     assert all(
@@ -165,6 +167,42 @@ def test_blank_logging_scalars_are_detached_and_include_pad_drift():
     )
     torch.testing.assert_close(
         output.logging_scalars["blank_pad_cosine_similarity"], torch.tensor(1.0)
+    )
+
+
+def test_top1_prob_scalars_track_selection_sharpness():
+    # blank_id=0. Frame 0 leans blank, frame 1 leans a real gloss; the second
+    # logit gap is deliberately smaller so lowering the temperature sharpens it.
+    logits = torch.tensor([[6.0, 0.0, 0.0, 2.0], [0.0, 0.0, 3.0, 1.5]])
+
+    soft_warm = _bridge()(logits, torch.tensor([2]), temperature=1.0)
+    soft_cool = _bridge()(logits, torch.tensor([2]), temperature=0.25)
+    hard = _bridge().eval()(logits, torch.tensor([2]))
+
+    # Cooling raises both means; argmax pins them at 1.0.
+    assert (
+        soft_warm.logging_scalars["mean_top1_prob"]
+        < soft_cool.logging_scalars["mean_top1_prob"]
+        < 1.0
+    )
+    torch.testing.assert_close(
+        hard.logging_scalars["mean_top1_prob"], torch.tensor(1.0)
+    )
+    # The non-blank figure only averages frame 1 (argmax == gloss 2).
+    torch.testing.assert_close(
+        soft_cool.logging_scalars["mean_top1_prob_nonblank"],
+        soft_cool.token_distribution[1].max(),
+    )
+
+
+def test_top1_prob_nonblank_is_zero_when_every_frame_is_blank():
+    output = _bridge().eval()(
+        torch.tensor([[9.0, 0.0, 0.0, 0.0]]), torch.tensor([1])
+    )
+
+    assert output.predicted_ids.tolist() == [0]
+    torch.testing.assert_close(
+        output.logging_scalars["mean_top1_prob_nonblank"], torch.tensor(0.0)
     )
 
 

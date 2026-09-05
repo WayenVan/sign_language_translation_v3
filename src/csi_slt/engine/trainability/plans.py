@@ -1,4 +1,16 @@
-"""Validated, immutable descriptions of SLT component trainability."""
+"""Validated, immutable descriptions of SLT component trainability.
+
+Plans contain user intent only. They do not inspect models, change
+``requires_grad``, or maintain module ``train``/``eval`` modes; those jobs
+belong to trainability policies and model runtime state.
+
+What differs per component is data, not code: which ``parameter_mode`` values
+make sense, whether the component has a runtime mode at all, and which extra
+options it accepts. ``_COMPONENT_RULES`` is that data, and one
+``ComponentTrainability`` validates itself against its own row -- so adding a
+component is a new entry here, not a new dataclass with its own hand-written
+``__post_init__``.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +20,9 @@ from types import MappingProxyType
 from typing import Any
 
 
+# Keep in sync with `engine.optimization.OPTIMIZABLE_COMPONENTS`: both plans
+# partition the model's parameters, and an optimizer override is validated
+# against the trainability decision made for the same component name.
 _COMPONENT_RULES = {
     "llm": {
         "parameter_modes": frozenset({"frozen", "full", "lora"}),
@@ -51,7 +66,21 @@ _COMPONENT_RULES = {
 
 @dataclass(frozen=True)
 class ComponentTrainability:
-    """Normalized parameter and runtime intent for one component."""
+    """Normalized parameter and runtime intent for one component.
+
+    ``runtime_mode`` is a permission, not a state: it says whether the
+    component may enter training mode *when the model itself does*, and
+    ``model.eval()`` always wins over it. Hence ``follow`` rather than
+    ``train`` -- nothing here pins a module into training mode.
+
+    * omitted (the default): derived from ``parameter_mode`` -- ``frozen``
+      stays deterministic, anything trained follows the model.
+    * ``follow``: follow the model's own ``train()``/``eval()`` state.
+    * ``eval``: stay in eval even while the model trains. This is the one
+      combination the derivation cannot express: parameters that receive
+      gradients while the module's stochastic behavior stays off, such as a
+      LoRA visual backbone whose base encoder must stay deterministic.
+    """
 
     name: str
     parameter_mode: str
@@ -85,10 +114,10 @@ class ComponentTrainability:
 
         runtime_mode = config.get("runtime_mode")
         if rule["supports_runtime"]:
-            runtime_mode = "auto" if runtime_mode is None else runtime_mode
-            if runtime_mode not in ("auto", "eval", "train"):
+            if runtime_mode is not None and runtime_mode not in ("follow", "eval"):
                 raise ValueError(
-                    f"runtime_mode for {name} must be auto, eval, or train"
+                    f"runtime_mode for {name} must be follow or eval; omit it to "
+                    "derive the mode from parameter_mode"
                 )
         elif runtime_mode is not None:
             raise ValueError(f"{name} does not support runtime_mode")
@@ -138,12 +167,25 @@ class ComponentTrainability:
                 raise TypeError(f"visual_backbone.options.{key} must be a boolean")
 
     @property
+    def supports_runtime_mode(self) -> bool:
+        """Whether this component has a runtime mode at all."""
+        return bool(_COMPONENT_RULES[self.name]["supports_runtime"])
+
+    @property
     def resolved_runtime_mode(self) -> str | None:
-        if self.runtime_mode is None:
+        """``follow`` or ``eval``; ``None`` for components without a runtime mode.
+
+        A stated ``runtime_mode`` wins. Omitting it derives the mode from
+        ``parameter_mode``, which is what every current run wants: a frozen
+        component stays deterministic, a trained one follows the model. The
+        derivation is not a value one can write, so there is no spelling of the
+        default that could drift away from it.
+        """
+        if not self.supports_runtime_mode:
             return None
-        if self.runtime_mode != "auto":
+        if self.runtime_mode is not None:
             return self.runtime_mode
-        return "eval" if self.parameter_mode == "frozen" else "train"
+        return "eval" if self.parameter_mode == "frozen" else "follow"
 
     def option(self, name: str, default: Any = None) -> Any:
         return self.options.get(name, default)

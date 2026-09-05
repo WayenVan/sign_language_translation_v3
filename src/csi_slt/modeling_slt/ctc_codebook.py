@@ -93,6 +93,7 @@ class CTCCodebookBridge(nn.Module):
 
         distribution = self._select_distribution(ctc_logits, mode, temperature)
         blank_probability = distribution[:, self.blank_id]
+        predicted_ids = distribution.argmax(dim=-1)
 
         # Blank owns a normal, trainable codebook row initialized from the
         # LLM's pad embedding. It remains a real prefix slot rather than pretending
@@ -103,9 +104,9 @@ class CTCCodebookBridge(nn.Module):
             embeddings=embeddings,
             lengths=lengths,
             token_distribution=distribution,
-            predicted_ids=distribution.argmax(dim=-1),
+            predicted_ids=predicted_ids,
             blank_probability=blank_probability,
-            logging_scalars=self._build_logging_scalars(),
+            logging_scalars=self._build_logging_scalars(distribution, predicted_ids),
         )
 
     def assert_initialized(self) -> None:
@@ -186,8 +187,19 @@ class CTCCodebookBridge(nn.Module):
             return mean
         return mean * (sub_tokens.norm(dim=-1).mean() / mean_norm)
 
-    def _build_logging_scalars(self) -> dict[str, torch.Tensor]:
-        """Diagnostics that genuinely depend on the codebook's own weights.
+    def _build_logging_scalars(
+        self, distribution: torch.Tensor, predicted_ids: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Diagnostics for the codebook bridge.
+
+        Two families. Codebook-weight drift: the blank row's norm and its
+        cosine to the pad embedding it was seeded from. Selection sharpness:
+        the mean top-1 mass of the temperature-selected distribution, overall
+        and over non-blank frames only. ``mean_top1_prob_nonblank`` is the one
+        to watch during a temperature anneal -- it says how close the content
+        frames are to the one-hot regime evaluation always uses, while blank
+        frames (the majority, and already near-peaky) dominate the overall
+        mean and hide that. In eval both figures are 1.0 by construction.
 
         Blank-frequency stats (probability mean, argmax ratio) live in
         ``SltModel`` instead: they are pure functions of the CTC head's raw
@@ -204,6 +216,15 @@ class CTCCodebookBridge(nn.Module):
             blank_embedding.unsqueeze(0),
             reference.unsqueeze(0),
         ).squeeze(0).detach()
+
+        top1_prob = distribution.max(dim=-1).values
+        scalars["mean_top1_prob"] = top1_prob.mean().detach()
+        non_blank = predicted_ids != self.blank_id
+        scalars["mean_top1_prob_nonblank"] = (
+            top1_prob[non_blank].mean().detach()
+            if bool(non_blank.any())
+            else top1_prob.new_zeros(())
+        )
         return scalars
 
     def _select_distribution(

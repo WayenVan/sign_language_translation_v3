@@ -1,0 +1,153 @@
+# @package _global_
+
+# Shared Phase-B behavior: joint training that teaches a FROZEN Qwen3-4B to
+# read the CTC codebook prefix built in Phase A. The only parameters that move
+# are the codebook itself (~2.86M) and the start/end video boundary embeddings
+# (~5k) -- this is embedding/prompt tuning, a cheap sanity gate before any LLM
+# LoRA.
+#
+# Deliberately does NOT inherit /train/base. A Phase-B run restores its entire
+# model -- architecture and every weight -- from a Phase-A checkpoint, so
+# /train/base only contributes a dead `model.config` block and a multilingual
+# `/data` default that is wrong here. Everything /train/base provides that
+# Phase B still needs is reproduced below, and nothing about the visual
+# architecture appears in this file or its children.
+#
+# Not runnable alone: `model.checkpoint_dir` is mandatory. Child configs set
+# that plus an output_dir.
+
+defaults:
+  - /data: ph14t_*x224x224_qwen_single_language
+  - /datamodule: standard
+  - /prompt: diverse_train
+  - /peft: none
+  - override /hydra/hydra_logging: none
+  - override /hydra/job_logging: none
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  sweep:
+    dir: .
+  output_subdir: null
+
+model:
+  load_from_checkpoint: true
+  # The Phase-A checkpoint to continue from. initialize_model reads the full
+  # architecture and weights from here and ignores any `model.config`.
+  checkpoint_dir: ???
+
+data:
+  # PH14T is German only.
+  language: de
+  processor:
+    # Must match the checkpoint model's video_token_scale (0.5 for the T/2
+    # adapters) or the visual/text token-count assert fails.
+    video_token_scale: 0.5
+    num_extra_video_tokens: 2
+    video_processor:
+      # C-RADIO normalizes internally; the data group defaults this to true.
+      do_normalize: false
+      do_resize: false
+
+engine:
+  # Full translation path: CTC -> soft codebook -> Qwen.generate().
+  forward_mode: joint
+
+  trainability:
+    llm: { parameter_mode: frozen }
+    visual_backbone: { parameter_mode: frozen }
+    # Frozen with the CTC head: Phase A's dev WER plateaued by epoch ~15 with a
+    # 0.8% train probe, so there is no generalization headroom left to trade,
+    # and a fixed front-end leaves the codebook as the single moving part.
+    visual_adapter: { parameter_mode: frozen }
+    # Frozen. With the adapter frozen too the CTC loss has no trainable
+    # parameter upstream, so ctc_loss_weight=1.0 (carried in from the
+    # checkpoint, unchangeable here) only keeps eval_ctc_wer as a free monitor.
+    ctc_head: { parameter_mode: frozen }
+    ctc_codebook: { parameter_mode: full }
+    # visual_position_embedding_type=none on these checkpoints -- no module.
+    visual_position_embedding: { parameter_mode: frozen }
+    visual_boundary_embeddings: { parameter_mode: full }
+
+  optimization:
+    ctc_codebook:
+      learning_rate: 1.0e-4
+      # An nn.Embedding weight is not name-excluded from the HF decay split,
+      # and these rows carry meaning from their LLM-embedding initialization --
+      # keep decay off; the temperature anneal is what sharpens selection.
+      weight_decay: 0.0
+
+  # Soft codebook, annealed start -> end over the first 65% of training, then
+  # held near the eval regime for the remaining ~35% (best-checkpoint selection
+  # happens there). Evaluation is ALWAYS hard argmax -- temperature only shapes
+  # the training prefix -- so the anneal exists to shrink that train/eval gap.
+  # end=0.25 (well clear of the min_temperature=0.1 floor) puts confident
+  # frames at ~0.99 and ambiguous content frames at ~0.9; going lower starves
+  # the rare-gloss codebook rows of gradient for little extra sharpness. Watch
+  # ctc_codebook/mean_top1_prob_nonblank to see where the content frames land.
+  ctc_codebook_temperature_schedule:
+    start: 1.0
+    end: 0.25
+    anneal_ratio: 0.65
+    mode: cosine
+
+  # Not a zero-delta start, unlike LoRA: at step 0 the frozen LLM already reads
+  # the initialized codebook, so before_train BLEU is a genuine baseline
+  # ("frozen Qwen reading the codebook init"), not a load-correctness gate.
+  evaluate_before_training: true
+
+  # Overfitting instrument: watch the train-probe / dev BLEU gap. With ~2.9M
+  # trainable parameters it should stay small; if the probe runs away, cut
+  # epochs or the codebook rate.
+  train_probe:
+    every_n_evaluations: 1
+    num_samples: 800
+
+  training_args:
+    do_train: true
+    do_predict: true
+    num_train_epochs: 30
+    per_device_train_batch_size: 2
+    per_device_eval_batch_size: 1
+    # 2 GPUs x batch 2 x accum 4 = effective 16 samples/step, matching Phase A's
+    # update cadence and smoothing the gradient for the one small module.
+    gradient_accumulation_steps: 4
+    report_to: wandb
+    remove_unused_columns: false
+    # Only the codebook and boundary embeddings receive gradients, and both are
+    # used on every forward -- there are no unused trainable parameters.
+    ddp_find_unused_parameters: false
+    save_strategy: best
+    load_best_model_at_end: true
+    save_total_limit: 2
+    metric_for_best_model: eval_overall_weighted_bleu4
+    greater_is_better: true
+    eval_strategy: steps
+    # ~one evaluation per epoch; each runs Qwen.generate() over the full dev
+    # split plus the 800-sentence train probe, so denser is expensive.
+    eval_steps: 0.033
+    logging_steps: 15
+    learning_rate: 1.0e-4
+    # Global fallback for anything without a component override -- here only the
+    # ~5k boundary embeddings, which should not be shrunk toward zero.
+    weight_decay: 0.0
+    warmup_steps: 0.03
+    lr_scheduler_type: cosine
+    max_grad_norm: 1.0
+    # Keep at 0.0: a non-zero factor makes Trainer.compute_loss pop `labels`
+    # and silently drops the CTC term.
+    label_smoothing_factor: 0.0
+    neftune_noise_alpha: null
+    dataloader_num_workers: 8
+    dataloader_drop_last: true
+    disable_tqdm: true
+    auto_output_dir: false
+
+  generation_config:
+    max_new_tokens: 128
+    do_sample: false
+
+  llm_dtype: bfloat16
+  visual_backbone_dtype: auto
