@@ -17,7 +17,7 @@ cd "$SCRIPT_DIR"
 source "$SCRIPT_DIR/.venv/bin/activate"
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
-# Usage: sbatch run_cognition_100step_verify.sh [debug] [share]
+# Usage: sbatch scripts/run_cognition_100step_verify.sh [debug] [share]
 DEBUG=false
 SHARED_DATASET=false
 for arg in "$@"; do
@@ -50,7 +50,7 @@ fi
 if [[ "$SHARED_DATASET" == true ]]; then
   DATASET_PATH="$SCRIPT_DIR/dataset/PHOENIX-2014-T-release-v3"
 else
-  source "$SCRIPT_DIR/prepare_dataset.sh"
+  source "$SCRIPT_DIR/scripts/prepare_dataset.sh"
   DATASET_PATH=$(prepare_dataset \
     "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
     "$HOME/localscratch/ph14t")

@@ -7,7 +7,7 @@
 # running the preprocessing step.
 #
 # Usage:
-#   source prepare_dataset.sh
+#   source scripts/prepare_dataset.sh
 #   prepare_dataset SOURCE_ARCHIVE DATASET_PATH [LOCAL_SCRATCH]
 #
 # Arguments:

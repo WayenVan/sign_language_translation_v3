@@ -17,7 +17,7 @@ SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
 cd "$SCRIPT_DIR"
 
 source "$SCRIPT_DIR/.venv/bin/activate"
-source "$SCRIPT_DIR/prepare_dataset.sh"
+source "$SCRIPT_DIR/scripts/prepare_dataset.sh"
 
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
