@@ -22,7 +22,8 @@ llm_lora_config:
   lora_alpha: 16
   # Raised from the repo's usual 0.05. 7,096 training sentences is the whole
   # budget; dropout is free regularization on the side that is being newly
-  # unfrozen. Requires engine.trainability.llm.runtime_mode=train to be active.
+  # unfrozen. Active as long as engine.trainability.llm resolves to
+  # runtime_mode=follow, which any non-frozen parameter_mode does by default.
   lora_dropout: 0.1
   bias: "none"
   target_modules:

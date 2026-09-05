@@ -27,16 +27,28 @@ def test_slt_plan_defaults_frozen_runtime_components_to_eval():
     assert plan["ctc_head"].resolved_runtime_mode is None
 
 
-def test_auto_runtime_tracks_parameter_mode_and_can_be_overridden():
+def test_derived_runtime_tracks_parameter_mode_and_can_be_overridden():
     plan = SltTrainabilityPlan.from_mapping(
         _mapping(
             llm={"parameter_mode": "lora"},
+            # The one case the derivation cannot express: trained parameters
+            # whose stochastic behavior must stay off.
             visual_adapter={"parameter_mode": "full", "runtime_mode": "eval"},
+            visual_backbone={"parameter_mode": "full", "runtime_mode": "follow"},
         )
     )
 
-    assert plan["llm"].resolved_runtime_mode == "train"
+    assert plan["llm"].resolved_runtime_mode == "follow"
     assert plan["visual_adapter"].resolved_runtime_mode == "eval"
+    assert plan["visual_backbone"].resolved_runtime_mode == "follow"
+
+
+def test_frozen_component_can_still_be_asked_to_follow():
+    plan = SltTrainabilityPlan.from_mapping(
+        _mapping(llm={"parameter_mode": "frozen", "runtime_mode": "follow"})
+    )
+
+    assert plan["llm"].resolved_runtime_mode == "follow"
 
 
 @pytest.mark.parametrize("n_layers", [None, 0, True])
@@ -76,6 +88,19 @@ def test_component_rules_reject_unsupported_modes_and_runtime():
     with pytest.raises(ValueError, match="runtime_mode for llm"):
         SltTrainabilityPlan.from_mapping(
             _mapping(llm={"parameter_mode": "frozen", "runtime_mode": "sometimes"})
+        )
+
+
+@pytest.mark.parametrize("retired", ["auto", "train"])
+def test_retired_runtime_vocabulary_is_rejected(retired):
+    """`auto` is now spelled by omission, and `train` by `follow`.
+
+    Both used to be legal and both were no-ops in every config that wrote
+    them, so a silent acceptance here would keep a dead vocabulary alive.
+    """
+    with pytest.raises(ValueError, match="must be follow or eval"):
+        SltTrainabilityPlan.from_mapping(
+            _mapping(visual_adapter={"parameter_mode": "full", "runtime_mode": retired})
         )
 
 

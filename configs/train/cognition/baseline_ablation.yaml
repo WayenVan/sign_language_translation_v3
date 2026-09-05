@@ -16,8 +16,10 @@ model:
       temporal_scale_factor: 2
 
 engine:
-  optimization:
-    visual_adapter: { learning_rate: 1e-4 }
+  # No per-component optimizer override. The adapter is the only large
+  # trainable component here, so training_args.learning_rate below is its rate;
+  # pinning the same value in engine.optimization would only mean a launcher
+  # override of training_args.learning_rate silently missed the adapter.
   training_args:
     dataloader_num_workers: 8
     eval_steps: 6000

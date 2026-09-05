@@ -31,15 +31,25 @@ engine:
   # components selected here are re-enabled. All seven components must be
   # listed. LoRA structure itself lives in the `peft` group; a `lora`
   # parameter_mode here only unfreezes the adapters that group injected.
-  # `runtime_mode` defaults to `auto` (frozen -> eval, otherwise train) and is
-  # only worth stating where it must diverge from parameter_mode.
+  #
+  # `runtime_mode` is a separate, optional field on llm / visual_backbone /
+  # visual_adapter, and it is a permission rather than a state: `follow` lets a
+  # component enter training mode when the model does, `eval` keeps it
+  # deterministic even then, and `model.eval()` always wins over both. Omitting
+  # it -- as everything below does -- derives it from parameter_mode: frozen
+  # stays in eval, anything trained follows. State it only for the case the
+  # derivation cannot express, a trained component that must stay
+  # deterministic: `visual_backbone: { parameter_mode: lora, runtime_mode: eval }`
+  # trains visual LoRA against a base encoder with its stochastic behavior off.
+  #
+  # On the backbone that case is only honored by C-RADIO, the one backbone that
+  # implements `set_runtime_mode`; the plan's decision reaches a module through
+  # a setter looked up by name, and the other backbones do not define it, so
+  # there a stated runtime_mode validates and then does nothing.
   trainability:
-    llm: { parameter_mode: frozen, runtime_mode: eval }
-    # runtime_mode is currently enforced by C-RADIO only. Keeping it separate
-    # from gradient mode allows visual LoRA to train with a deterministic base
-    # encoder in eval mode.
-    visual_backbone: { parameter_mode: frozen, runtime_mode: eval }
-    visual_adapter: { parameter_mode: full, runtime_mode: train }
+    llm: { parameter_mode: frozen }
+    visual_backbone: { parameter_mode: frozen }
+    visual_adapter: { parameter_mode: full }
     ctc_head: { parameter_mode: full }
     # No module is constructed while visual_position_embedding_type=none.
     visual_position_embedding: { parameter_mode: frozen }

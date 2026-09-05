@@ -22,8 +22,7 @@ model:
       use_temporal_conv: false
 
 engine:
-  optimization:
-    visual_adapter: { learning_rate: 1e-4 }
+  # No per-component optimizer override; see the note in baseline_ablation.yaml.
   training_args:
     dataloader_num_workers: 8
     eval_steps: 6000

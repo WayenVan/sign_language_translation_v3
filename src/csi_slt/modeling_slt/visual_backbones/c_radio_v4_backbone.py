@@ -36,7 +36,8 @@ class CRadioV4Backbone(nn.Module):
         if "freeze_visual_encoder" in config:
             logger.warning(
                 "Ignoring retired C-RADIO freeze_visual_encoder=%r; configure "
-                "engine.trainability.visual_backbone.mode and runtime_mode instead",
+                "engine.trainability.visual_backbone.parameter_mode (and "
+                "runtime_mode, when it must diverge from it) instead",
                 config["freeze_visual_encoder"],
             )
         # Construction starts from the safest standalone state. The training
@@ -66,19 +67,21 @@ class CRadioV4Backbone(nn.Module):
     def train(self, mode: bool = True):
         """Apply the engine-selected encoder runtime mode explicitly."""
         super().train(mode)
-        # Whole-model eval always wins. During training, runtime_mode controls
-        # stochastic encoder behavior independently of parameter gradients.
-        self.visual_encoder.train(mode and self.runtime_mode == "train")
+        # Whole-model eval always wins: `follow` is permission to enter
+        # training mode with the model. During training it controls stochastic
+        # encoder behavior independently of parameter gradients.
+        self.visual_encoder.train(mode and self.runtime_mode == "follow")
         return self
 
     def set_runtime_mode(self, runtime_mode: str) -> None:
-        """Set ``train``/``eval`` behavior without changing requires_grad."""
-        if runtime_mode not in ("eval", "train"):
+        """Set ``follow``/``eval`` behavior without changing requires_grad."""
+        if runtime_mode not in ("eval", "follow"):
             raise ValueError(
-                f"C-RADIO runtime_mode must be 'eval' or 'train', got {runtime_mode!r}"
+                f"C-RADIO runtime_mode must be 'eval' or 'follow', got "
+                f"{runtime_mode!r}"
             )
         self.runtime_mode = runtime_mode
-        self.visual_encoder.train(self.training and runtime_mode == "train")
+        self.visual_encoder.train(self.training and runtime_mode == "follow")
 
     def forward(
         self,

@@ -272,9 +272,10 @@ class SpatialDropoutMean(nn.Module):
 
     A caveat about when this fires: the module follows its parent's ``training``
     flag, and ``SltModel.train()`` puts the visual adapter in train mode only
-    when the trainability plan sets ``visual_adapter.runtime_mode = "train"``.
-    That field defaults to ``"eval"``, so a plan that leaves it alone silently
-    disables this everywhere.
+    when the trainability plan resolves ``visual_adapter.runtime_mode`` to
+    ``"follow"`` -- which an omitted ``runtime_mode`` does for any
+    ``parameter_mode`` other than ``frozen``. Stating ``runtime_mode: eval``,
+    or freezing the adapter, silently disables this everywhere.
     """
 
     def __init__(self, p: float = 0.0) -> None:

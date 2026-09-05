@@ -38,10 +38,12 @@ model:
 
 engine:
   trainability:
-    # runtime_mode=train is what activates lora_dropout.
-    llm: { parameter_mode: lora, runtime_mode: train }
-    visual_backbone: { parameter_mode: frozen, runtime_mode: eval }
-    visual_adapter: { parameter_mode: full, runtime_mode: train }
+    # No runtime_mode anywhere: the derivation from parameter_mode already
+    # gives the LLM and the adapter `follow` (which is what activates
+    # lora_dropout) and the backbone `eval`.
+    llm: { parameter_mode: lora }
+    visual_backbone: { parameter_mode: frozen }
+    visual_adapter: { parameter_mode: full }
     ctc_head: { parameter_mode: frozen }
     visual_position_embedding: { parameter_mode: frozen }
     # ~5k parameters between them. Left trainable because the useful magnitude

@@ -333,34 +333,36 @@ class SltModel(PreTrainedModel, GenerationMixin):
     def train(self, mode: bool = True):
         """Apply engine-selected LLM and visual-adapter runtime modes."""
         super().train(mode)
-        # Whole-model eval always wins. During training, runtime mode remains
-        # independent of which base or LoRA parameters receive gradients.
-        self.llm.train(mode and self.llm_runtime_mode == "train")
+        # Whole-model eval always wins: `follow` is permission to enter
+        # training mode with the model, never a mode of its own. During
+        # training this stays independent of which base or LoRA parameters
+        # receive gradients.
+        self.llm.train(mode and self.llm_runtime_mode == "follow")
         visual_adapter = getattr(self, "visual_adapter", None)
         if isinstance(visual_adapter, nn.Module):
             visual_adapter.train(
-                mode and self.visual_adapter_runtime_mode == "train"
+                mode and self.visual_adapter_runtime_mode == "follow"
             )
         return self
 
     def set_llm_runtime_mode(self, runtime_mode: str) -> None:
         """Set Qwen train/eval behavior without changing requires_grad."""
-        if runtime_mode not in ("eval", "train"):
+        if runtime_mode not in ("eval", "follow"):
             raise ValueError(
-                f"LLM runtime_mode must be 'eval' or 'train', got {runtime_mode!r}"
+                f"LLM runtime_mode must be 'eval' or 'follow', got {runtime_mode!r}"
             )
         self.llm_runtime_mode = runtime_mode
-        self.llm.train(self.training and runtime_mode == "train")
+        self.llm.train(self.training and runtime_mode == "follow")
 
     def set_visual_adapter_runtime_mode(self, runtime_mode: str) -> None:
         """Set visual-adapter train/eval behavior without changing gradients."""
-        if runtime_mode not in ("eval", "train"):
+        if runtime_mode not in ("eval", "follow"):
             raise ValueError(
-                "Visual adapter runtime_mode must be 'eval' or 'train', got "
+                "Visual adapter runtime_mode must be 'eval' or 'follow', got "
                 f"{runtime_mode!r}"
             )
         self.visual_adapter_runtime_mode = runtime_mode
-        self.visual_adapter.train(self.training and runtime_mode == "train")
+        self.visual_adapter.train(self.training and runtime_mode == "follow")
 
     def _validate_attention_support(self) -> None:
         """Reject at construction an attention that cannot carry the overlay."""

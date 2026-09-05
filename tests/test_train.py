@@ -100,8 +100,50 @@ def test_trainability_plan_can_select_only_visual_adapter():
 
 
 @pytest.mark.parametrize(
+    ("component", "setter_name"),
+    [
+        ("llm", "set_llm_runtime_mode"),
+        ("visual_backbone", "set_runtime_mode"),
+        ("visual_adapter", "set_visual_adapter_runtime_mode"),
+    ],
+)
+def test_stated_runtime_mode_without_a_hook_is_an_error(component, setter_name):
+    """`_ModelWithLoRA` implements no runtime-mode setter at all.
+
+    Writing runtime_mode is only ever a request to diverge from what
+    parameter_mode would derive, so a module that cannot honor it must say so
+    rather than train something the config says is deterministic.
+    """
+    model = _ModelWithLoRA()
+
+    with pytest.raises(ValueError, match=setter_name):
+        apply_trainability_plan(
+            model,
+            _trainability_plan(
+                **{component: {"parameter_mode": "full", "runtime_mode": "eval"}}
+            ),
+        )
+
+
+def test_derived_runtime_mode_without_a_hook_is_skipped():
+    """The same model, with nothing stated, still applies its parameter plan.
+
+    Backbones that never opted into runtime-mode control keep their existing
+    train/eval semantics; only a stated mode is enforced.
+    """
+    trainable_count = apply_trainability_plan(
+        model := _ModelWithLoRA(),
+        _trainability_plan(visual_adapter={"parameter_mode": "full"}),
+    )
+
+    assert trainable_count == sum(
+        parameter.numel() for parameter in model.visual_adapter.parameters()
+    )
+
+
+@pytest.mark.parametrize(
     ("runtime_mode", "expected_training"),
-    [("eval", False), ("train", True)],
+    [("eval", False), ("follow", True)],
 )
 def test_slt_model_applies_llm_runtime_mode_independently_of_gradients(
     runtime_mode, expected_training
@@ -128,7 +170,7 @@ def test_slt_model_applies_llm_runtime_mode_independently_of_gradients(
 
 @pytest.mark.parametrize(
     ("runtime_mode", "expected_training"),
-    [("eval", False), ("train", True)],
+    [("eval", False), ("follow", True)],
 )
 def test_slt_model_applies_visual_adapter_runtime_mode(runtime_mode, expected_training):
     model = object.__new__(train_command.SltModel)

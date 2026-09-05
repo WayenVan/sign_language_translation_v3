@@ -74,3 +74,10 @@ config:
     # difference of 827 (0.004%).
     projection_rank: 4429
     use_layer_norm: true
+
+    # Both off by default, so this file still reproduces the runs that predate
+    # them. spatial_dropout drops patches inside the post-fusion spatial mean;
+    # projection_dropout sits after the projection's GELU. Override either from
+    # the launcher to run a regularizer ablation on top of this configuration.
+    spatial_dropout: 0.0
+    projection_dropout: 0.0

@@ -1,6 +1,6 @@
 #! /bin/bash
 
-#SBATCH --job-name=slt_qwen3_4b_nextframe_handroi20m_gated_diverse
+#SBATCH --job-name=slt_qwen3_4b_nextframe20m_spatialdrop05
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-l40s
@@ -40,9 +40,9 @@ if [[ "$DEBUG" == true ]]; then
   OUTPUT_DIR="outputs/debug"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="next-frame-handroi,20m,diverse-prompts,no-dropout"
+  export WANDB_TAGS="next-frame,20m,fixed-prompt,spatial-dropout"
   REPORT_TO=wandb
-  OUTPUT_DIR="outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi20m-gated-diverse-hardmatch-wr3-gate1-roigate-2.0-0903.224x224"
+  OUTPUT_DIR="outputs/v5.0-qwen3-4b-cradio-l-nextframe20m-lm1-hardmatch-wr3-gate1-dispkaiming-spatialdrop0.5-0905.224x224"
 fi
 
 # 设置 TQDM_DISABLE 和 HG_TQDM_DISABLE 用于 accelerate launch
@@ -78,42 +78,41 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  # The two branches that moved dev BLEU-4 put in one adapter: patches are
-  # fused with their next-frame match, then pooled both globally and over the
-  # frozen scorer's hand ROI, with the ROI half riding in as a gated residual.
-  # Still parameter-matched to the pooled-linear baseline (19,999,694 against
-  # 19,999,369, +0.0016%), so the comparison stays a comparison of information
-  # paths rather than of capacity.
+  # Spatial dropout on top of the nextframe20m dispkaiming run, one variable
+  # changed. Everything else -- adapter, gate1, hardmatch, wr3, the fan-in
+  # displacement init, and the fixed canonical prompt (baseline_ablation's
+  # default, not diverse_train) -- is what
+  # outputs/v5.0-qwen3-4b-cradio-l-nextframe20m-lm1-hardmatch-wr3-gate1-dispkaiming-0902.224x224
+  # ran, so that run is the reference curve:
   #
-  # This is not a one-variable ablation -- it combines two -- so it is read
-  # against both of its parents rather than against one reference:
+  #            dev      train probe   gap
+  #   18k    0.0948       0.0913    -0.0035
+  #   24k    0.0990       0.1126    +0.0136
+  #   30k    0.1114       0.1456    +0.0342   (best, test BLEU-4 0.1114)
   #
-  #   next-frame dispkaiming  dev 0.0948 @18k  0.0990 @24k  0.1114 @30k
-  #   next-frame gate1        dev 0.1066 @18k  0.1135 @24k
-  #   hand-ROI gated          dev 0.0728 @18k  0.0865 @24k
+  # The gap only opens after ~24k, so this needs >=30k before it says anything
+  # about generalization; before that the two curves are expected to sit on top
+  # of each other, or this one slightly lower for the noise dropout adds.
   #
-  # dispkaiming is the code-matched one: the fan-in displacement init landed in
-  # NextFramePatchFusion itself, so this run inherits it with no flag. Note it
-  # was behind gate1 at both 18k and 24k, i.e. that init has not paid off so
-  # far, which is a confound this run carries and cannot separate.
+  # spatial_dropout only, projection_dropout left at 0.
+  # .ai/overfitting_component_attribution.md ranks the projection hidden layer
+  # higher and recommends both together, but running both at once cannot say
+  # which one paid; this measures the spatial half alone first.
   #
-  # gated, not concat, for the ROI half: on the standalone hand-ROI pair gated
-  # reached 0.0865 dev with a zero train-dev gap against concat's 0.0824 at
-  # +0.007, and the point of combining is to add a path without adding a way to
-  # memorize. Both gates are learnable and both are logged
-  # (visual_adapter/motion_gate, visual_adapter/roi_gate), so what each branch
-  # ends up carrying is readable from the run.
+  # p=0.5: SpatialDropoutMean draws the mask per frame and renormalizes by the
+  # survivors, so at 196 patches the mean stays a good estimate while no single
+  # patch -- backdrop, logo, the signer's face -- is reliable enough to key on,
+  # which is the shortcut it is aimed at. The drop happens after the fusion,
+  # never before it: the fusion matches patches against a spatial neighbourhood
+  # in the next frame, so dropping first would break correspondences instead of
+  # a shortcut.
   #
-  # Both dropouts stay 0. .ai/overfitting_component_attribution.md argues the
-  # projection hidden layer is where the memorizing happens, but turning it on
-  # here would confound the combination with the regularizer; that is the next
-  # run, once this one has a curve.
-  #
-  # The gap only opens after ~30k steps in these runs, so this needs >=30k
-  # before it says anything about generalization.
+  # Requires engine.trainability.visual_adapter.runtime_mode = train, which
+  # baseline_ablation inherits, or the module silently stays in eval and this
+  # is a plain mean.
   --config-name=train/cognition/baseline_ablation
-  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m
-  prompt=diverse_train
+  model=qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
+  model.config.visual_adapter_kwargs.spatial_dropout=0.5
   engine.training_args.output_dir="$OUTPUT_DIR"
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"

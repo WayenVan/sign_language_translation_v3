@@ -125,19 +125,37 @@ def _apply_visual_backbone_plan(
                 parameter.requires_grad_(True)
 
 
-def _apply_visual_backbone_runtime_mode(
-    module: nn.Module,
+def _apply_runtime_mode(
+    owner: nn.Module,
+    setter_name: str,
     plan: ComponentTrainability,
 ) -> None:
-    """Hand explicit runtime-mode control to backbones that support it.
+    """Hand a component's resolved runtime mode to whoever implements it.
 
-    C-RADIO currently implements this hook. Other visual backbones retain their
-    existing behavior until they opt in, so this change cannot silently alter
-    their train/eval semantics.
+    The hook is looked up by name because the plan layer never inspects models:
+    ``_COMPONENT_RULES`` says a component *has* a runtime mode, and the module
+    either implements the setter or does not. C-RADIO is currently the only
+    visual backbone that does; the LLM and the visual adapter are driven by
+    ``SltModel``'s own setters.
+
+    When the hook is missing the two cases are not the same. A mode that was
+    *derived* from ``parameter_mode`` is skipped: backbones that never opted in
+    keep whatever train/eval semantics they already had. A mode the config
+    *states* is an error -- the only reason to write one is to diverge from the
+    derivation, so ignoring it would leave the run doing the opposite of what
+    the file says, with nothing in the log to show for it.
     """
-    setter = getattr(module, "set_runtime_mode", None)
+    setter = getattr(owner, setter_name, None)
     if setter is not None:
         setter(plan.resolved_runtime_mode)
+        return
+    if plan.runtime_mode is not None:
+        raise ValueError(
+            f"engine.trainability.{plan.name}.runtime_mode="
+            f"{plan.runtime_mode!r} cannot be applied: "
+            f"{type(owner).__name__} does not implement {setter_name}(). Omit "
+            "it to accept the mode derived from parameter_mode."
+        )
 
 
 def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
@@ -152,27 +170,21 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
         llm.requires_grad_(True)
     elif llm_plan.parameter_mode == "lora":
         _enable_lora(llm, "LLM")
-    llm_runtime_setter = getattr(model, "set_llm_runtime_mode", None)
-    if llm_runtime_setter is not None:
-        llm_runtime_setter(llm_plan.resolved_runtime_mode)
+    _apply_runtime_mode(model, "set_llm_runtime_mode", llm_plan)
 
     visual_backbone = getattr(model, "visual_backbone", None)
     if not isinstance(visual_backbone, nn.Module):
         raise TypeError("SLT model must expose a visual_backbone module")
     visual_backbone_plan = plan["visual_backbone"]
     _apply_visual_backbone_plan(visual_backbone, visual_backbone_plan)
-    _apply_visual_backbone_runtime_mode(visual_backbone, visual_backbone_plan)
+    _apply_runtime_mode(visual_backbone, "set_runtime_mode", visual_backbone_plan)
 
     visual_adapter = getattr(model, "visual_adapter", None)
     visual_adapter_plan = plan["visual_adapter"]
     _set_module_trainable(
         visual_adapter, visual_adapter_plan.parameter_mode == "full"
     )
-    visual_adapter_runtime_setter = getattr(
-        model, "set_visual_adapter_runtime_mode", None
-    )
-    if visual_adapter_runtime_setter is not None:
-        visual_adapter_runtime_setter(visual_adapter_plan.resolved_runtime_mode)
+    _apply_runtime_mode(model, "set_visual_adapter_runtime_mode", visual_adapter_plan)
 
     for name, component_plan in (
         ("ctc_head", plan["ctc_head"]),

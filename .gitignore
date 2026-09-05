@@ -224,3 +224,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .aider*
+
+# NFS silly-rename artifacts. When a file is deleted or replaced while another
+# process still holds it open, NFS renames it to .nfs<hex> instead of unlinking
+# it, and the stub lingers until that process exits. They are never source.
+.nfs[0-9a-f]*
