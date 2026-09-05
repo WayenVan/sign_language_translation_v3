@@ -23,7 +23,7 @@ export PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
 # Which Phase-B config to run. Edit this line to switch variants:
 #   train/ctc/phase_b_codebook  -- codebook only, everything else frozen
-#   train/ctc/phase_b_joint     -- also unfreezes the visual adapter
+#   train/ctc/phase_b_joint     -- also trains the visual adapter + CTC head
 CONFIG_NAME=train/ctc/phase_b_joint
 
 # Optional arguments:
