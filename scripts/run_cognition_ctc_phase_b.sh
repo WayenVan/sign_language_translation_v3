@@ -62,7 +62,7 @@ fi
 if [[ "$SHARED_DATASET" == true ]]; then
   DATASET_PATH="$PROJECT_DIR/dataset/PHOENIX-2014-T-release-v3"
 else
-  source "$PROJECT_DIR/prepare_dataset.sh"
+  source "$PROJECT_DIR/scripts/prepare_dataset.sh"
   DATASET_PATH=$(prepare_dataset \
     "$PROJECT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
     "$HOME/localscratch/ph14t")
