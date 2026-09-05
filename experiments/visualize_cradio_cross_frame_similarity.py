@@ -47,7 +47,7 @@ SPLIT = "val"
 SAMPLE_INDEX = 3
 
 # Match the NextFramePatchFusion default. None searches the complete next frame.
-SPATIAL_WINDOW_RADIUS: int | None = 1
+SPATIAL_WINDOW_RADIUS: int | None = 3
 TEMPERATURE = 0.1
 MATCHING_TOP_K = 1
 # None selects the center patch. Set both values to explicit zero-based grid
