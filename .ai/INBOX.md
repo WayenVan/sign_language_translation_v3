@@ -44,3 +44,16 @@ C-RADIOv4 逐层 patch 可分性诊断跑完了，三条结论推翻了之前的
 下一步：手型回归探针（现有 features.npz 就能跑，不用重跑 backbone）。
 
 #experiment #visual-adapter #diagnosis
+
+---
+
+## 2026-09-05 18:22
+
+视觉 adapter 部件消融表 B（12 行）总结完成：NextFrame Fusion（+2.95）+ hand-ROI 结合（eval
+12.3，全表最高）+ projection dropout 0.5（唯一同时降过拟合又涨 eval）是推荐结构；
+MotionTemporal 与 NextFrame 二选一，spatial dropout / mean→conv / displacement Kaiming 均无效。
+完整表格和推荐结构见
+[visual_adapter_component_ablation_summary.md](visual_adapter_component_ablation_summary.md)。
+下一步：行 10（hand-ROI + NextFrame）叠加 projection dropout，验证能否把 gap 49.7 压下来。
+
+#experiment #visual-adapter #ablation

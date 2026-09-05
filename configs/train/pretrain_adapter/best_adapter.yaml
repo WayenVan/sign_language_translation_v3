@@ -1,0 +1,49 @@
+# @package _global_
+
+# Best pretrained-adapter recipe.
+#
+# The structure is settled in .ai/visual_adapter_component_ablation_summary.md
+# (表 B, 12 行):
+#   行 3  next-frame patch fusion (fusion_gate init +1.0) -- strongest module
+#   行 10 + gated hand-ROI residual                       -- table's highest eval
+#   行 2  + CLS token                                     -- +0.8, near free
+#   行 9  + projection dropout 0.5                        -- only op that cut the
+#         train-dev gap and raised eval together
+#
+# Realized by the spatiotemporal_next_frame_hand_roi_cls adapter: 行 10's global
+# + ROI branches plus a third gated residual carrying C-RADIO's summary / CLS
+# vector. See qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-cls-20m.
+#
+# Dropped, per the same table: MotionTemporal fusion (二选一 with next-frame,
+# 行 4 redundant), spatial patch dropout (行 11, gap unmoved), mean -> conv
+# (行 12, worst overfit), displacement Kaiming init (行 8, no gain -- the
+# adapter's default zero init is kept).
+
+defaults:
+  - /train/pretrain_adapter/base
+  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-cls-20m
+  - _self_
+
+model:
+  config:
+    visual_adapter_kwargs:
+      # 行 9, applied uniformly at 0.5 to every branch projection's hidden layer
+      # (Linear -> GELU -> Dropout -> Linear):
+      #   projection_dropout     -> global branch  (1152 -> 2349 -> 2560)
+      #   roi_projection_dropout -> hand-ROI residual (1152 -> 1265 -> 2560 -> LN*)
+      #   cls_projection_dropout -> CLS residual   (2304 ->  620 -> 2560 -> LN*)
+      # The model config ships all three at 0.0 to keep the adapter a clean
+      # reproduction of 行 10 at sigmoid(cls_gate)=0; the best recipe turns them
+      # on. This is the projection hidden layer
+      # .ai/overfitting_component_attribution.md identifies as where the
+      # memorization happens.
+      #
+      # NOTE: on the two residual branches the trailing non-affine LayerNorm
+      # (LN*) restores the vector's norm, so 0.5 there is not magnitude damping
+      # but strong direction noise on the ~24-patch hand pool and on the CLS
+      # vector. This is a deliberately aggressive setting -- watch the roi_gate /
+      # cls_gate logs; if either branch collapses toward zero, back its dropout
+      # down first.
+      projection_dropout: 0.5
+      roi_projection_dropout: 0.5
+      cls_projection_dropout: 0.5

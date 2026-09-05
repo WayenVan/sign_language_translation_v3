@@ -1,0 +1,147 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m with a third gated
+# residual: the backbone's summary / CLS vector (pooled_visual_features, 2304-d)
+# rides onto the output token beside the hand-ROI residual --
+#
+#   out = projection(LN(global_mean))                     # unchanged
+#       + sigmoid(roi_gate) * roi_projection(LN(roi))     # unchanged
+#       + sigmoid(cls_gate) * cls_projection(LN_cls(CLS)) # new
+#
+# 表 B 行 2 measured CLS *instead of* the spatial-mean global feature and gained
+# +0.8 on the pooled-linear path. Here the global slot is where next-frame
+# fusion (行 3, the strongest single module) delivers its gain, so CLS is added
+# as a gate-from-zero residual rather than a replacement: at sigmoid(cls_gate)=0
+# this is bit-for-bit the next-frame + hand-ROI adapter, and the CLS half has to
+# earn its contribution -- the same discipline the ROI residual is under.
+#
+# Everything outside visual_adapter_kwargs is identical to
+# qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m. Inside it, only the
+# three projection ranks move: the CLS branch is paid for by shrinking the
+# global and ROI ranks in the reference's own 2878 : 1550 = 1.857 proportion.
+# See the budget note at the bottom of the file.
+
+config:
+  # Qwen3-4B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 2560
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-4B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    # Must match what the scorer was fitted on; a mismatch degrades its ranking
+    # silently rather than failing. The scorer's own config records what it was
+    # fitted against.
+    output_layer: -1
+
+  visual_adapter_type: spatiotemporal_next_frame_hand_roi_cls
+  visual_adapter_kwargs:
+    # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
+    input_dim: 1152
+    output_dim: 2560
+    # C-RADIOv4-SO400M summary / CLS width, carried in pooled_visual_features.
+    # It is the backbone's own attention-pooled aggregate, not a mean over
+    # patches, and it bypasses NextFramePatchFusion -- so this branch carries a
+    # static per-frame descriptor with no motion residual.
+    cls_input_dim: 2304
+
+    # Window size of the temporal mean. Every video's frame count must be
+    # divisible by it, which is also what keeps a window from spanning two
+    # videos in the packed batch. The CLS stream is pooled with the identical
+    # boundary-safe window mean.
+    temporal_scale_factor: 2
+
+    # --- next-frame patch fusion -----------------------------------------------
+    # Identical to qwen3-4b-cradio-l-spatiotemporal-next-frame-20m, field for
+    # field.
+
+    # null infers a square patch grid from the patch-token count.
+    patch_grid_size: null
+    # Hidden width of the fusion space the content, delta and displacement
+    # streams are projected into. The block costs 3,460 * H + 5,761
+    # parameters, here 3,548,801.
+    patch_fusion_hidden_dim: 1024
+    # Softmax temperature over cosine similarities, and how many next-frame
+    # candidates survive before that softmax. top_k=1 makes the match a hard
+    # nearest neighbour.
+    patch_fusion_temperature: 0.1
+    patch_fusion_matching_top_k: 1
+    # Chebyshev radius, in patch units, of the window a match may come from.
+    patch_fusion_window_radius: 3
+    # The value the reference next-frame run used. Deliberately far more open
+    # than the ROI / CLS gates below: this residual is diluted across all 196
+    # patches by the spatial mean, the other two are whole vectors beside the
+    # global one. Learnable in both directions either way.
+    patch_fusion_gate_init: 1.0
+
+    # --- hand-ROI pooling ----------------------------------------------------
+    # Fitted offline by preprocess/train_scorer.py. Read only when a model is
+    # built from pretrained components; a checkpoint carries the coefficients
+    # itself, so this directory need not survive.
+    scorer_path: outputs/hand_patch_scorer
+    # Patches kept per frame. k=24 keeps 98.3% of hand patches while spending
+    # 11.4% of the budget on non-hand ones.
+    top_k: 24
+    # Fitted constants, and this also marks the scorer always-frozen so a plan
+    # with visual_adapter.parameter_mode=full cannot recurse into it.
+    freeze_scorer: true
+
+    # projection(global) + s(roi_gate) * f(roi) + s(cls_gate) * f(cls), rather
+    # than concat's joint MLP. Starts at the pooled-linear baseline when both
+    # gates are 0. Only "gated" is supported by this adapter.
+    fusion_mode: gated
+    # sigmoid(-2) ~= 0.119 for the ROI residual, matching
+    # qwen3-4b-cradio-l-handroi-gated-20m. Still a value to select on dev.
+    gate_init: -2.0
+    # Same init for the CLS residual: it is a whole vector beside the global
+    # one, so it starts small and earns its weight rather than being handed it.
+    cls_gate_init: -2.0
+
+    # --- budget --------------------------------------------------------------
+    # Global branch : 1152 -> 2349 -> GELU -> 2560
+    # ROI residual  : 1152 -> 1265 -> GELU -> 2560 -> LayerNorm(non-affine)
+    # CLS residual  : 2304 ->  620 -> GELU -> 2560 -> LayerNorm(non-affine)
+    #
+    # The reference (next-frame-handroi-20m) spends 2878 / 1550 on global / ROI.
+    # Adding the CLS branch -- its own 2304-wide LayerNorm, a scalar gate, and a
+    # rank-620 projection whose first Linear is 2304-wide -- costs ~3.12M, paid
+    # for by scaling the global and ROI ranks down in that same 2878:1550
+    # proportion (x0.816). CLS gets the smallest share: 行 2's effect is the
+    # smallest of the three and unproven in combination, and its gate starts
+    # near zero, so it is sized as a correction, not a peer of the global path.
+    #
+    # Verified: trainable_parameter_count is 20,000,781 against the reference's
+    # 19,999,694 (+1,087, 0.0054%). The frozen scorer's coefficients are
+    # excluded from both.
+    projection_rank: 2349
+    roi_projection_rank: 1265
+    cls_projection_rank: 620
+    use_layer_norm: true
+
+    # All off by default, matching the reference so this file reproduces 行 10
+    # exactly at sigmoid(cls_gate)=0. spatial_dropout drops patches inside the
+    # post-fusion spatial mean; projection_dropout sits after the global
+    # projection's GELU; cls_projection_dropout does the same in the CLS branch
+    # (where, as in the ROI branch, the trailing non-affine LayerNorm cancels
+    # its damping and leaves only direction noise). Override from the launcher
+    # to run a regularizer ablation on top of this configuration.
+    spatial_dropout: 0.0
+    projection_dropout: 0.0
+    roi_projection_dropout: 0.0
+    cls_projection_dropout: 0.0

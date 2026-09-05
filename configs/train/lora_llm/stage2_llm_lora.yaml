@@ -2,7 +2,7 @@
 
 # Stage 2: let the LLM read the visual modality.
 #
-# Stage 1 (train/cognition/baseline_ablation) trains a visual adapter against a
+# Stage 1 (train/pretrain_adapter/baseline_ablation) trains a visual adapter against a
 # fully frozen Qwen3-4B. This continues from such a checkpoint and unfreezes the
 # LLM through LoRA while keeping the adapter trainable at a much smaller rate.
 #
@@ -25,7 +25,7 @@
 # decode, which is the cheapest anti-drift anchor available here.
 
 defaults:
-  - /train/cognition/baseline_ablation
+  - /train/pretrain_adapter/baseline_ablation
   - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
   - override /peft: qwen3-4b-llm-all-qv-r8
   - _self_
@@ -85,7 +85,7 @@ engine:
     # v4.0's stage-2 continuations were still climbing when they were stopped at
     # 5 epochs, so this is not tuned to the point of diminishing returns. Best
     # checkpoint selection (save_strategy=best on eval_overall_weighted_bleu4,
-    # inherited from train/base) is what actually terminates the run.
+    # inherited from train/pretrain_adapter/base) is what actually terminates the run.
     num_train_epochs: 12
 
     # Fallback rate for anything without a component override in

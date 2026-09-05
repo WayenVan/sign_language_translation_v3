@@ -3,7 +3,7 @@
 # Shared baseline for cognition ablations. Individual runs should override only
 # the ablation variable(s) and their output directory.
 defaults:
-  - /train/base
+  - /train/pretrain_adapter/base
   - override /model: qwen3-4b-cradio-l-spatiotemporal-pooled-linear
   - override /data: ph14t_*x224x224_qwen_single_language
   - override /prompt: fixed_prompt
