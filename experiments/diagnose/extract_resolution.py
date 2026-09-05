@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(PROJECT_ROOT / "src"))
 sys.path.append(str(PROJECT_ROOT / "experiments/diagnose"))
 
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers  # noqa: E402
+from csi_slt.commands.config import instantiate_prompt_resolvers  # noqa: E402
 from csi_slt.data.datamodule import DataModule  # noqa: E402
 from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import (  # noqa: E402
     CRadioV4Backbone,

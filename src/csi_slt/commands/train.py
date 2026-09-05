@@ -9,7 +9,10 @@ from omegaconf import DictConfig, OmegaConf
 from peft import LoraConfig, TaskType
 from transformers import AutoTokenizer, set_seed
 
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.commands.config import (
+    build_slt_trainer_kwargs,
+    instantiate_prompt_resolvers,
+)
 from csi_slt.data.datamodule import DataModule
 from csi_slt.engine.sft.metrics import SLTMetric
 from csi_slt.engine.sft.trainer import SltTrainer
@@ -167,6 +170,7 @@ def main(cfg: DictConfig) -> None:
     trainer = SltTrainer(
         model=slt_model,
         args=training_args,
+        **build_slt_trainer_kwargs(cfg),
         hydra_config=cfg,
         processing_class=datamodule.processor,
         train_dataset=datamodule.train_dataset,

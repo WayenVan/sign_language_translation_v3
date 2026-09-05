@@ -7,7 +7,6 @@ from torch import nn
 
 from csi_slt.engine.trainability import (
     SltTrainabilityPlan,
-    VisualBackboneTrainabilityPlan,
     apply_trainability_plan,
 )
 from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import (
@@ -230,10 +229,19 @@ def test_engine_plan_controls_lora_runtime_mode(runtime_mode, expected_training)
 
     apply_trainability_plan(
         model,
-        SltTrainabilityPlan(
-            visual_backbone=VisualBackboneTrainabilityPlan(
-                mode="lora", runtime_mode=runtime_mode
-            )
+        SltTrainabilityPlan.from_mapping(
+            {
+                "llm": {"parameter_mode": "frozen"},
+                "visual_backbone": {
+                    "parameter_mode": "lora",
+                    "runtime_mode": runtime_mode,
+                },
+                "visual_adapter": {"parameter_mode": "frozen"},
+                "ctc_head": {"parameter_mode": "frozen"},
+                "visual_scale": {"parameter_mode": "frozen"},
+                "visual_position_embedding": {"parameter_mode": "frozen"},
+                "visual_boundary_embeddings": {"parameter_mode": "frozen"},
+            }
         ),
     )
     model.train()

@@ -1,28 +1,19 @@
 load_from_checkpoint: false
 checkpoint_dir: null
 
-# Parameter-matched counterpart of
-# qwen3-4b-cradio-l-spatiotemporal-pooled-linear-20m.yaml. This is the two
-# branches that actually moved dev BLEU-4 put in one adapter: patches are first
-# fused with their next-frame match, then the fused patches are pooled twice --
-# once globally and once over the frozen scorer's hand ROI -- and the ROI half
-# rides in as a gated residual.
-#
-# Dev BLEU-4 @24k of the three runs this combines (train probe in brackets):
-#
-#   pooled-linear baseline    --      (gap +0.004 @30k)
-#   handroi concat            0.0824  [0.0898]
-#   handroi gated             0.0865  [0.0864]
-#   next-frame fusion         0.1135  [0.1278]
-#
-# Two readings drive the choices below. Next-frame fusion is the larger effect
-# by a wide margin, so it keeps the settings of its own reference run verbatim.
-# And on the hand-ROI side the gated form beat concat on dev while closing the
-# train-dev gap to zero, so this takes `gated`, not `concat`.
-#
-# Selection still scores raw backbone patches while both branches pool the
-# fused ones -- the scorer's coefficients are only valid for the untransformed
-# feature distribution.
+# Same architecture as qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m,
+# with one change: the boundary-safe temporal mean that turns each
+# temporal_scale_factor-frame window into one token is replaced by
+# TemporalConvDownsample, a learnable per-channel temporal filter (see that
+# module's docstring). Its weight is always initialized to a uniform
+# 1/kernel_size, but temporal_conv_radius=1 below widens the kernel to 4
+# frames (temporal_scale_factor + 2*radius), so at step 0 this is a uniform
+# mean over a 4-frame window centered on each 2-frame token rather than the
+# reference run's exact 2-frame mean -- close to, but not numerically
+# identical to, that run. Set temporal_conv_radius: 0 to get the exact
+# numerical match instead, at the cost of no cross-window context at
+# initialization. num_transformer_layers=0 leaves the optional
+# post-downsampling self-attention context off entirely.
 
 config:
   # Qwen3-4B embedding width; adapter output_dim must match this exactly.
@@ -52,16 +43,41 @@ config:
     # fitted against.
     output_layer: -1
 
-  visual_adapter_type: spatiotemporal_next_frame_hand_roi
+  visual_adapter_type: spatiotemporal_next_frame_hand_roi_conv
   visual_adapter_kwargs:
     # C-RADIOv4-SO400M patch width and Qwen3-4B embedding width.
     input_dim: 1152
     output_dim: 2560
 
-    # Window size of the temporal mean. Every video's frame count must be
-    # divisible by it, which is also what keeps a window from spanning two
+    # Window size of the temporal downsampling. Every video's frame count must
+    # be divisible by it, which is also what keeps a window from spanning two
     # videos in the packed batch.
     temporal_scale_factor: 2
+
+    # --- temporal downsampling (new relative to the mean-pooled reference) --
+    # True builds the learnable per-channel filter; False skips it entirely
+    # and falls back to the parent's exact fixed window mean -- a structural
+    # switch back to the mean-pooling baseline, not just a numerical
+    # coincidence at step 0. Flip this alone to compare against the reference
+    # run with every other line identical.
+    use_temporal_conv: true
+    # kernel_size = temporal_scale_factor + 2*radius = 2 + 2*1 = 4: each token
+    # is a (initially uniform, then learned) weighting over its own 2-frame
+    # window plus 1 frame of context borrowed from each neighbouring window,
+    # replicate-padded at a video's own edges so it never crosses into
+    # another video or another window's territory beyond what radius allows.
+    # 0 would keep the reference run's exact non-overlapping window (and
+    # match its output numerically at step 0); 1 trades that exact match for
+    # context beyond a per-channel reweighting of the same 2 frames.
+    temporal_conv_radius: 1
+
+    # Off by default: this run isolates the conv-vs-mean change alone. Set
+    # >0 to also add self-attention context over each video's pooled tokens,
+    # after the downsampling and before the concat/gated projection.
+    num_transformer_layers: 0
+    transformer_num_heads: 8
+    transformer_mlp_ratio: 4.0
+    transformer_dropout: 0.0
 
     # --- next-frame patch fusion -------------------------------------------
     # Identical to qwen3-4b-cradio-l-spatiotemporal-next-frame-20m, field for
@@ -102,36 +118,23 @@ config:
 
     # projection(global) + s(gate) * f(roi), rather than concat's joint MLP
     # over [global; roi]. It starts at the pooled-linear baseline when
-    # s(gate) = 0, so the ROI half has to earn its contribution -- and on the
-    # standalone hand-ROI pair that is what showed up: gated reached 0.0865 dev
-    # with a zero train-dev gap against concat's 0.0824 at +0.007.
+    # s(gate) = 0, so the ROI half has to earn its contribution.
     fusion_mode: gated
-    # sigmoid(-2) ~= 0.119, matching qwen3-4b-cradio-l-handroi-gated-20m. Note
-    # that run had not yet been swept on dev, so this is still a value to
-    # select, not a settled one.
+    # sigmoid(-2) ~= 0.119, matching the reference run.
     gate_init: -2.0
 
     # --- budget -------------------------------------------------------------
-    # 1152 -> 2878 -> GELU -> 2560 for the global branch, 1152 -> 1550 -> GELU
-    # -> 2560 -> LayerNorm for the ROI residual. Both ranks drop steeply from
-    # the standalone gated run's 3500/1884 because the fusion block now takes
-    # 3.55M of the same budget; the 1884/3500 = 0.538 split between them is
-    # kept, since the global branch still has to do the baseline's whole job
-    # while the ROI branch is a correction.
-    #
-    # Including affine LayerNorms this comes to 19,999,694 trainable
-    # parameters against the baseline's 19,999,369, a difference of 325
-    # (0.0016%). One rank step is 3,713 parameters in either branch, so this is
-    # the closest integer match available. The frozen scorer's 1,153
-    # coefficients are excluded.
+    # Same split as qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-20m;
+    # TemporalConvDownsample adds only (kernel_size + 1) * 2*input_dim
+    # parameters (weight + bias; 11,520 at radius=1's kernel_size=4),
+    # negligible against the 20M budget, so the ranks are left untouched for a
+    # like-for-like comparison. Verified: this config's
+    # trainable_parameter_count is 20,011,214 against the mean-pooling
+    # reference run's 19,999,694 (+11,520, exactly the conv's weight and
+    # bias) and the radius=0 variant's 20,006,606.
     projection_rank: 2878
     roi_projection_rank: 1550
     use_layer_norm: true
 
-    # Both left off so this run isolates the combination itself. They are the
-    # first knobs to reach for afterwards -- .ai/overfitting_component_
-    # attribution.md argues the projection hidden layer is where the memorizing
-    # happens -- but turning either on here would confound the comparison
-    # against the two runs above.
     spatial_dropout: 0.0
     projection_dropout: 0.0

@@ -85,7 +85,7 @@ accelerate launch "${CMD_ARGS[@]}"
 # --- Ablation ladder, one variable each, run only after A's step-0 gate passes.
 #
 # B  adapter frozen, everything else identical -- the direct test of question 1
-#    engine.trainability.visual_adapter.mode=frozen
+#    engine.trainability.visual_adapter.parameter_mode=frozen
 #    engine.trainability.visual_adapter.runtime_mode=eval
 #
 # C  last-4 layers only at matched total rank -- the direct test of question 2

@@ -81,19 +81,21 @@ CMD_ARGS=(
   # make the disabled-dropout intent agree with the PEFT configuration.
   peft.visual_lora_config.lora_dropout=0.0
   model.checkpoint_dir=/mnt/scratch/users/2533494w/slt_outputs/v4.0-qwen3-1.7b-cradio-l-crossshuffle-lite-0828.224x224-ctc-de//checkpoint-42000
-  engine.trainability.llm.mode=frozen
+  engine.trainability.llm.parameter_mode=frozen
   engine.trainability.llm.runtime_mode=eval
-  engine.trainability.visual_backbone.mode=lora
+  engine.trainability.visual_backbone.parameter_mode=lora
   engine.trainability.visual_backbone.runtime_mode=eval
-  engine.trainability.visual_adapter.mode=frozen
+  engine.trainability.visual_adapter.parameter_mode=frozen
   engine.trainability.visual_adapter.runtime_mode=eval
   prompt=fixed_prompt
   engine.training_args.num_train_epochs=50
   engine.training_args.learning_rate=1e-4
-  engine.training_args.visual_lora_learning_rate=2e-3
-  engine.training_args.visual_lora_weight_decay=0.01
-  # engine.training_args.visual_adapter_learning_rate=1e-5
-  # engine.training_args.visual_adapter_weight_decay=0.05
+  # The visual backbone is LoRA-only here, so this targets exactly the visual
+  # LoRA parameters the old visual_lora_* fields did.
+  ++engine.optimization.visual_backbone.learning_rate=2e-3
+  ++engine.optimization.visual_backbone.weight_decay=0.01
+  # ++engine.optimization.visual_adapter.learning_rate=1e-5
+  # ++engine.optimization.visual_adapter.weight_decay=0.05
   engine.evaluate_before_training=true
   engine.training_args.eval_steps=0.08
   # datamodule=train_with_val_and_test

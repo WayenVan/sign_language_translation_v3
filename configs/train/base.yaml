@@ -29,20 +29,27 @@ engine:
   # Which parameters this run optimizes. Applied by
   # `apply_trainability_plan`: everything is frozen first, then exactly the
   # components selected here are re-enabled. All seven components must be
-  # listed. LoRA structure itself lives in the `peft` group; a `lora` mode here
-  # only unfreezes the adapters that group injected.
+  # listed. LoRA structure itself lives in the `peft` group; a `lora`
+  # parameter_mode here only unfreezes the adapters that group injected.
+  # `runtime_mode` defaults to `auto` (frozen -> eval, otherwise train) and is
+  # only worth stating where it must diverge from parameter_mode.
   trainability:
-    llm: { mode: frozen, runtime_mode: eval }
+    llm: { parameter_mode: frozen, runtime_mode: eval }
     # runtime_mode is currently enforced by C-RADIO only. Keeping it separate
     # from gradient mode allows visual LoRA to train with a deterministic base
     # encoder in eval mode.
-    visual_backbone: { mode: frozen, runtime_mode: eval }
-    visual_adapter: { mode: full, runtime_mode: train }
-    ctc_head: { mode: full }
+    visual_backbone: { parameter_mode: frozen, runtime_mode: eval }
+    visual_adapter: { parameter_mode: full, runtime_mode: train }
+    ctc_head: { parameter_mode: full }
     # No module is constructed while visual_position_embedding_type=none.
-    visual_position_embedding: { mode: frozen }
-    visual_boundary_embeddings: { mode: full }
-    visual_scale: { mode: full }
+    visual_position_embedding: { parameter_mode: frozen }
+    visual_boundary_embeddings: { parameter_mode: full }
+    visual_scale: { parameter_mode: full }
+  # Sparse per-component optimizer overrides, keyed by the same components as
+  # `trainability`. Missing components and fields inherit
+  # training_args.learning_rate / weight_decay. Overriding a component this run
+  # freezes is an error, not a silent no-op.
+  optimization: {}
   evaluate_before_training: false
   train_probe:
     every_n_evaluations: 1
@@ -67,9 +74,9 @@ engine:
     learning_rate: 1e-4
     # --- Regularization / optimization stability ---
     # Decoupled weight decay. Transformers excludes biases and LayerNorm
-    # parameters automatically, and SltTrainer's create_optimizer keeps that
-    # split when per-component decays are set, so 0.01 only hits real weight
-    # matrices. Per-component overrides live in the `*_weight_decay` args.
+    # parameters automatically, and SltTrainer narrows that further to genuine
+    # weight matrices, so this only hits real weight matrices. Per-component
+    # overrides live in `engine.optimization.<component>.weight_decay`.
     weight_decay: 0.05
     # In transformers>=5 warmup_steps is a float: a value in [0, 1) is a ratio
     # of total steps, >=1 is an exact step count. 3% of training ramps the LR

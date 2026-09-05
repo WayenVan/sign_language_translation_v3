@@ -14,30 +14,11 @@ logger = logging.get_logger(__name__)
 
 @dataclass
 class SltTrainingArguments(Seq2SeqTrainingArguments):
-    llm_lora_learning_rate: float | None = field(
-        default=None,
-        metadata={"help": "LR for trainable LLM LoRA parameters; defaults to learning_rate."},
-    )
-    visual_lora_learning_rate: float | None = field(
-        default=None,
-        metadata={"help": "LR for trainable visual LoRA parameters; defaults to learning_rate."},
-    )
-    visual_adapter_learning_rate: float | None = field(
-        default=None,
-        metadata={"help": "LR for trainable visual-adapter parameters; defaults to learning_rate."},
-    )
-    llm_lora_weight_decay: float | None = field(
-        default=None,
-        metadata={"help": "Weight decay for LLM LoRA; defaults to weight_decay."},
-    )
-    visual_lora_weight_decay: float | None = field(
-        default=None,
-        metadata={"help": "Weight decay for visual LoRA; defaults to weight_decay."},
-    )
-    visual_adapter_weight_decay: float | None = field(
-        default=None,
-        metadata={"help": "Weight decay for the visual adapter; defaults to weight_decay."},
-    )
+    # NOTE: Per-component learning rates and weight decays are not arguments
+    # here. They live in ``engine.optimization``, whose ``OptimizationPlan``
+    # owns parameters by the same components as ``engine.trainability`` and so
+    # can target any of them -- not just the three PEFT-shaped subsets the
+    # retired ``*_learning_rate``/``*_weight_decay`` fields covered.
     predict_with_teacher_forcing: bool = field(
         default=False,
         metadata={
@@ -96,23 +77,6 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
-
-        for name in (
-            "llm_lora_learning_rate",
-            "visual_lora_learning_rate",
-            "visual_adapter_learning_rate",
-        ):
-            value = getattr(self, name)
-            if value is not None and value <= 0:
-                raise ValueError(f"{name} must be positive when set")
-        for name in (
-            "llm_lora_weight_decay",
-            "visual_lora_weight_decay",
-            "visual_adapter_weight_decay",
-        ):
-            value = getattr(self, name)
-            if value is not None and value < 0:
-                raise ValueError(f"{name} must be non-negative when set")
 
         acc = Accelerator()
 

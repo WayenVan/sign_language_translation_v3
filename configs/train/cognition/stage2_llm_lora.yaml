@@ -39,16 +39,30 @@ model:
 engine:
   trainability:
     # runtime_mode=train is what activates lora_dropout.
-    llm: { mode: lora, runtime_mode: train }
-    visual_backbone: { mode: frozen, runtime_mode: eval }
-    visual_adapter: { mode: full, runtime_mode: train }
-    ctc_head: { mode: frozen }
-    visual_position_embedding: { mode: frozen }
+    llm: { parameter_mode: lora, runtime_mode: train }
+    visual_backbone: { parameter_mode: frozen, runtime_mode: eval }
+    visual_adapter: { parameter_mode: full, runtime_mode: train }
+    ctc_head: { parameter_mode: frozen }
+    visual_position_embedding: { parameter_mode: frozen }
     # ~5k parameters between them. Left trainable because the useful magnitude
     # of the visual stream relative to the text stream is exactly what changes
     # once the LLM stops being frozen.
-    visual_boundary_embeddings: { mode: full }
-    visual_scale: { mode: full }
+    visual_boundary_embeddings: { parameter_mode: full }
+    visual_scale: { parameter_mode: full }
+
+  # LoRA needs a rate an order of magnitude above full fine-tuning; the adapter
+  # is already trained and only needs to track the LLM's drift. `llm` here is
+  # exactly the LoRA parameters, since trainability leaves nothing else in the
+  # language model trainable. LoRA's own decay is left off: its capacity is
+  # already bounded by r=8, and decay on B pulls the delta toward zero rather
+  # than toward the base model.
+  optimization:
+    llm:
+      learning_rate: 1.0e-4
+      weight_decay: 0.0
+    visual_adapter:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
 
   # Non-negotiable sanity gate. LoRA initializes to a zero-valued delta, so the
   # step-0 evaluation must reproduce the stage-1 checkpoint's dev score. The
@@ -72,16 +86,9 @@ engine:
     # inherited from train/base) is what actually terminates the run.
     num_train_epochs: 12
 
-    # Fallback rate for anything without a component override.
+    # Fallback rate for anything without a component override in
+    # engine.optimization above.
     learning_rate: 1.0e-4
-    # LoRA needs a rate an order of magnitude above full fine-tuning; the
-    # adapter is already trained and only needs to track the LLM's drift.
-    llm_lora_learning_rate: 1.0e-4
-    visual_adapter_learning_rate: 1.0e-5
-    # LoRA's own decay is left off: its capacity is already bounded by r=8, and
-    # decay on B pulls the delta toward zero rather than toward the base model.
-    llm_lora_weight_decay: 0.0
-    visual_adapter_weight_decay: 0.01
     weight_decay: 0.01
     warmup_steps: 0.03
     lr_scheduler_type: cosine

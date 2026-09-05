@@ -157,6 +157,10 @@ class SpatiotemporalMotionAdapter(nn.Module):
         """Gate value of the temporal fusion, for logging across runs."""
         return self.temporal_fusion.motion_weight
 
+    def optimization_parameter_groups(self) -> dict[str, tuple[nn.Parameter, ...]]:
+        """Expose the temporal residual gate to optimizer policies."""
+        return {"gates": (self.temporal_fusion.gate,)}
+
     def forward(
         self,
         visual_backbone_output: VisualBackboneOutput,

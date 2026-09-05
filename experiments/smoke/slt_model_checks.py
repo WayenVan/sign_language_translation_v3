@@ -12,7 +12,7 @@ sys.path.append("./src")
 from csi_slt.modeling_slt.slt_qwen_vl import SltQwenVLModel
 from csi_slt.modeling_slt.slt import SltConfig, SltModel
 from csi_slt.data.datamodule import DataModule
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.commands.config import instantiate_prompt_resolvers
 from transformers.models.gemma3.modeling_gemma3 import Gemma3ForCausalLM
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 

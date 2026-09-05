@@ -1,151 +1,204 @@
-"""Immutable descriptions of which SLT components should be trainable.
+"""Validated, immutable descriptions of SLT component trainability.
 
 Plans contain user intent only. They do not inspect models, change
 ``requires_grad``, or maintain module ``train``/``eval`` modes; those jobs
 belong to trainability policies and model runtime state.
+
+What differs per component is data, not code: which ``parameter_mode`` values
+make sense, whether the component has a runtime mode at all, and which extra
+options it accepts. ``_COMPONENT_RULES`` is that data, and one
+``ComponentTrainability`` validates itself against its own row -- so adding a
+component is a new entry here, not a new dataclass with its own hand-written
+``__post_init__``.
 """
 
-from dataclasses import dataclass, field
-from collections.abc import Mapping
-from typing import Any, Literal
+from __future__ import annotations
+
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
 
 
-ComponentTrainabilityMode = Literal["frozen", "full"]
-LlmTrainabilityMode = Literal["frozen", "full", "lora"]
-LlmRuntimeMode = Literal["eval", "train"]
-VisualBackboneTrainabilityMode = Literal["frozen", "last_n_layers", "full", "lora"]
-VisualBackboneRuntimeMode = Literal["eval", "train"]
-VisualAdapterRuntimeMode = Literal["eval", "train"]
+# Keep in sync with `engine.optimization.OPTIMIZABLE_COMPONENTS`: both plans
+# partition the model's parameters, and an optimizer override is validated
+# against the trainability decision made for the same component name.
+_COMPONENT_RULES = {
+    "llm": {
+        "parameter_modes": frozenset({"frozen", "full", "lora"}),
+        "supports_runtime": True,
+        "options": frozenset(),
+    },
+    "visual_backbone": {
+        "parameter_modes": frozenset({"frozen", "full", "lora", "last_n_layers"}),
+        "supports_runtime": True,
+        "options": frozenset(
+            {"n_layers", "train_final_norm", "train_auxiliary_modules"}
+        ),
+    },
+    "visual_adapter": {
+        "parameter_modes": frozenset({"frozen", "full"}),
+        "supports_runtime": True,
+        "options": frozenset(),
+    },
+    "ctc_head": {
+        "parameter_modes": frozenset({"frozen", "full"}),
+        "supports_runtime": False,
+        "options": frozenset(),
+    },
+    "visual_position_embedding": {
+        "parameter_modes": frozenset({"frozen", "full"}),
+        "supports_runtime": False,
+        "options": frozenset(),
+    },
+    "visual_boundary_embeddings": {
+        "parameter_modes": frozenset({"frozen", "full"}),
+        "supports_runtime": False,
+        "options": frozenset(),
+    },
+    "visual_scale": {
+        "parameter_modes": frozenset({"frozen", "full"}),
+        "supports_runtime": False,
+        "options": frozenset(),
+    },
+}
 
 
 @dataclass(frozen=True)
-class ComponentTrainabilityPlan:
-    """Trainability intent for a regular model component."""
+class ComponentTrainability:
+    """Normalized parameter and runtime intent for one component."""
 
-    mode: ComponentTrainabilityMode = "frozen"
+    name: str
+    parameter_mode: str
+    runtime_mode: str | None
+    options: Mapping[str, Any]
 
-    def __post_init__(self) -> None:
-        if self.mode not in ("frozen", "full"):
-            raise ValueError(f"Unsupported component trainability mode: {self.mode!r}")
+    @classmethod
+    def from_mapping(
+        cls, name: str, config: Mapping[str, Any]
+    ) -> "ComponentTrainability":
+        if name not in _COMPONENT_RULES:
+            raise ValueError(f"Unknown trainability component: {name!r}")
+        if not isinstance(config, Mapping):
+            raise TypeError(f"engine.trainability.{name} must be a mapping")
 
-
-@dataclass(frozen=True)
-class LlmTrainabilityPlan:
-    """Gradient and runtime-mode intent for the language model."""
-
-    mode: LlmTrainabilityMode = "frozen"
-    runtime_mode: LlmRuntimeMode = "eval"
-
-    def __post_init__(self) -> None:
-        if self.mode not in ("frozen", "full", "lora"):
-            raise ValueError(f"Unsupported LLM trainability mode: {self.mode!r}")
-        if self.runtime_mode not in ("eval", "train"):
-            raise ValueError(f"Unsupported LLM runtime mode: {self.runtime_mode!r}")
-
-
-@dataclass(frozen=True)
-class VisualBackboneTrainabilityPlan:
-    """Gradient and runtime-mode intent for a visual backbone.
-
-    ``runtime_mode`` currently has an explicit implementation in C-RADIO. It
-    is deliberately independent of ``mode``: LoRA parameters can receive
-    gradients while the frozen base encoder remains in deterministic eval
-    mode.
-    """
-
-    mode: VisualBackboneTrainabilityMode = "frozen"
-    runtime_mode: VisualBackboneRuntimeMode = "eval"
-    n_layers: int | None = None
-    train_final_norm: bool = True
-    train_auxiliary_modules: bool = True
-
-    def __post_init__(self) -> None:
-        if self.mode not in ("frozen", "last_n_layers", "full", "lora"):
+        allowed_fields = {"parameter_mode", "runtime_mode", "options"}
+        unknown_fields = set(config).difference(allowed_fields)
+        if unknown_fields:
             raise ValueError(
-                f"Unsupported visual backbone trainability mode: {self.mode!r}"
-            )
-        if self.runtime_mode not in ("eval", "train"):
-            raise ValueError(
-                f"Unsupported visual backbone runtime mode: {self.runtime_mode!r}"
+                f"engine.trainability.{name} contains unknown fields: "
+                + ", ".join(sorted(unknown_fields))
             )
 
-        if self.mode == "last_n_layers":
+        parameter_mode = config.get("parameter_mode", "frozen")
+        rule = _COMPONENT_RULES[name]
+        if parameter_mode not in rule["parameter_modes"]:
+            raise ValueError(
+                f"Unsupported parameter_mode for {name}: {parameter_mode!r}; "
+                f"expected one of {sorted(rule['parameter_modes'])}"
+            )
+
+        runtime_mode = config.get("runtime_mode")
+        if rule["supports_runtime"]:
+            runtime_mode = "auto" if runtime_mode is None else runtime_mode
+            if runtime_mode not in ("auto", "eval", "train"):
+                raise ValueError(
+                    f"runtime_mode for {name} must be auto, eval, or train"
+                )
+        elif runtime_mode is not None:
+            raise ValueError(f"{name} does not support runtime_mode")
+
+        options = config.get("options", {})
+        if not isinstance(options, Mapping):
+            raise TypeError(f"engine.trainability.{name}.options must be a mapping")
+        unknown_options = set(options).difference(rule["options"])
+        if unknown_options:
+            raise ValueError(
+                f"engine.trainability.{name}.options contains unsupported keys: "
+                + ", ".join(sorted(unknown_options))
+            )
+        options = dict(options)
+        cls._validate_options(name, parameter_mode, options)
+        return cls(
+            name=name,
+            parameter_mode=parameter_mode,
+            runtime_mode=runtime_mode,
+            options=MappingProxyType(options),
+        )
+
+    @staticmethod
+    def _validate_options(
+        name: str, parameter_mode: str, options: dict[str, Any]
+    ) -> None:
+        if name != "visual_backbone":
+            return
+        n_layers = options.get("n_layers")
+        if parameter_mode == "last_n_layers":
             if (
-                isinstance(self.n_layers, bool)
-                or not isinstance(self.n_layers, int)
-                or self.n_layers <= 0
+                isinstance(n_layers, bool)
+                or not isinstance(n_layers, int)
+                or n_layers <= 0
             ):
                 raise ValueError(
-                    "n_layers must be a positive integer when mode is 'last_n_layers'"
+                    "visual_backbone.options.n_layers must be a positive integer "
+                    "when parameter_mode='last_n_layers'"
                 )
-        elif self.n_layers is not None:
-            raise ValueError("n_layers can only be set when mode is 'last_n_layers'")
+        elif n_layers is not None:
+            raise ValueError(
+                "visual_backbone.options.n_layers is only valid with "
+                "parameter_mode='last_n_layers'"
+            )
+        for key in ("train_final_norm", "train_auxiliary_modules"):
+            if key in options and not isinstance(options[key], bool):
+                raise TypeError(f"visual_backbone.options.{key} must be a boolean")
 
-        if not isinstance(self.train_final_norm, bool):
-            raise TypeError("train_final_norm must be a boolean")
-        if not isinstance(self.train_auxiliary_modules, bool):
-            raise TypeError("train_auxiliary_modules must be a boolean")
+    @property
+    def resolved_runtime_mode(self) -> str | None:
+        if self.runtime_mode is None:
+            return None
+        if self.runtime_mode != "auto":
+            return self.runtime_mode
+        return "eval" if self.parameter_mode == "frozen" else "train"
+
+    def option(self, name: str, default: Any = None) -> Any:
+        return self.options.get(name, default)
 
 
 @dataclass(frozen=True)
-class VisualAdapterTrainabilityPlan:
-    """Gradient and runtime-mode intent for the visual adapter."""
+class SltTrainabilityPlan(Mapping[str, ComponentTrainability]):
+    """Complete validated trainability intent for every SLT component."""
 
-    mode: ComponentTrainabilityMode = "frozen"
-    runtime_mode: VisualAdapterRuntimeMode = "eval"
+    components: Mapping[str, ComponentTrainability]
 
     def __post_init__(self) -> None:
-        if self.mode not in ("frozen", "full"):
+        missing = set(_COMPONENT_RULES).difference(self.components)
+        unknown = set(self.components).difference(_COMPONENT_RULES)
+        if missing:
             raise ValueError(
-                f"Unsupported visual adapter trainability mode: {self.mode!r}"
+                "trainability plan is missing components: "
+                + ", ".join(sorted(missing))
             )
-        if self.runtime_mode not in ("eval", "train"):
+        if unknown:
             raise ValueError(
-                f"Unsupported visual adapter runtime mode: {self.runtime_mode!r}"
+                "trainability plan contains unknown components: "
+                + ", ".join(sorted(unknown))
             )
-
-
-@dataclass(frozen=True)
-class SltTrainabilityPlan:
-    """Top-level trainability plan composed from SLT component plans."""
-
-    llm: LlmTrainabilityPlan = field(default_factory=LlmTrainabilityPlan)
-    visual_backbone: VisualBackboneTrainabilityPlan = field(
-        default_factory=VisualBackboneTrainabilityPlan
-    )
-    visual_adapter: VisualAdapterTrainabilityPlan = field(
-        default_factory=VisualAdapterTrainabilityPlan
-    )
-    ctc_head: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
-    )
-    visual_position_embedding: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
-    )
-    visual_boundary_embeddings: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
-    )
-    visual_scale: ComponentTrainabilityPlan = field(
-        default_factory=ComponentTrainabilityPlan
-    )
+        for name, component in self.components.items():
+            if not isinstance(component, ComponentTrainability):
+                raise TypeError(f"trainability component {name!r} has an invalid type")
+            if component.name != name:
+                raise ValueError(
+                    f"trainability component key {name!r} does not match "
+                    f"component name {component.name!r}"
+                )
+        object.__setattr__(self, "components", MappingProxyType(dict(self.components)))
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "SltTrainabilityPlan":
-        """Build a complete plan from the colocated Hydra config."""
         if not isinstance(config, Mapping):
             raise TypeError("engine.trainability must be a mapping")
-
-        expected = {
-            "llm",
-            "visual_backbone",
-            "visual_adapter",
-            "ctc_head",
-            "visual_position_embedding",
-            "visual_boundary_embeddings",
-            "visual_scale",
-        }
-        missing = expected.difference(config)
-        unknown = set(config).difference(expected)
+        missing = set(_COMPONENT_RULES).difference(config)
+        unknown = set(config).difference(_COMPONENT_RULES)
         if missing:
             raise ValueError(
                 "engine.trainability is missing components: "
@@ -156,23 +209,18 @@ class SltTrainabilityPlan:
                 "engine.trainability contains unknown components: "
                 + ", ".join(sorted(unknown))
             )
-
-        def values(name: str) -> dict[str, Any]:
-            value = config[name]
-            if not isinstance(value, Mapping):
-                raise TypeError(f"engine.trainability.{name} must be a mapping")
-            return dict(value)
-
         return cls(
-            llm=LlmTrainabilityPlan(**values("llm")),
-            visual_backbone=VisualBackboneTrainabilityPlan(**values("visual_backbone")),
-            visual_adapter=VisualAdapterTrainabilityPlan(**values("visual_adapter")),
-            ctc_head=ComponentTrainabilityPlan(**values("ctc_head")),
-            visual_position_embedding=ComponentTrainabilityPlan(
-                **values("visual_position_embedding")
-            ),
-            visual_boundary_embeddings=ComponentTrainabilityPlan(
-                **values("visual_boundary_embeddings")
-            ),
-            visual_scale=ComponentTrainabilityPlan(**values("visual_scale")),
+            {
+                name: ComponentTrainability.from_mapping(name, config[name])
+                for name in _COMPONENT_RULES
+            }
         )
+
+    def __getitem__(self, name: str) -> ComponentTrainability:
+        return self.components[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.components)
+
+    def __len__(self) -> int:
+        return len(self.components)

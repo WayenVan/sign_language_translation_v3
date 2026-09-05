@@ -17,7 +17,6 @@ import torch
 from torch.distributed.fsdp import FSDPModule, FullyShardedDataParallel
 from typing import Any, Optional, Union
 import contextlib
-from omegaconf import OmegaConf
 
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.integrations.fsdp import is_fsdp_managed_module
@@ -43,6 +42,10 @@ from csi_slt.data.sampler import (
     get_dataset_lengths,
 )
 from csi_slt.modeling_slt.info_utils import InformationRequest
+from csi_slt.engine.optimization import (
+    OptimizationPlan,
+    build_optimizer_parameter_groups,
+)
 
 logger = logging.get_logger(__name__)
 
@@ -88,18 +91,73 @@ def apply_fsdp2_autocast(accelerator, model: nn.Module) -> None:
         model.forward = autocast_context(model.forward)
 
 
-class SltTrainer(Seq2SeqTrainer):
-    _COMPONENT_LR_ARGUMENTS = {
-        "llm_lora": "llm_lora_learning_rate",
-        "visual_lora": "visual_lora_learning_rate",
-        "visual_adapter": "visual_adapter_learning_rate",
-    }
-    _COMPONENT_WEIGHT_DECAY_ARGUMENTS = {
-        "llm_lora": "llm_lora_weight_decay",
-        "visual_lora": "visual_lora_weight_decay",
-        "visual_adapter": "visual_adapter_weight_decay",
-    }
+class _ScalarAccumulator:
+    """Running mean of the scalars a model reports from its forward passes.
 
+    One accumulator measures one thing. The training one lives on the trainer
+    because it has to span every step between two ``logging_steps`` boundaries;
+    an evaluation one is created inside ``evaluation_loop`` and drained before
+    that call returns, so it is an ordinary local with no name and no lifetime
+    to reason about. Keeping them separate is what stops an evaluation's
+    numbers from landing in the next training log line.
+    """
+
+    def __init__(self) -> None:
+        self._totals: dict[str, torch.Tensor] = {}
+        self._counts: dict[str, int] = {}
+
+    def __bool__(self) -> bool:
+        return bool(self._totals)
+
+    def add(self, scalars: Optional[dict]) -> None:
+        """Fold one forward pass's detached scalars into the running sums."""
+        for name, value in (scalars or {}).items():
+            if not isinstance(value, torch.Tensor) or value.numel() != 1:
+                raise TypeError(
+                    f"logging_scalars[{name!r}] must be a scalar tensor, got "
+                    f"{type(value).__name__}"
+                )
+            value = value.detach()
+            self._totals[name] = self._totals.get(name, torch.zeros_like(value)) + value
+            self._counts[name] = self._counts.get(name, 0) + 1
+
+    def drain(self, accelerator, device) -> dict[str, float]:
+        """Reduce across processes, empty the accumulator, and return means.
+
+        Uses ``accelerator.gather`` rather than ``gather_for_metrics``. The
+        latter exists to drop the duplicated samples a distributed sampler pads
+        the final batch with, and does so by truncating the gathered tensor to
+        ``gradient_state.remainder`` at the end of a dataloader -- which is
+        exactly when an evaluation's accumulator is drained. These are not
+        per-sample values but one already-reduced pair per process, so every
+        process must contribute exactly once and nothing may be dropped.
+
+        Names are visited in sorted order so the two collectives below line up
+        across processes without relying on every rank's dictionary having been
+        filled in the same order.
+        """
+        if not self._totals:
+            return {}
+        names = sorted(self._totals)
+        totals = torch.stack(
+            [self._totals[name].detach().reshape(1).float().to(device) for name in names]
+        ).reshape(len(names))
+        counts = torch.tensor(
+            [self._counts[name] for name in names], device=device, dtype=torch.float
+        )
+        # [world_size * len(names)] -> [world_size, len(names)] -> [len(names)]
+        global_totals = accelerator.gather(totals).reshape(-1, len(names)).sum(dim=0)
+        global_counts = accelerator.gather(counts).reshape(-1, len(names)).sum(dim=0)
+
+        self._totals.clear()
+        self._counts.clear()
+        return {
+            name: (global_totals[index] / global_counts[index]).item()
+            for index, name in enumerate(names)
+        }
+
+
+class SltTrainer(Seq2SeqTrainer):
     # NOTE: Parameters whose zero point is not "this path is switched off".
     # Transformers only filters biases and normalization layers by name, which
     # misses SLT's marker tokens, learned positions, and adapter token-type
@@ -113,6 +171,9 @@ class SltTrainer(Seq2SeqTrainer):
 
     def __init__(
         self,
+        optimization_plan: Optional[OptimizationPlan] = None,
+        eval_information_kwargs: Optional[dict] = None,
+        train_probe_kwargs: Optional[dict] = None,
         hydra_config=None,
         eval_data_collator=None,
         train_data_collator=None,
@@ -143,41 +204,30 @@ class SltTrainer(Seq2SeqTrainer):
             test_data_collator if test_data_collator is not None else self.data_collator
         )
         self.train_probe_compute_metrics = train_probe_compute_metrics
+        self.optimization_plan = (
+            optimization_plan
+            if optimization_plan is not None
+            else OptimizationPlan.from_mapping({})
+        )
 
         # NOTE: add custom callbacks
         # self.add_callback(
         #     SaveBestMetricCallback(metric_name="test_overall_sentence_bleu_4")
         # )
         self.add_callback(ModelInfoCallback())
+        # ``hydra_config`` is a snapshot for logging/checkpointing only (wandb,
+        # ``hydra_config.yaml``) -- it must not be mined for values that drive
+        # training behavior. Those are resolved by the caller (a ``commands/``
+        # script, via ``commands.config.build_slt_trainer_kwargs``) into the
+        # explicit, typed arguments above.
         self.add_callback(LogHydraConfigCallback(hydra_config))
         self.add_callback(SaveHydraConfigCallback(hydra_config))
         self.add_callback(SaveGitInfoCallback())
         self.add_callback(ETACallback())
-        eval_information_kwargs = {}
-        if hydra_config is not None:
-            eval_information_config = OmegaConf.select(
-                hydra_config,
-                "engine.eval_information",
-                default=None,
-            )
-            if eval_information_config is not None:
-                eval_information_kwargs = OmegaConf.to_container(
-                    eval_information_config,
-                    resolve=True,
-                )
         self.add_callback(
-            EvalInformationVisualizationCallback(**eval_information_kwargs)
+            EvalInformationVisualizationCallback(**(eval_information_kwargs or {}))
         )
-        train_probe_kwargs = {}
-        if hydra_config is not None:
-            train_probe_config = OmegaConf.select(
-                hydra_config, "engine.train_probe", default=None
-            )
-            if train_probe_config is not None:
-                train_probe_kwargs = OmegaConf.to_container(
-                    train_probe_config, resolve=True
-                )
-        self.add_callback(TrainSubsetMetricsCallback(**train_probe_kwargs))
+        self.add_callback(TrainSubsetMetricsCallback(**(train_probe_kwargs or {})))
 
         # if _is_peft_model(unwrap_model(self.model)):
         #     self.add_callback(SaveBaseModelInPEFT())
@@ -191,10 +241,12 @@ class SltTrainer(Seq2SeqTrainer):
             self.lr_scheduler,
         )
 
-        # Accumulate detached per-micro-batch values.  They are reduced in
-        # ``log`` so their cadence exactly matches Trainer's ``logging_steps``.
-        self._logging_scalar_totals: dict[str, torch.Tensor] = {}
-        self._logging_scalar_counts: dict[str, int] = {}
+        # Accumulate detached per-micro-batch values. The training accumulator
+        # is reduced in ``log`` so its cadence exactly matches Trainer's
+        # ``logging_steps``; ``_active_scalars`` is the one currently receiving,
+        # which ``evaluation_loop`` swaps for the duration of an evaluation.
+        self._train_scalars = _ScalarAccumulator()
+        self._active_scalars = self._train_scalars
 
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
@@ -221,8 +273,8 @@ class SltTrainer(Seq2SeqTrainer):
           ``_NO_DECAY_NAME_PATTERN``.
 
         The rule is applied here rather than in ``create_optimizer`` so that it
-        also covers the base-class optimizer path taken when no per-component
-        learning rate or weight decay is configured.
+        stays a single statement about which parameters weight decay is
+        meaningful for, independent of how they are grouped.
         """
         decay_parameters = super().get_decay_parameter_names(model)
         dimensions = {
@@ -238,78 +290,20 @@ class SltTrainer(Seq2SeqTrainer):
         ]
 
     def create_optimizer(self, model=None) -> torch.optim.Optimizer:
-        """Create weight-decay groups with optional per-component PEFT LRs."""
-        component_lrs = {
-            component: getattr(self.args, argument, None)
-            for component, argument in self._COMPONENT_LR_ARGUMENTS.items()
-        }
-        component_weight_decays = {
-            component: getattr(self.args, argument, None)
-            for component, argument in self._COMPONENT_WEIGHT_DECAY_ARGUMENTS.items()
-        }
-        if not any(
-            value is not None
-            for value in (*component_lrs.values(), *component_weight_decays.values())
-        ):
-            return super().create_optimizer(model=model)
+        """Create component groups, resolving overrides against global defaults."""
         if self.optimizer is not None:
             return self.optimizer
 
         opt_model = self.model if model is None else model
         unwrapped_model = self.accelerator.unwrap_model(opt_model)
-        component_parameter_ids = {
-            "llm_lora": {
-                id(parameter)
-                for name, parameter in unwrapped_model.llm.named_parameters()
-                if "lora_" in name
-            },
-            "visual_lora": {
-                id(parameter)
-                for name, parameter in unwrapped_model.visual_backbone.named_parameters()
-                if "lora_" in name
-            },
-            "visual_adapter": {
-                id(parameter)
-                for parameter in unwrapped_model.visual_adapter.parameters()
-            },
-        }
-        decay_parameters = self.get_decay_parameter_names(opt_model)
-        grouped_parameters: dict[tuple[str, bool], list[nn.Parameter]] = {}
-        for name, parameter in opt_model.named_parameters():
-            if not parameter.requires_grad:
-                continue
-            component = next(
-                (
-                    key
-                    for key, parameter_ids in component_parameter_ids.items()
-                    if id(parameter) in parameter_ids
-                ),
-                "default",
-            )
-            grouped_parameters.setdefault(
-                (component, name in decay_parameters), []
-            ).append(parameter)
-
-        optimizer_grouped_parameters = []
-        for (component, use_decay), parameters in grouped_parameters.items():
-            component_weight_decay = component_weight_decays.get(component)
-            group = {
-                "params": parameters,
-                "slt_component": component,
-                "weight_decay": (
-                    (
-                        self.args.weight_decay
-                        if component_weight_decay is None
-                        else component_weight_decay
-                    )
-                    if use_decay
-                    else 0.0
-                ),
-            }
-            component_lr = component_lrs.get(component)
-            if component_lr is not None:
-                group["lr"] = component_lr
-            optimizer_grouped_parameters.append(group)
+        optimizer_grouped_parameters = build_optimizer_parameter_groups(
+            model=opt_model,
+            ownership_model=unwrapped_model,
+            plan=self.optimization_plan,
+            default_learning_rate=self.args.learning_rate,
+            default_weight_decay=self.args.weight_decay,
+            decay_parameter_names=self.get_decay_parameter_names(opt_model),
+        )
 
         optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(
             self.args, opt_model
@@ -566,46 +560,82 @@ class SltTrainer(Seq2SeqTrainer):
             num_items_in_batch=num_items_in_batch,
         )
 
+        self._accumulate_logging_scalars(outputs)
+
+        return (loss, outputs) if return_outputs else loss
+
+    def _accumulate_logging_scalars(self, outputs: Any) -> None:
+        """Fold one forward's ``logging_scalars`` into whatever is measuring now.
+
+        Shared by ``compute_loss`` (training) and ``prediction_step``'s
+        teacher-forcing pass (evaluation): every path that runs the model with
+        ``labels`` produces these scalars, and each should reach the
+        accumulator its own context owns. The evaluation forward was computing
+        them and throwing them away before this existed.
+        """
         logging_scalars = getattr(outputs, "logging_scalars", None)
         if logging_scalars is None and isinstance(outputs, dict):
             logging_scalars = outputs.get("logging_scalars")
-        for name, value in (logging_scalars or {}).items():
-            if not isinstance(value, torch.Tensor) or value.numel() != 1:
-                raise TypeError(
-                    f"logging_scalars[{name!r}] must be a scalar tensor, got "
-                    f"{type(value).__name__}"
-                )
-            value = value.detach()
-            self._logging_scalar_totals[name] = (
-                self._logging_scalar_totals.get(name, torch.zeros_like(value)) + value
-            )
-            self._logging_scalar_counts[name] = (
-                self._logging_scalar_counts.get(name, 0) + 1
-            )
-
-        return (loss, outputs) if return_outputs else loss
+        self._active_scalars.add(logging_scalars)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         """Add component LRs and averaged model scalars to training logs."""
         if self.optimizer is not None and "learning_rate" in logs:
             for group in self.optimizer.param_groups:
                 component = group.get("slt_component")
-                if component in self._COMPONENT_LR_ARGUMENTS:
-                    logs[f"learning_rate/{component}"] = float(group["lr"])
-        if "loss" in logs and self._logging_scalar_totals:
-            for name, total in self._logging_scalar_totals.items():
-                count = torch.tensor(
-                    self._logging_scalar_counts[name],
-                    device=self.args.device,
-                    dtype=torch.float,
-                )
-                global_count = self.accelerator.gather_for_metrics(count).sum().item()
-                global_total = self.accelerator.gather_for_metrics(total).sum().item()
-                logs[name] = global_total / global_count
-            self._logging_scalar_totals.clear()
-            self._logging_scalar_counts.clear()
+                if component is not None:
+                    parameter_group = group.get("slt_parameter_group")
+                    suffix = (
+                        f"{component}/{parameter_group}"
+                        if parameter_group is not None
+                        else component
+                    )
+                    logs[f"learning_rate/{suffix}"] = float(group["lr"])
+        # Only the training accumulator can be drained here: an evaluation
+        # never writes to it, so `"loss" in logs` (Trainer's training-log
+        # marker) cannot pick up somebody else's numbers.
+        if "loss" in logs and self._train_scalars:
+            logs.update(
+                self._train_scalars.drain(self.accelerator, self.args.device)
+            )
 
         super().log(logs, start_time=start_time)
+
+    def evaluation_loop(self, *args, metric_key_prefix: str = "eval", **kwargs):
+        """Run one evaluation, measuring its model scalars in their own bucket.
+
+        The accumulator is a local: it is created here, receives only this
+        loop's forward passes, and is drained into the metrics this loop
+        returns. ``metric_key_prefix`` is used solely to name those metrics --
+        the same string that already names ``<prefix>_loss`` and the BLEU
+        scores -- so the scalars travel with the rest of the evaluation through
+        ``log_metrics``/``save_metrics`` and are comparable across the eval,
+        test, and train-probe runs that each supply their own prefix.
+
+        Saving and restoring the previous accumulator rather than assuming the
+        training one keeps that true if an evaluation is ever triggered from
+        inside another.
+        """
+        scalars = _ScalarAccumulator()
+        previous, self._active_scalars = self._active_scalars, scalars
+        try:
+            output = super().evaluation_loop(
+                *args, metric_key_prefix=metric_key_prefix, **kwargs
+            )
+        finally:
+            self._active_scalars = previous
+
+        means = scalars.drain(self.accelerator, self.args.device)
+        if not means:
+            return output
+        # Prefixed here rather than left bare: the base loop already renamed
+        # every un-prefixed key it produced, so anything added afterwards has
+        # to carry the prefix itself.
+        metrics = dict(output.metrics or {})
+        metrics.update(
+            {f"{metric_key_prefix}_{name}": value for name, value in means.items()}
+        )
+        return output._replace(metrics=metrics)
 
     def _prepare_generation_kwargs(self, gen_kwargs: dict[str, Any]) -> dict[str, Any]:
         """Resolve evaluation-loop generation kwargs and distributed defaults."""
@@ -740,6 +770,10 @@ class SltTrainer(Seq2SeqTrainer):
             with torch.no_grad():
                 with self.compute_loss_context_manager():
                     outputs = model(**teacher_forcing_inputs)
+            # The only evaluation path that runs the model with labels, and so
+            # the only one that produces these scalars at all: plain generation
+            # never reaches the loss and reports nothing.
+            self._accumulate_logging_scalars(outputs)
             if self.label_smoother is not None:
                 loss = (
                     self.label_smoother(outputs, teacher_forcing_inputs["labels"])

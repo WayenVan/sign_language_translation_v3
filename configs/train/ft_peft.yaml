@@ -19,26 +19,22 @@ engine:
   # visual adapter; every other component stays at the checkpoint's weights.
   trainability:
     # Preserve standard LoRA training behavior, including configured dropout.
-    llm: {mode: lora, runtime_mode: train}
-    visual_backbone: {mode: frozen}
-    visual_adapter: {mode: full, runtime_mode: train}
-    ctc_head: {mode: frozen}
-    visual_position_embedding: {mode: frozen}
-    visual_boundary_embeddings: {mode: frozen}
-    visual_scale: {mode: frozen}
+    llm: {parameter_mode: lora, runtime_mode: train}
+    visual_backbone: {parameter_mode: frozen}
+    visual_adapter: {parameter_mode: full, runtime_mode: train}
+    ctc_head: {parameter_mode: frozen}
+    visual_position_embedding: {parameter_mode: frozen}
+    visual_boundary_embeddings: {parameter_mode: frozen}
+    visual_scale: {parameter_mode: frozen}
+  # Optional component-specific rates. Anything left out of this mapping falls
+  # back to training_args.learning_rate / weight_decay.
+  optimization: {}
   # Log a step-0 baseline into the same eval_* series as periodic evaluation.
   evaluate_before_training: true
   training_args:
     output_dir: outputs/ft_peft
     num_train_epochs: 25
     learning_rate: 5e-5
-    # Optional component-specific rates. Null falls back to learning_rate.
-    llm_lora_learning_rate: null
-    visual_lora_learning_rate: null
-    visual_adapter_learning_rate: null
-    llm_lora_weight_decay: null
-    visual_lora_weight_decay: null
-    visual_adapter_weight_decay: null
     warmup_steps: 0.03
     weight_decay: 0.01
     eval_strategy: steps

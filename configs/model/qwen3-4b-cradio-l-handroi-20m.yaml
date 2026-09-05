@@ -64,7 +64,7 @@ config:
     top_k: 24
 
     # The coefficients are fitted constants. This also marks the scorer
-    # always-frozen, so a plan with visual_adapter.mode=full cannot recurse
+    # always-frozen, so a plan with visual_adapter.parameter_mode=full cannot recurse
     # into it. Set false to make it trainable end to end.
     freeze_scorer: true
 

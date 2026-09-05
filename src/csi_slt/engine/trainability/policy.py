@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 from torch import nn
 
-from .plans import SltTrainabilityPlan, VisualBackboneTrainabilityPlan
+from .plans import ComponentTrainability, SltTrainabilityPlan
 
 logger = logging.getLogger(__name__)
 
@@ -75,36 +75,40 @@ def _resolve_visual_layers(visual_encoder: nn.Module) -> Sequence[nn.Module]:
         if isinstance(layers, (nn.ModuleList, nn.Sequential)):
             return layers
     raise TypeError(
-        "Could not locate transformer layers for visual_backbone mode='last_n_layers'"
+        "Could not locate transformer layers for visual_backbone "
+        "parameter_mode='last_n_layers'"
     )
 
 
 def _apply_visual_backbone_plan(
     module: nn.Module,
-    plan: VisualBackboneTrainabilityPlan,
+    plan: ComponentTrainability,
 ) -> None:
-    if plan.mode == "frozen":
+    if plan.parameter_mode == "frozen":
         return
-    if plan.mode == "full":
+    if plan.parameter_mode == "full":
         module.requires_grad_(True)
         return
-    if plan.mode == "lora":
+    if plan.parameter_mode == "lora":
         _enable_lora(module, "visual")
         return
 
     visual_encoder = getattr(module, "visual_encoder", None)
     if not isinstance(visual_encoder, nn.Module):
-        raise TypeError("visual_backbone mode='last_n_layers' requires visual_encoder")
+        raise TypeError(
+            "visual_backbone parameter_mode='last_n_layers' requires visual_encoder"
+        )
     layers = _resolve_visual_layers(visual_encoder)
-    if plan.n_layers is None or plan.n_layers > len(layers):
+    n_layers = plan.option("n_layers")
+    if n_layers is None or n_layers > len(layers):
         raise ValueError(
-            f"Requested the final {plan.n_layers} visual layers, but the "
+            f"Requested the final {n_layers} visual layers, but the "
             f"backbone exposes only {len(layers)}"
         )
-    for layer in layers[-plan.n_layers :]:
+    for layer in layers[-n_layers:]:
         layer.requires_grad_(True)
 
-    if plan.train_final_norm:
+    if plan.option("train_final_norm", True):
         for path in (
             "radio_model.norm",
             "vision_model.post_layernorm",
@@ -115,7 +119,7 @@ def _apply_visual_backbone_plan(
             if norm is not None:
                 norm.requires_grad_(True)
 
-    if plan.train_auxiliary_modules:
+    if plan.option("train_auxiliary_modules", True):
         for name, parameter in module.named_parameters():
             if not name.startswith("visual_encoder."):
                 parameter.requires_grad_(True)
@@ -123,7 +127,7 @@ def _apply_visual_backbone_plan(
 
 def _apply_visual_backbone_runtime_mode(
     module: nn.Module,
-    plan: VisualBackboneTrainabilityPlan,
+    plan: ComponentTrainability,
 ) -> None:
     """Hand explicit runtime-mode control to backbones that support it.
 
@@ -133,7 +137,7 @@ def _apply_visual_backbone_runtime_mode(
     """
     setter = getattr(module, "set_runtime_mode", None)
     if setter is not None:
-        setter(plan.runtime_mode)
+        setter(plan.resolved_runtime_mode)
 
 
 def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
@@ -143,42 +147,49 @@ def apply_trainability_plan(model: nn.Module, plan: SltTrainabilityPlan) -> int:
     llm = getattr(model, "llm", None)
     if not isinstance(llm, nn.Module):
         raise TypeError("SLT model must expose an llm module")
-    if plan.llm.mode == "full":
+    llm_plan = plan["llm"]
+    if llm_plan.parameter_mode == "full":
         llm.requires_grad_(True)
-    elif plan.llm.mode == "lora":
+    elif llm_plan.parameter_mode == "lora":
         _enable_lora(llm, "LLM")
     llm_runtime_setter = getattr(model, "set_llm_runtime_mode", None)
     if llm_runtime_setter is not None:
-        llm_runtime_setter(plan.llm.runtime_mode)
+        llm_runtime_setter(llm_plan.resolved_runtime_mode)
 
     visual_backbone = getattr(model, "visual_backbone", None)
     if not isinstance(visual_backbone, nn.Module):
         raise TypeError("SLT model must expose a visual_backbone module")
-    _apply_visual_backbone_plan(visual_backbone, plan.visual_backbone)
-    _apply_visual_backbone_runtime_mode(visual_backbone, plan.visual_backbone)
+    visual_backbone_plan = plan["visual_backbone"]
+    _apply_visual_backbone_plan(visual_backbone, visual_backbone_plan)
+    _apply_visual_backbone_runtime_mode(visual_backbone, visual_backbone_plan)
 
     visual_adapter = getattr(model, "visual_adapter", None)
-    _set_module_trainable(visual_adapter, plan.visual_adapter.mode == "full")
+    visual_adapter_plan = plan["visual_adapter"]
+    _set_module_trainable(
+        visual_adapter, visual_adapter_plan.parameter_mode == "full"
+    )
     visual_adapter_runtime_setter = getattr(
         model, "set_visual_adapter_runtime_mode", None
     )
     if visual_adapter_runtime_setter is not None:
-        visual_adapter_runtime_setter(plan.visual_adapter.runtime_mode)
+        visual_adapter_runtime_setter(visual_adapter_plan.resolved_runtime_mode)
 
     for name, component_plan in (
-        ("ctc_head", plan.ctc_head),
-        ("visual_position_embedding", plan.visual_position_embedding),
+        ("ctc_head", plan["ctc_head"]),
+        ("visual_position_embedding", plan["visual_position_embedding"]),
     ):
-        _set_module_trainable(getattr(model, name, None), component_plan.mode == "full")
+        _set_module_trainable(
+            getattr(model, name, None), component_plan.parameter_mode == "full"
+        )
 
-    for name in ("start_video_embds", "end_video_embeds"):
-        parameter = getattr(model, name, None)
-        if parameter is not None:
-            parameter.requires_grad_(plan.visual_boundary_embeddings.mode == "full")
-
-    visual_scale = getattr(model, "visual_scale", None)
-    if visual_scale is not None:
-        visual_scale.requires_grad_(plan.visual_scale.mode == "full")
+    for names, component_plan in (
+        (("start_video_embds", "end_video_embeds"), plan["visual_boundary_embeddings"]),
+        (("visual_scale",), plan["visual_scale"]),
+    ):
+        for name in names:
+            parameter = getattr(model, name, None)
+            if parameter is not None:
+                parameter.requires_grad_(component_plan.parameter_mode == "full")
 
     # After every plan decision, and before counting: a plan may have unfrozen a
     # component that holds one of these.

@@ -22,7 +22,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from csi_slt.commands.prompt_setup import instantiate_prompt_resolvers
+from csi_slt.commands.config import instantiate_prompt_resolvers
 from csi_slt.data.datamodule import DataModule
 from csi_slt.modeling_slt.visual_adapters.attnpool_adapter import (
     ClsAttentionTopKSelector,

@@ -22,8 +22,9 @@ model:
       use_temporal_conv: false
 
 engine:
+  optimization:
+    visual_adapter: { learning_rate: 1e-4 }
   training_args:
-    visual_adapter_learning_rate: 1e-4
     dataloader_num_workers: 8
     eval_steps: 6000
     logging_steps: 15
