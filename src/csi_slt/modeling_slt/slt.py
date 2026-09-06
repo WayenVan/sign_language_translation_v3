@@ -1,3 +1,4 @@
+import inspect
 import math
 from copy import deepcopy
 from enum import Enum
@@ -132,13 +133,23 @@ def _load_pretrained_submodule_components(model: nn.Module) -> None:
     Duck-typed: any module exposing ``load_pretrained_components()`` is called.
     Define the hook on whichever module owns the loading and not also on its
     parent, or the same weights are read twice.
+
+    A loader that declares a ``visual_backbone`` parameter is handed the live
+    backbone so it can check its external source against it -- the hand-patch
+    scorer verifies it was fitted on this backbone and output layer, since a
+    layer mismatch degrades its ranking to near-random without failing.
     """
+    visual_backbone = getattr(model, "visual_backbone", None)
     for name, module in model.named_modules():
         loader = getattr(module, "load_pretrained_components", None)
-        if callable(loader):
+        if not callable(loader):
+            continue
+        if "visual_backbone" in inspect.signature(loader).parameters:
+            loader(visual_backbone=visual_backbone)
+        else:
             loader()
-            mark_module_tree_as_initialized(module)
-            logger.info("Loaded pretrained components for %s", name or "<root>")
+        mark_module_tree_as_initialized(module)
+        logger.info("Loaded pretrained components for %s", name or "<root>")
 
 
 class SltModel(PreTrainedModel, GenerationMixin):

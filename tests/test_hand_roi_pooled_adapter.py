@@ -203,6 +203,98 @@ def test_model_factory_hook_installs_the_scorer_once(scorer_dir) -> None:
     assert not hasattr(model.visual_adapter, "load_pretrained_components")
 
 
+class _FakeBackbone(nn.Module):
+    """Minimal stand-in exposing the attributes the provenance check reads."""
+
+    def __init__(self, backbone_id: str = "some/backbone", output_layer: int = -8):
+        super().__init__()
+        self.id = backbone_id
+        self.output_layer = output_layer
+        self.config = {"id": backbone_id, "output_layer": output_layer}
+
+
+_FAKE_BACKBONE_CLASS = f"{_FakeBackbone.__module__}.{_FakeBackbone.__qualname__}"
+
+
+def _write_scorer(
+    tmp_path,
+    *,
+    visual_backbone_class=_FAKE_BACKBONE_CLASS,
+    backbone_config=None,
+):
+    """A fitted scorer on disk carrying the given backbone provenance."""
+    config = HandPatchScorerConfig(
+        input_dim=INPUT_DIM,
+        visual_backbone_class=visual_backbone_class,
+        visual_backbone_init_kwargs=(
+            None
+            if backbone_config is None
+            else {"config": backbone_config, "dtype": "bfloat16"}
+        ),
+    )
+    scorer = HandPatchScorer(config)
+    scorer.set_feature_statistics(torch.zeros(INPUT_DIM), torch.ones(INPUT_DIM))
+    path = tmp_path / "scorer_prov"
+    scorer.save_pretrained(path)
+    return str(path)
+
+
+def test_provenance_check_passes_when_backbone_and_layer_match(tmp_path) -> None:
+    path = _write_scorer(
+        tmp_path, backbone_config={"id": "some/backbone", "output_layer": -8}
+    )
+    pool = TopKRoiPool(input_dim=INPUT_DIM, top_k=3, scorer_path=path)
+
+    pool.load_pretrained_components(visual_backbone=_FakeBackbone(output_layer=-8))
+
+    assert pool.scorer_is_loaded is True
+
+
+def test_provenance_check_rejects_a_different_output_layer(tmp_path) -> None:
+    path = _write_scorer(
+        tmp_path, backbone_config={"id": "some/backbone", "output_layer": -1}
+    )
+    pool = TopKRoiPool(input_dim=INPUT_DIM, top_k=3, scorer_path=path)
+
+    with pytest.raises(ValueError, match="output_layer"):
+        pool.load_pretrained_components(visual_backbone=_FakeBackbone(output_layer=-8))
+    assert pool.scorer_is_loaded is False
+
+
+def test_provenance_check_rejects_a_different_backbone_class(tmp_path) -> None:
+    path = _write_scorer(
+        tmp_path,
+        visual_backbone_class="pkg.module.OtherBackbone",
+        backbone_config={"id": "some/backbone", "output_layer": -8},
+    )
+    pool = TopKRoiPool(input_dim=INPUT_DIM, top_k=3, scorer_path=path)
+
+    with pytest.raises(ValueError, match="fitted against"):
+        pool.load_pretrained_components(visual_backbone=_FakeBackbone(output_layer=-8))
+
+
+def test_provenance_check_warns_when_no_provenance_was_recorded(scorer_dir) -> None:
+    pool = TopKRoiPool(input_dim=INPUT_DIM, top_k=3, scorer_path=scorer_dir)
+
+    with pytest.warns(RuntimeWarning, match="no backbone provenance"):
+        pool.load_pretrained_components(visual_backbone=_FakeBackbone())
+    assert pool.scorer_is_loaded is True
+
+
+def test_model_factory_hook_hands_the_visual_backbone_to_the_loader(tmp_path) -> None:
+    path = _write_scorer(
+        tmp_path, backbone_config={"id": "some/backbone", "output_layer": -1}
+    )
+    model = nn.Module()
+    model.visual_backbone = _FakeBackbone(output_layer=-8)
+    model.visual_adapter = HandRoiPooledAdapter(
+        input_dim=INPUT_DIM, output_dim=5, scorer_path=path, projection_rank=7
+    )
+
+    with pytest.raises(ValueError, match="output_layer"):
+        _load_pretrained_submodule_components(model)
+
+
 def test_saved_scorer_carries_the_backbone_it_was_fitted_against(tmp_path) -> None:
     config = HandPatchScorerConfig(
         input_dim=INPUT_DIM,

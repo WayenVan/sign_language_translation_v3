@@ -43,6 +43,7 @@ features, pool whatever content you like under the resulting mask.
 """
 
 import math
+import warnings
 
 import torch
 from torch import Tensor, nn
@@ -117,13 +118,26 @@ class TopKRoiPool(nn.Module):
     def scorer_is_loaded(self) -> bool:
         return bool(self.scorer_loaded.item())
 
+    # Backbone-config fields that change the patch-feature distribution the
+    # scorer's coefficients are fitted to. ``attention_layer`` is deliberately
+    # absent: it only picks the block that feeds attention-map extraction, not
+    # the features the scorer sees.
+    _SCORER_BACKBONE_CONFIG_KEYS = ("id", "output_layer")
+
     @torch.no_grad()
-    def load_pretrained_components(self) -> None:
+    def load_pretrained_components(self, visual_backbone: nn.Module | None = None) -> None:
         """Install fitted coefficients from ``scorer_path``.
 
         Called once when a model is built from external pretrained sources.
         Resuming from a checkpoint must *not* call it: the weights come from the
         checkpoint, and the fitting directory may be long gone.
+
+        ``visual_backbone`` is the live backbone the scorer will run against.
+        When given, its class and feature-defining config (``id``,
+        ``output_layer``) are checked against the provenance the fitted scorer
+        recorded in its own config: coefficients fitted on one layer's features
+        rank another layer's patches at close to random, and nothing downstream
+        would notice.
         """
         if self.scorer_path is None:
             raise ValueError(
@@ -138,9 +152,71 @@ class TopKRoiPool(nn.Module):
                 f"for {self.input_dim}; the scorer is only valid for the backbone "
                 "and layer it was fitted on"
             )
+        if visual_backbone is not None:
+            self._check_scorer_provenance(fitted.config, visual_backbone)
         self.scorer.load_state_dict(fitted.state_dict())
         self.scorer.config = fitted.config
         self.scorer_loaded.fill_(True)
+
+    def _check_scorer_provenance(
+        self, scorer_config: HandPatchScorerConfig, visual_backbone: nn.Module
+    ) -> None:
+        """Reject a scorer fitted against a different backbone or output layer.
+
+        ``input_dim`` alone cannot catch this: a ViT keeps the same width at
+        every block, so a scorer fitted on layer -1 loads cleanly against a
+        model reading layer -8 and then ranks patches from a feature
+        distribution it was never fitted to.
+        """
+        recorded_class = getattr(scorer_config, "visual_backbone_class", None)
+        if recorded_class is None:
+            warnings.warn(
+                f"scorer at {self.scorer_path} records no backbone provenance; "
+                "cannot verify it was fitted on this backbone and output layer",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            return
+
+        live_class = (
+            f"{type(visual_backbone).__module__}."
+            f"{type(visual_backbone).__qualname__}"
+        )
+        if recorded_class != live_class:
+            raise ValueError(
+                f"scorer at {self.scorer_path} was fitted against "
+                f"{recorded_class}, but the model's visual backbone is "
+                f"{live_class}; its patch ranking would be near-random. Re-fit "
+                "the scorer on this backbone."
+            )
+
+        recorded_config = (
+            getattr(scorer_config, "visual_backbone_init_kwargs", None) or {}
+        ).get("config", {})
+        live_config = getattr(visual_backbone, "config", None) or {}
+        mismatches = {}
+        for key in self._SCORER_BACKBONE_CONFIG_KEYS:
+            # Prefer a resolved attribute (e.g. CRadioV4Backbone.output_layer,
+            # which has applied defaults and normalized list forms) over the raw
+            # config dict; fall back to the dict for backbones without it.
+            live_value = getattr(visual_backbone, key, None)
+            if live_value is None:
+                live_value = live_config.get(key)
+            recorded_value = recorded_config.get(key)
+            if recorded_value != live_value:
+                mismatches[key] = (recorded_value, live_value)
+        if mismatches:
+            detail = ", ".join(
+                f"{key} (fitted on {fit!r}, run against {live!r})"
+                for key, (fit, live) in mismatches.items()
+            )
+            raise ValueError(
+                f"scorer at {self.scorer_path} was fitted against a different "
+                f"backbone configuration: {detail}. Its coefficients only match "
+                "the feature distribution of the layer they were fitted on. "
+                "Re-fit with preprocess/extract_scorer_features.py + "
+                "preprocess/train_scorer.py for this configuration."
+            )
 
     def select(self, score_features: Tensor) -> Tensor:
         """Hard top-k mask over the patch axis: ``[F, P, D] -> [F, P]`` bool.
