@@ -5,6 +5,6 @@ test:
   _target_: csi_slt.engine.prompt_resolver.PromptIdFromRowResolver
   sampler:
     _target_: csi_slt.engine.prompt_sampler.PromptSampler
-    prompt_paths: prompts/unrelated.jsonl
+    prompt_paths: prompts/generic/unrelated.jsonl
   prompt_id_column: prompt_id
   target_lang_column: lang

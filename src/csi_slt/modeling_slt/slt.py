@@ -834,8 +834,14 @@ class SltModel(PreTrainedModel, GenerationMixin):
     def _compute_causal_lm_loss(
         logits: torch.Tensor,
         labels: torch.Tensor,
+        label_smoothing: float = 0.0,
     ) -> torch.Tensor:
-        """Compute mean next-token cross entropy over non-ignored labels."""
+        """Compute mean next-token cross entropy over non-ignored labels.
+
+        ``label_smoothing`` (default ``0.0``, i.e. plain cross entropy) is
+        forwarded to ``F.cross_entropy``. ``forward`` passes
+        ``config.label_smoothing`` here; the CTC term it adds is never smoothed.
+        """
         if logits.ndim != 3:
             raise ValueError(
                 f"logits must have shape [B, L, V], got {tuple(logits.shape)}"
@@ -854,6 +860,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             shift_logits.view(-1, shift_logits.size(-1)),
             shift_labels.view(-1),
             ignore_index=-100,
+            label_smoothing=label_smoothing,
         )
 
     def _compute_ctc_loss(
@@ -1060,7 +1067,9 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
 
         ce_loss = (
-            self._compute_causal_lm_loss(outputs.logits, labels)
+            self._compute_causal_lm_loss(
+                outputs.logits, labels, self.config.label_smoothing
+            )
             if labels is not None
             else None
         )

@@ -66,6 +66,7 @@ class SltConfig(PretrainedConfig):
         ctc_loss_weight: float = 0.0,
         ctc_vocab_size: Optional[int] = None,
         ctc_blank_id: Optional[int] = None,
+        label_smoothing: float = 0.0,
         video_bidirectional_attention: Optional[bool] = None,
         visual_position_embedding_type: Optional[str] = None,
         **kwargs: Any,
@@ -132,6 +133,16 @@ class SltConfig(PretrainedConfig):
                 ``[0, ctc_vocab_size)``. Required when ``ctc_enabled`` is
                 ``True``; it is dataset-tokenizer-specific and not assumed to
                 be ``0``.
+            label_smoothing: Smoothing epsilon for the next-token
+                cross-entropy, passed straight to ``F.cross_entropy``'s
+                ``label_smoothing`` argument. ``0.0`` (the default) is plain
+                cross-entropy. It applies to the language-model term only; the
+                CTC term is never smoothed. Must be in ``[0.0, 1.0)``. This is
+                the *only* supported way to enable label smoothing --
+                ``TrainingArguments.label_smoothing_factor`` must stay ``0.0``,
+                because a non-zero factor makes the HF trainer pop ``labels``
+                before the model runs and the CTC loss plus every model-side
+                logging scalar silently disappears (``SltTrainer`` asserts this).
             video_bidirectional_attention: Whether video tokens attend to each
                 other in both directions during prefill, instead of only
                 causally. ``None`` means "not recorded by this checkpoint" and
@@ -250,6 +261,14 @@ class SltConfig(PretrainedConfig):
         self.ctc_loss_weight = float(ctc_loss_weight)
         self.ctc_vocab_size = ctc_vocab_size
         self.ctc_blank_id = ctc_blank_id
+
+        if isinstance(label_smoothing, bool) or not isinstance(
+            label_smoothing, (int, float)
+        ):
+            raise TypeError("label_smoothing must be a real number")
+        if not 0.0 <= label_smoothing < 1.0:
+            raise ValueError("label_smoothing must be in [0.0, 1.0)")
+        self.label_smoothing = float(label_smoothing)
 
         if video_bidirectional_attention is None:
             # A deserialized configuration always carries ``transformers_version``;

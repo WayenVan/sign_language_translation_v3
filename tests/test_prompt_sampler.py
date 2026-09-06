@@ -100,10 +100,10 @@ def test_rejects_unused_fields_and_bad_sentinel(tmp_path):
 
 
 def test_real_prompt_banks_load():
-    train = PromptSampler("prompts/train.jsonl")
-    heldout = PromptSampler("prompts/heldout.jsonl")
-    wrong_task = PromptSampler("prompts/wrong_task.jsonl")
-    unrelated = PromptSampler("prompts/unrelated.jsonl")
+    train = PromptSampler("prompts/generic/train.jsonl")
+    heldout = PromptSampler("prompts/generic/heldout.jsonl")
+    wrong_task = PromptSampler("prompts/generic/wrong_task.jsonl")
+    unrelated = PromptSampler("prompts/generic/unrelated.jsonl")
 
     assert len(train.records) == 24
     assert len(heldout.records) == 12

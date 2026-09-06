@@ -382,6 +382,24 @@ def test_trainer_does_not_claim_model_handles_num_items_in_batch(tmp_path):
     assert "num_items_in_batch" not in model.last_kwargs
 
 
+def test_trainer_rejects_hf_label_smoothing(tmp_path):
+    args = Seq2SeqTrainingArguments(
+        output_dir=str(tmp_path),
+        report_to="none",
+        label_smoothing_factor=0.1,
+    )
+
+    with pytest.raises(ValueError, match="label_smoothing_factor must be 0.0"):
+        SltTrainer(model=_MeanReducedModelWithKwargs(), args=args)
+
+
+def test_trainer_pins_label_smoother_off(tmp_path):
+    args = Seq2SeqTrainingArguments(output_dir=str(tmp_path), report_to="none")
+    trainer = SltTrainer(model=_MeanReducedModelWithKwargs(), args=args)
+
+    assert trainer.label_smoother is None
+
+
 def test_train_probe_test_dataloader_disables_persistent_workers(tmp_path, monkeypatch):
     args = Seq2SeqTrainingArguments(
         output_dir=str(tmp_path),

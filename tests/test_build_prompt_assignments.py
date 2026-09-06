@@ -40,9 +40,9 @@ def test_rejects_duplicate_dataset_ids():
 @pytest.mark.parametrize(
     ("bank_path", "assignments_per_row"),
     [
-        ("prompts/heldout.jsonl", 4),
-        ("prompts/wrong_task.jsonl", 1),
-        ("prompts/unrelated.jsonl", 1),
+        ("prompts/generic/heldout.jsonl", 4),
+        ("prompts/generic/wrong_task.jsonl", 1),
+        ("prompts/generic/unrelated.jsonl", 1),
     ],
 )
 def test_real_evaluation_banks_expand_by_target_language(

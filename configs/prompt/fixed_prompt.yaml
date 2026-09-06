@@ -5,7 +5,7 @@ train: &canonical_resolver
   _target_: csi_slt.engine.prompt_resolver.FixedPromptResolver
   sampler:
     _target_: csi_slt.engine.prompt_sampler.PromptSampler
-    prompt_paths: prompts/train.jsonl
+    prompt_paths: prompts/generic/train.jsonl
   prompt_ids:
     de: canonical_en_de_001
     en: canonical_en_en_001

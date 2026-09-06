@@ -57,7 +57,7 @@ def test_slt_processor():
         mode="train",
     )
     prompt_resolver = FixedPromptResolver(
-        PromptSampler("prompts/train.jsonl"),
+        PromptSampler("prompts/generic/train.jsonl"),
         {
             "de": "canonical_en_de_001",
             "en": "canonical_en_en_001",

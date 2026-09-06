@@ -1,0 +1,20 @@
+# FixedPrompt experiment, weather-domain prompt bank: every stage uses the
+# canonical prompt associated with the sample's target language, drawn from
+# prompts/weather/train.jsonl (same ids as prompts/generic/train.jsonl, but the
+# templates name the weather-forecast domain of PHOENIX-2014-T).
+#
+# Swap-in for fixed_prompt.yaml: prompt=fixed_prompt_weather on the launcher.
+
+train: &canonical_resolver
+  _target_: csi_slt.engine.prompt_resolver.FixedPromptResolver
+  sampler:
+    _target_: csi_slt.engine.prompt_sampler.PromptSampler
+    prompt_paths: prompts/weather/train.jsonl
+  prompt_ids:
+    de: canonical_en_de_001
+    en: canonical_en_en_001
+    zh: canonical_en_zh_001
+  target_lang_column: lang
+
+val: *canonical_resolver
+test: *canonical_resolver

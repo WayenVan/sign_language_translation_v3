@@ -184,6 +184,23 @@ class SltTrainer(Seq2SeqTrainer):
     ):
         super().__init__(*args, **kwargs)
 
+        # Label smoothing is done inside ``SltModel`` (``config.label_smoothing``
+        # -> the LM cross-entropy only). The HF path must stay off: a non-zero
+        # ``label_smoothing_factor`` makes ``Trainer.compute_loss`` pop
+        # ``labels`` before the model runs, so ``SltModel`` returns ``loss=None``
+        # and its CTC term plus every ``logging_scalars`` entry silently vanish.
+        # Fail loudly instead of training a quietly different objective.
+        if self.args.label_smoothing_factor != 0.0:
+            raise ValueError(
+                "TrainingArguments.label_smoothing_factor must be 0.0; it would "
+                "strip labels before SltModel.forward and silently drop the CTC "
+                "loss and all model logging scalars. Set label smoothing via "
+                "model.config.label_smoothing instead."
+            )
+        # Defensive: even at factor 0.0 this is None, but pin it so nothing
+        # downstream can re-enable the HF smoother behind the check above.
+        self.label_smoother = None
+
         # ``SltModel.forward`` accepts arbitrary LLM kwargs, which makes
         # Transformers infer that it consumes ``num_items_in_batch``.  Its
         # language-model CE and D-SID losses are already mean-reduced and do

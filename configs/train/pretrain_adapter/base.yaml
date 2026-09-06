@@ -96,11 +96,12 @@ engine:
     # Gradient clipping. This is already the transformers default; it is stated
     # explicitly so a run's clipping threshold is visible in the config.
     max_grad_norm: 1.0
-    # WARN: Keep this at 0.0. A non-zero factor makes Trainer.compute_loss pop
-    # `labels` out of the model inputs and compute cross entropy from logits
-    # itself. SltModel guards its auxiliary terms on `loss is not None`, so the
-    # CTC loss would be silently dropped from training with no error. Label smoothing needs a custom compute_loss_func
-    # before it can be turned on here.
+    # WARN: Must stay 0.0 -- SltTrainer raises if it is not. A non-zero factor
+    # makes Trainer.compute_loss pop `labels` out of the model inputs and
+    # compute cross entropy from logits itself; SltModel then returns
+    # `loss=None`, silently dropping the CTC term and every logging scalar.
+    # To use label smoothing, set `model.config.label_smoothing` (e.g. 0.1)
+    # instead -- it is applied inside SltModel to the LM cross-entropy only.
     label_smoothing_factor: 0.0
     # NEFTune embedding noise. Null disables it. It hooks the LLM's input
     # embedding layer, so it perturbs prompt/text tokens only and leaves the

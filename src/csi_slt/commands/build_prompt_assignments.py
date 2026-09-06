@@ -7,7 +7,7 @@ unrelated, and other prompt-driven evaluation suites.
 Example:
 
     python -m csi_slt.commands.build_prompt_assignments \
-        --prompt-bank prompts/heldout.jsonl \
+        --prompt-bank prompts/generic/heldout.jsonl \
         --output prompts/assignments/heldout.jsonl
 """
 
