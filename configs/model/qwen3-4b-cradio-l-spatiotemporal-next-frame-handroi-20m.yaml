@@ -91,7 +91,7 @@ config:
     # Fitted offline by preprocess/train_scorer.py. Read only when a model is
     # built from pretrained components; a checkpoint carries the coefficients
     # itself, so this directory need not survive.
-    scorer_path: outputs/hand_patch_scorer
+    scorer_path: outputs/hand_patch_scorer_L1
     # Patches kept per frame. Measured on held-out videos with this scorer,
     # k=24 keeps 98.3% of hand patches while spending 11.4% of the budget on
     # non-hand ones -- the better side of that curve for a plain mean.

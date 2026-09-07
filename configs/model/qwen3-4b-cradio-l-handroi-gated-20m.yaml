@@ -46,7 +46,7 @@ config:
     output_dim: 2560
     temporal_scale_factor: 2
 
-    scorer_path: outputs/hand_patch_scorer
+    scorer_path: outputs/hand_patch_scorer_L1
     top_k: 24
     freeze_scorer: true
 
