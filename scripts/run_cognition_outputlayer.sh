@@ -12,7 +12,11 @@ set -euo pipefail
 
 export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
 
-SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
+if [[ "$(hostname -f)" == "tubbs.eng.gla.ac.uk" ]]; then
+  SCRIPT_DIR=/home/2533494W/project/sign_language_translation_v3
+else
+  SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
+fi
 
 cd "$SCRIPT_DIR"
 
