@@ -2,6 +2,11 @@ type: lora
 
 # Pair with engine.trainability: llm=lora, visual_adapter=full, everything
 # else frozen (that is the train/ft_peft.yaml default).
+#
+# `llm_lora_layers` is resolved against the live decoder at injection: count=4
+# with the default anchor (last) is the final four transformer layers, whatever
+# the LLM's depth -- no hand-written absolute indices to fall out of sync when
+# the base model changes. The checkpoint serializes the resolved indices.
 
 llm_lora_config:
   r: 8
@@ -11,9 +16,7 @@ llm_lora_config:
   target_modules:
     - "q_proj"
     - "v_proj"
-  layers_pattern: "layers"
-  layers_to_transform:
-    - 24
-    - 25
-    - 26
-    - 27
+
+llm_lora_layers:
+  pattern: "layers"
+  count: 4

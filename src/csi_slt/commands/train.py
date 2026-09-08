@@ -58,6 +58,8 @@ def initialize_model(
     visual_lora_config: LoraConfig | None,
     llm_dtype: str | torch.dtype,
     visual_backbone_dtype: str | torch.dtype,
+    llm_lora_layers: dict | None = None,
+    visual_lora_layers: dict | None = None,
 ) -> tuple[SltModel, str]:
     """Create an SLT model from a checkpoint or pretrained components."""
     load_from_checkpoint = model_cfg.get("load_from_checkpoint", False)
@@ -93,28 +95,40 @@ def initialize_model(
                 llm_lora_config,
             )
         else:
-            model.inject_llm_lora(llm_lora_config)
+            model.inject_llm_lora(llm_lora_config, layer_spec=llm_lora_layers)
     if visual_lora_config is not None:
-        model.inject_visual_lora(visual_lora_config)
+        model.inject_visual_lora(visual_lora_config, layer_spec=visual_lora_layers)
 
     return model, tokenizer_source
 
 
 def build_lora_configs(
     peft_cfg: DictConfig,
-) -> tuple[LoraConfig | None, LoraConfig | None]:
-    """Create optional language and visual LoRA configs."""
+) -> tuple[LoraConfig | None, LoraConfig | None, dict | None, dict | None]:
+    """Create optional language and visual LoRA configs and layer specs.
+
+    ``*_lora_config`` maps one-to-one onto ``LoraConfig``; the optional sibling
+    ``*_lora_layers`` mapping (``{count, anchor?}``) is kept separate and
+    resolved against the live model at injection time -- the visual span can
+    then track ``visual_backbone_config.output_layer``.
+    """
     llm_lora_config = None
+    llm_lora_layers = None
     if (node := peft_cfg.get("llm_lora_config")) is not None:
         llm_lora_config = LoraConfig(
             **OmegaConf.to_container(node, resolve=True),
             task_type=TaskType.CAUSAL_LM,
         )
+        if (layers := peft_cfg.get("llm_lora_layers")) is not None:
+            llm_lora_layers = OmegaConf.to_container(layers, resolve=True)
 
     visual_lora_config = None
+    visual_lora_layers = None
     if (node := peft_cfg.get("visual_lora_config")) is not None:
         visual_lora_config = LoraConfig(**OmegaConf.to_container(node, resolve=True))
-    return llm_lora_config, visual_lora_config
+        if (layers := peft_cfg.get("visual_lora_layers")) is not None:
+            visual_lora_layers = OmegaConf.to_container(layers, resolve=True)
+    return llm_lora_config, visual_lora_config, llm_lora_layers, visual_lora_layers
 
 
 @hydra.main(
@@ -123,11 +137,18 @@ def build_lora_configs(
     config_name="train/base",
 )
 def main(cfg: DictConfig) -> None:
-    llm_lora_config, visual_lora_config = build_lora_configs(cfg.peft)
+    (
+        llm_lora_config,
+        visual_lora_config,
+        llm_lora_layers,
+        visual_lora_layers,
+    ) = build_lora_configs(cfg.peft)
     slt_model, tokenizer_source = initialize_model(
         cfg.model,
         llm_lora_config=llm_lora_config,
         visual_lora_config=visual_lora_config,
+        llm_lora_layers=llm_lora_layers,
+        visual_lora_layers=visual_lora_layers,
         llm_dtype=cfg.engine.llm_dtype,
         visual_backbone_dtype=cfg.engine.visual_backbone_dtype,
     )

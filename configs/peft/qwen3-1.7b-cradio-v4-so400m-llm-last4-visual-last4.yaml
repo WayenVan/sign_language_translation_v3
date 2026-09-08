@@ -2,6 +2,13 @@ type: lora
 
 # Pair with engine.trainability: llm=lora, visual_backbone=lora,
 # visual_adapter=full, everything else frozen.
+#
+# Both spans are resolved against the live model at injection and serialized as
+# absolute indices in the checkpoint:
+#   * llm_lora_layers    -- the last 4 Qwen3 decoder layers (anchor: last).
+#   * visual_lora_layers -- the 4 C-RADIO blocks ending at the backbone's
+#     output_layer, so the span tracks
+#     visual_backbone_config.output_layer.
 
 llm_lora_config:
   r: 8
@@ -11,12 +18,10 @@ llm_lora_config:
   target_modules:
     - "q_proj"
     - "v_proj"
-  layers_pattern: "layers"
-  layers_to_transform:
-    - 24
-    - 25
-    - 26
-    - 27
+
+llm_lora_layers:
+  pattern: "layers"
+  count: 4
 
 visual_lora_config:
   r: 8
@@ -25,9 +30,8 @@ visual_lora_config:
   bias: "none"
   target_modules:
     - "qkv"
-  layers_pattern: "blocks"
-  layers_to_transform:
-    - 23
-    - 24
-    - 25
-    - 26
+
+visual_lora_layers:
+  pattern: "blocks"
+  anchor: output_layer
+  count: 4

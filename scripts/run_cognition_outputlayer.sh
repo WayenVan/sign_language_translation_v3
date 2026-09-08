@@ -58,11 +58,19 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 #   for L in -1 -4 -8 -12; do
 #     sbatch -J slt_ol${L} scripts/run_cognition_outputlayer.sh ${L}
 #   done
+#
+# A bare positive integer anywhere after the layer overrides num_train_epochs
+# (default: baseline_ablation inherits 50 from base.yaml). Use it for a longer
+# run; the epoch count is folded into the job name / output dir / wandb tags so
+# it does not collide with the default-length run.
+#   sbatch -J slt_ol-8_ep120 scripts/run_cognition_outputlayer.sh -8 120
 # --------------------------------------------------------------------------- #
 
 OUTPUT_LAYER="${1:-}"
 if [[ -z "$OUTPUT_LAYER" ]]; then
-  echo "usage: $0 <output_layer> [debug] [share]   (output_layer: -1 | -4 | -8 | -12)" >&2
+  echo "usage: $0 <output_layer> [num_train_epochs] [debug] [share]" >&2
+  echo "       output_layer: negative int (-1 | -4 | -8 | -12 | ...)" >&2
+  echo "       num_train_epochs: optional positive int; omitted keeps the config default (50)" >&2
   exit 2
 fi
 if [[ ! "$OUTPUT_LAYER" =~ ^-[0-9]+$ ]]; then
@@ -79,21 +87,33 @@ if [[ ! -f "$SCRIPT_DIR/$SCORER_PATH/config.json" ]]; then
   exit 3
 fi
 
-# 可选参数：debug 关闭 WandB，share 直接使用共享数据集。
+# 可选参数：debug 关闭 WandB，share 直接使用共享数据集，
+# 裸正整数覆盖 num_train_epochs（默认沿用配置里的 50）。
 DEBUG=false
 SHARED_DATASET=false
+NUM_TRAIN_EPOCHS=""
 for arg in "$@"; do
   case "$arg" in
   debug) DEBUG=true ;;
   share) SHARED_DATASET=true ;;
   *)
-    echo "Unknown argument: $arg (supported: debug, share)" >&2
-    exit 2
+    if [[ "$arg" =~ ^[0-9]+$ ]]; then
+      NUM_TRAIN_EPOCHS="$arg"
+    else
+      echo "Unknown argument: $arg (supported: <int epochs>, debug, share)" >&2
+      exit 2
+    fi
     ;;
   esac
 done
 
-RUN_TAG="ol${OUTPUT_LAYER}"
+# Fold a non-default epoch count into every run identifier so a longer run
+# never overwrites the default-length one's output dir.
+EP_SUFFIX=""
+if [[ -n "$NUM_TRAIN_EPOCHS" ]]; then
+  EP_SUFFIX="-ep${NUM_TRAIN_EPOCHS}"
+fi
+RUN_TAG="ol${OUTPUT_LAYER}${EP_SUFFIX}"
 
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
@@ -159,5 +179,12 @@ CMD_ARGS=(
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
 )
+
+# Optional longer run: override only when an epoch count was passed, otherwise
+# baseline_ablation keeps base.yaml's num_train_epochs=50.
+if [[ -n "$NUM_TRAIN_EPOCHS" ]]; then
+  CMD_ARGS+=(engine.training_args.num_train_epochs="$NUM_TRAIN_EPOCHS")
+  echo "NUM_TRAIN_EPOCHS override = $NUM_TRAIN_EPOCHS"
+fi
 
 accelerate launch "${CMD_ARGS[@]}"

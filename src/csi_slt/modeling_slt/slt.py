@@ -1,5 +1,6 @@
 import inspect
 import math
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
 from typing import Callable, Optional
@@ -22,6 +23,11 @@ from csi_slt.modeling_slt.info_utils import (
 )
 from peft import LoraConfig, inject_adapter_in_model
 from ..configuration_slt.configuration import SltConfig
+from .lora_layers import (
+    apply_layer_spec,
+    normalize_layer_spec,
+    resolve_layers_to_transform,
+)
 from .output_utils import (
     PrepareForCausalLMOutput,
     SltCausalLMOutputWithPast,
@@ -46,6 +52,37 @@ def _serialize_lora_config(config: LoraConfig) -> dict:
         key: list(value) if isinstance(value, set) else value
         for key, value in config.to_dict().items()
     }
+
+
+def _apply_lora_layer_spec(
+    peft_config: LoraConfig,
+    module: nn.Module,
+    layer_spec: Mapping[str, object] | None,
+    *,
+    side: str,
+) -> None:
+    """Fold a ``*_lora_layers`` mapping into ``peft_config.layers_to_transform``.
+
+    Resolved against ``module`` so the checkpoint serializes explicit indices
+    and the reload path never re-resolves. The LLM decoder has no truncatable
+    output, so only ``anchor: last`` (the default) is accepted here; the visual
+    side owns ``anchor: output_layer`` in ``SltModel.inject_visual_lora``.
+    """
+    if layer_spec is None:
+        return
+    if peft_config.layers_to_transform is not None:
+        raise ValueError(
+            f"{side} LoRA: set either layers_to_transform in the LoRA config or "
+            f"{side}_lora_layers, not both"
+        )
+    normalized = normalize_layer_spec(layer_spec)
+    if normalized["anchor"] != "last":
+        raise ValueError(f"{side}_lora_layers only supports anchor: last")
+    apply_layer_spec(
+        peft_config,
+        resolve_layers_to_transform(module, layer_spec),
+        normalized,
+    )
 
 
 def get_llm_cls_by_model_name(model_name):
@@ -489,23 +526,63 @@ class SltModel(PreTrainedModel, GenerationMixin):
         # been reconstructed.
         mark_module_tree_as_initialized(self.llm)
 
-    def inject_llm_lora(self, peft_config: LoraConfig) -> None:
-        """Inject a new LoRA adapter into the language model."""
+    def inject_llm_lora(
+        self,
+        peft_config: LoraConfig,
+        *,
+        layer_spec: Mapping[str, object] | None = None,
+    ) -> None:
+        """Inject a new LoRA adapter into the language model.
+
+        ``layer_spec`` is an optional ``llm_lora_layers`` mapping resolved
+        against the live decoder into ``peft_config.layers_to_transform``; the
+        checkpoint then serializes explicit indices.
+        """
         if self.config.llm_lora:
             raise ValueError(
                 "The checkpoint already contains LLM LoRA. "
                 "Use SltModel.from_pretrained() to load it."
             )
+        _apply_lora_layer_spec(peft_config, self.llm, layer_spec, side="llm")
         self._inject_llm_lora(peft_config)
         self.config.llm_lora = True
         self.config.llm_lora_config = _serialize_lora_config(peft_config)
 
-    def inject_visual_lora(self, peft_config: LoraConfig) -> None:
-        """Inject a new LoRA adapter into the visual encoder in-place."""
+    def inject_visual_lora(
+        self,
+        peft_config: LoraConfig,
+        *,
+        layer_spec: Mapping[str, object] | None = None,
+    ) -> None:
+        """Inject a new LoRA adapter into the visual encoder in-place.
+
+        ``layer_spec`` is an optional ``visual_lora_layers`` mapping. With
+        ``anchor: output_layer`` the span ends at the ViT block that feeds the
+        adapter, so it tracks ``visual_backbone_config.output_layer`` instead of
+        being pinned to the encoder's final blocks.
+        """
         if self.config.visual_lora:
             raise ValueError(
                 "The checkpoint already contains visual LoRA. "
                 "Use SltModel.from_pretrained() to load it."
+            )
+        if layer_spec is not None:
+            if peft_config.layers_to_transform is not None:
+                raise ValueError(
+                    "visual LoRA: set either layers_to_transform in the LoRA "
+                    "config or visual_lora_layers, not both"
+                )
+            resolver = getattr(self.visual_backbone, "resolve_lora_layers", None)
+            if resolver is None:
+                raise TypeError(
+                    f"{type(self.visual_backbone).__name__} does not implement "
+                    "resolve_lora_layers(); pass an explicit layers_to_transform "
+                    "instead of visual_lora_layers"
+                )
+            apply_layer_spec(
+                peft_config,
+                resolver(layer_spec),
+                normalize_layer_spec(layer_spec),
             )
         self._inject_visual_lora(peft_config)
         self.config.visual_lora = True

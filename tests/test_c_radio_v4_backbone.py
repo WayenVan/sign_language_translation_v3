@@ -264,3 +264,59 @@ def test_invalid_output_layers_are_rejected(output_layer):
             {"id": "fake", "output_layer": output_layer},
             c_radio_v4=_FakeEncoder(),
         )
+
+
+class _BlocksEncoder(nn.Module):
+    """Minimal encoder whose radio_model exposes an ordered block list."""
+
+    def __init__(self, num_blocks: int):
+        super().__init__()
+        self.radio_model = nn.Module()
+        self.radio_model.blocks = nn.ModuleList(
+            nn.Linear(2, 2) for _ in range(num_blocks)
+        )
+        self.config = SimpleNamespace()
+
+
+def _backbone_with_blocks(num_blocks: int, output_layer: int) -> CRadioV4Backbone:
+    return CRadioV4Backbone(
+        {"id": "fake", "output_layer": output_layer},
+        c_radio_v4=_BlocksEncoder(num_blocks),
+    )
+
+
+def test_resolve_lora_layers_output_layer_anchor_tracks_output_layer():
+    assert _backbone_with_blocks(27, -1).resolve_lora_layers(
+        {"anchor": "output_layer", "count": 4}
+    ) == [23, 24, 25, 26]
+    assert _backbone_with_blocks(27, -8).resolve_lora_layers(
+        {"anchor": "output_layer", "count": 4}
+    ) == [16, 17, 18, 19]
+    assert _backbone_with_blocks(27, -1).resolve_lora_layers(
+        {"anchor": "output_layer", "count": 14}
+    ) == list(range(13, 27))
+
+
+def test_resolve_lora_layers_last_anchor_ignores_output_layer():
+    assert _backbone_with_blocks(27, -8).resolve_lora_layers(
+        {"anchor": "last", "count": 4}
+    ) == [23, 24, 25, 26]
+
+
+def test_resolve_lora_layers_returns_none_without_a_spec():
+    assert _backbone_with_blocks(27, -1).resolve_lora_layers(None) is None
+
+
+def test_resolve_lora_layers_rejects_span_past_the_front():
+    # output_layer -25 -> span ends at block 2; four blocks do not fit.
+    with pytest.raises(ValueError, match="block"):
+        _backbone_with_blocks(27, -25).resolve_lora_layers(
+            {"anchor": "output_layer", "count": 4}
+        )
+
+
+def test_resolve_lora_layers_rejects_unknown_spec_keys():
+    with pytest.raises(ValueError, match="unknown keys"):
+        _backbone_with_blocks(27, -1).resolve_lora_layers(
+            {"count": 4, "anchor": "output_layer", "step": 1}
+        )

@@ -7,6 +7,8 @@ from collections.abc import Sequence
 
 from torch import nn
 
+from csi_slt.modeling_slt.lora_layers import find_transformer_layers
+
 from .plans import ComponentTrainability, SltTrainabilityPlan
 
 logger = logging.getLogger(__name__)
@@ -63,21 +65,13 @@ def _resolve_module(root: nn.Module, path: str) -> nn.Module | None:
 
 
 def _resolve_visual_layers(visual_encoder: nn.Module) -> Sequence[nn.Module]:
-    for path in (
-        "radio_model.blocks",
-        "vision_model.encoder.layers",
-        "encoder.layer",
-        "encoder.layers",
-        "blocks",
-        "layers",
-    ):
-        layers = _resolve_module(visual_encoder, path)
-        if isinstance(layers, (nn.ModuleList, nn.Sequential)):
-            return layers
-    raise TypeError(
-        "Could not locate transformer layers for visual_backbone "
-        "parameter_mode='last_n_layers'"
-    )
+    try:
+        return find_transformer_layers(visual_encoder)
+    except TypeError as error:
+        raise TypeError(
+            "Could not locate transformer layers for visual_backbone "
+            "parameter_mode='last_n_layers'"
+        ) from error
 
 
 def _apply_visual_backbone_plan(

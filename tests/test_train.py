@@ -241,11 +241,11 @@ def test_initialize_model_loads_before_injecting_new_lora(monkeypatch):
     class _LoadedModel:
         config = OmegaConf.create({"llm_lora": False})
 
-        def inject_llm_lora(self, config):
-            events.append(("llm", config))
+        def inject_llm_lora(self, config, *, layer_spec=None):
+            events.append(("llm", config, layer_spec))
 
-        def inject_visual_lora(self, config):
-            events.append(("visual", config))
+        def inject_visual_lora(self, config, *, layer_spec=None):
+            events.append(("visual", config, layer_spec))
 
     loaded_model = _LoadedModel()
 
@@ -271,8 +271,8 @@ def test_initialize_model_loads_before_injecting_new_lora(monkeypatch):
     assert model is loaded_model
     assert events == [
         ("load", "/tmp/checkpoint-10"),
-        ("llm", llm_lora),
-        ("visual", visual_lora),
+        ("llm", llm_lora, None),
+        ("visual", visual_lora, None),
     ]
 
 
@@ -286,11 +286,11 @@ def test_initialize_model_creates_components_then_injects_lora(monkeypatch):
     class _FakeModel:
         config = OmegaConf.create({"llm_lora": False})
 
-        def inject_llm_lora(self, config):
-            events.append(("llm", config))
+        def inject_llm_lora(self, config, *, layer_spec=None):
+            events.append(("llm", config, layer_spec))
 
-        def inject_visual_lora(self, config):
-            events.append(("visual", config))
+        def inject_visual_lora(self, config, *, layer_spec=None):
+            events.append(("visual", config, layer_spec))
 
     created_model = _FakeModel()
     monkeypatch.setattr(train_command, "SltConfig", _FakeConfig)
@@ -319,7 +319,7 @@ def test_initialize_model_creates_components_then_injects_lora(monkeypatch):
 
     assert model is created_model
     assert tokenizer_source == "Qwen/test-model"
-    assert events == [("llm", llm_lora), ("visual", visual_lora)]
+    assert events == [("llm", llm_lora, None), ("visual", visual_lora, None)]
 
 
 def test_initialize_model_requires_checkpoint_dir_when_loading():
@@ -355,8 +355,8 @@ def test_initialize_model_does_not_reinject_matching_checkpoint_lora(monkeypatch
             },
         )
 
-        def inject_llm_lora(self, config):
-            events.append(("llm", config))
+        def inject_llm_lora(self, config, *, layer_spec=None):
+            events.append(("llm", config, layer_spec))
 
     loaded_model = _LoadedModel()
     monkeypatch.setattr(

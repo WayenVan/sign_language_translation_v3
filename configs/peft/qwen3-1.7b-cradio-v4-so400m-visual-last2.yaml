@@ -1,6 +1,6 @@
 type: lora
 
-# LoRA on the four C-RADIO ViT blocks that end at the backbone's output_layer.
+# LoRA on the two C-RADIO ViT blocks that end at the backbone's output_layer.
 # Pair with engine.trainability: visual_backbone=lora, visual_adapter=full,
 # everything else frozen.
 #
@@ -8,8 +8,9 @@ type: lora
 # anchor=output_layer means the span ends at the block that actually feeds the
 # adapter, so it follows visual_backbone_config.output_layer instead of being
 # pinned to the encoder's final blocks (blocks past output_layer run but their
-# output is discarded, so a LoRA on them never receives gradient). The
-# checkpoint serializes the resolved absolute indices.
+# output is discarded, so a LoRA on them never receives gradient). With
+# output_layer=-1 this is blocks 25-26. The checkpoint serializes the resolved
+# absolute indices.
 
 visual_lora_config:
   r: 8
@@ -22,4 +23,4 @@ visual_lora_config:
 visual_lora_layers:
   pattern: "blocks"
   anchor: output_layer
-  count: 4
+  count: 2

@@ -84,6 +84,57 @@ def test_llm_lora_is_injected_without_wrapping_native_llm():
     assert not any(name.startswith("llm.base_model.") for name in model.state_dict())
 
 
+def test_llm_lora_layer_spec_targets_the_final_decoder_layers():
+    native_llm = _tiny_native_llm()  # num_hidden_layers=2
+    model = _slt_shell(native_llm)
+
+    model.inject_llm_lora(
+        LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=2,
+            lora_alpha=4,
+            target_modules=["q_proj", "v_proj"],
+        ),
+        layer_spec={"pattern": "layers", "count": 1},
+    )
+
+    assert model.config.llm_lora_config["layers_to_transform"] == [1]
+    assert model.config.llm_lora_config["layers_pattern"] == "layers"
+    adapted = {
+        name for name, _ in native_llm.named_parameters() if "lora_" in name
+    }
+    assert adapted
+    assert all(".layers.1." in name for name in adapted)
+
+
+def test_llm_lora_layer_spec_rejects_output_layer_anchor():
+    model = _slt_shell(_tiny_native_llm())
+
+    with pytest.raises(ValueError, match="anchor: last"):
+        model.inject_llm_lora(
+            LoraConfig(
+                task_type=TaskType.CAUSAL_LM, r=2, target_modules=["q_proj"]
+            ),
+            layer_spec={"anchor": "output_layer", "count": 1},
+        )
+
+
+def test_llm_lora_layer_spec_conflicts_with_explicit_layers_to_transform():
+    model = _slt_shell(_tiny_native_llm())
+
+    with pytest.raises(ValueError, match="not both"):
+        model.inject_llm_lora(
+            LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                r=2,
+                target_modules=["q_proj"],
+                layers_pattern="layers",
+                layers_to_transform=[1],
+            ),
+            layer_spec={"count": 1},
+        )
+
+
 def test_native_llm_tied_weights_survive_full_checkpoint_round_trip(
     tmp_path, monkeypatch
 ):

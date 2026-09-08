@@ -1,12 +1,17 @@
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import torch
 from torch import nn
 from transformers import AutoConfig, AutoModel
 from transformers.modeling_utils import PreTrainedModel
 
+from csi_slt.modeling_slt.lora_layers import (
+    find_transformer_layers,
+    last_n_layer_indices,
+    normalize_layer_spec,
+)
 from csi_slt.modeling_slt.misc import mark_module_tree_as_initialized
 from csi_slt.modeling_slt.output_utils import VisualBackboneOutput
 
@@ -228,6 +233,30 @@ class CRadioV4Backbone(nn.Module):
                 )
             output_layer = output_layer[0]
         return cls._validate_layer("output_layer", output_layer)
+
+    def resolve_lora_layers(self, spec: Mapping[str, object] | None) -> list[int] | None:
+        """Concrete ``layers_to_transform`` for a visual LoRA on this backbone.
+
+        ``spec`` is a ``*_lora_layers`` mapping (see
+        :mod:`csi_slt.modeling_slt.lora_layers`). With ``anchor: output_layer``
+        the span ends at the ViT block that actually feeds the adapter -- blocks
+        past ``output_layer`` run but their output is discarded, so a LoRA on
+        them would never receive gradient.
+        """
+        normalized = normalize_layer_spec(spec)
+        if normalized is None:
+            return None
+        blocks = find_transformer_layers(self.visual_encoder)
+        end_index = None
+        if normalized["anchor"] == "output_layer":
+            end_index = (
+                self.output_layer
+                if self.output_layer >= 0
+                else len(blocks) + self.output_layer
+            )
+        return last_n_layer_indices(
+            len(blocks), normalized["count"], end=end_index
+        )
 
     def _forward_intermediates(
         self, x: torch.Tensor, *, include_attention_layer: bool = False

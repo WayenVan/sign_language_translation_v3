@@ -1,8 +1,14 @@
 type: lora
 
 # C-RADIO v4 SO400M has 27 ViT blocks (0-26). Apply visual LoRA to the latter
-# half: the final fourteen blocks.
+# half -- the 14 blocks ending at the backbone's output_layer.
 # Pair with engine.trainability: visual_backbone=lora, everything else frozen.
+#
+# `visual_lora_layers` is resolved against the live backbone at injection:
+# anchor=output_layer means the span ends at the block that feeds the adapter,
+# so it follows visual_backbone_config.output_layer. With output_layer=-1 this
+# is blocks 13-26, exactly the previous hand-written list. The checkpoint
+# serializes the resolved absolute indices.
 
 visual_lora_config:
   r: 8
@@ -11,19 +17,8 @@ visual_lora_config:
   bias: "none"
   target_modules:
     - "qkv"
-  layers_pattern: "blocks"
-  layers_to_transform:
-    - 13
-    - 14
-    - 15
-    - 16
-    - 17
-    - 18
-    - 19
-    - 20
-    - 21
-    - 22
-    - 23
-    - 24
-    - 25
-    - 26
+
+visual_lora_layers:
+  pattern: "blocks"
+  anchor: output_layer
+  count: 14
