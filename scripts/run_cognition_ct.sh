@@ -74,7 +74,8 @@ CMD_ARGS=(
   -m csi_slt.commands.train
   --config-name train/ft_peft
   # peft=qwen3-1.7b-llm-all
-  peft=qwen3-1.7b-cradio-v4-so400m-visual-last4
+  peft=cradio-v4-so400m-visual-lastn
+  peft.visual_lora_layers.count=4
   peft.visual_lora_config.r=4
   peft.visual_lora_config.lora_alpha=4
   # C-RADIO stays in deterministic eval mode while LoRA receives gradients;

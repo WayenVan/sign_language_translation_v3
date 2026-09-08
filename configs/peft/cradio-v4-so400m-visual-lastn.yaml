@@ -1,0 +1,32 @@
+type: lora
+
+# Visual LoRA on the last `count` C-RADIO ViT blocks. The span ends at the block
+# that feeds the adapter -- the backbone's output_layer -- not at the encoder's
+# final block: blocks past output_layer run but their output is discarded, so a
+# LoRA on them would never receive gradient. Resolved against the live backbone
+# at injection; the checkpoint then serializes absolute block indices.
+#
+# Only the visual encoder is touched -- no LLM LoRA. Replaces the former
+# per-depth files (visual-last2 / last4 / last8 / last-half): vary `count`.
+#
+# Knobs a run overrides:
+#   visual_lora_layers.count       -- how many final blocks   (default 2)
+#   visual_lora_config.r           -- LoRA rank               (default 8)
+#   visual_lora_config.lora_alpha  -- keep at 2 * r
+#
+# Pair with engine.trainability.visual_backbone={parameter_mode: lora,
+# runtime_mode: eval}. lora_dropout is then inert (dropout is gated on training
+# mode); a run that wants the intent visible sets it to 0.0.
+
+visual_lora_config:
+  r: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  bias: "none"
+  target_modules:
+    - "qkv"
+
+visual_lora_layers:
+  pattern: "blocks"
+  anchor: output_layer
+  count: 2

@@ -1,0 +1,95 @@
+# @package _global_
+
+# Visual-encoder LoRA continuation.
+#
+# Stage 1 (train/pretrain_adapter/*) trains a visual adapter against a fully
+# frozen Qwen3-4B + frozen C-RADIO. This continues from such a checkpoint and
+# adds LoRA to the last N C-RADIO ViT blocks (span ends at the backbone's
+# output_layer, which is baked into the checkpoint -- see
+# configs/peft/cradio-v4-so400m-visual-lastn.yaml).
+#
+# What moves, and at what rate:
+#   * visual_backbone LoRA -- the fresh delta, training_args.learning_rate
+#     (5e-4). runtime_mode=eval: the base encoder stays deterministic while the
+#     LoRA parameters receive gradient, so lora_dropout is inert and pinned to
+#     0.0 below.
+#   * visual_adapter        -- keeps training at 1e-5 (~1/50 of the LoRA rate)
+#     with its 0.5 projection dropout still active (runtime_mode derives to
+#     `follow`); the adapter has to track the encoder's drift.
+#   * ctc_head              -- also unfrozen, nudged at 1e-5.
+#   * visual_boundary_embeddings / visual_scale -- trainable; the useful
+#     magnitude of the visual stream can rebalance as the encoder shifts.
+#
+# What stays frozen: the LLM, and the learned visual position table (the
+# checkpoint's trained table is kept fixed).
+#
+# evaluate_before_training is a sanity gate: LoRA initializes to a zero delta,
+# so the step-0 dev score must reproduce the stage-1 checkpoint's. Read that
+# number before anything else -- a large drop is a load mismatch, not a result.
+
+defaults:
+  - /train/pretrain_adapter/baseline_ablation
+  # Architecture comes from the checkpoint; this only records the stage-1 recipe.
+  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-cls-20m
+  - override /peft: cradio-v4-so400m-visual-lastn
+  - _self_
+
+model:
+  load_from_checkpoint: true
+  checkpoint_dir: ???
+
+peft:
+  visual_lora_config:
+    # visual_backbone.runtime_mode=eval makes LoRA dropout a no-op; state the
+    # intent explicitly.
+    lora_dropout: 0.0
+
+engine:
+  trainability:
+    llm: { parameter_mode: frozen }
+    # Train the LoRA delta while the base encoder stays in eval (deterministic).
+    visual_backbone: { parameter_mode: lora, runtime_mode: eval }
+    # runtime_mode derives to `follow` -> the checkpoint's 0.5 projection
+    # dropout stays active while the adapter is nudged.
+    visual_adapter: { parameter_mode: full }
+    ctc_head: { parameter_mode: full }
+    # Keep the checkpoint's learned temporal position table fixed.
+    visual_position_embedding: { parameter_mode: frozen }
+    visual_boundary_embeddings: { parameter_mode: full }
+    visual_scale: { parameter_mode: full }
+
+  # visual_backbone (the LoRA) has no entry here on purpose: it rides
+  # training_args.learning_rate, so a launcher override of that rate reaches it.
+  # The already-trained components that only need to track the LoRA get an
+  # order-of-magnitude smaller rate and their own decay.
+  optimization:
+    visual_adapter:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    ctc_head:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+
+  # LoRA zero-init: step-0 eval must reproduce the stage-1 checkpoint's score.
+  evaluate_before_training: true
+
+  train_probe:
+    every_n_evaluations: 1
+    num_samples: 800
+
+  training_args:
+    # PHOENIX-2014-T train is 7,096 sentence pairs; at effective batch ~4 that
+    # is ~1.8k steps/epoch. Small-data fine-tuning (and the SLT literature on
+    # this set) puts the dev peak in the low-teens of epochs for a continuation,
+    # so 20 is a ceiling -- save_strategy=best + the train-probe/dev gap decide
+    # where it actually stops.
+    num_train_epochs: 20
+    # The visual LoRA rate. LoRA needs a rate well above full fine-tuning; its
+    # capacity is already bounded by the rank, so no weight decay on it.
+    learning_rate: 5.0e-4
+    weight_decay: 0.0
+    warmup_steps: 0.03
+    lr_scheduler_type: cosine
+    # ~20 evaluations over the run; best-checkpoint selection terminates it.
+    eval_steps: 0.05
+    logging_steps: 15
