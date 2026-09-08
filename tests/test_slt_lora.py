@@ -110,13 +110,59 @@ def test_llm_lora_layer_spec_targets_the_final_decoder_layers():
 def test_llm_lora_layer_spec_rejects_output_layer_anchor():
     model = _slt_shell(_tiny_native_llm())
 
-    with pytest.raises(ValueError, match="anchor: last"):
+    with pytest.raises(ValueError, match="last or first"):
         model.inject_llm_lora(
             LoraConfig(
                 task_type=TaskType.CAUSAL_LM, r=2, target_modules=["q_proj"]
             ),
             layer_spec={"anchor": "output_layer", "count": 1},
         )
+
+
+def test_llm_lora_layer_spec_first_anchor_targets_the_input_side_layers():
+    native_llm = _tiny_native_llm()  # num_hidden_layers=2
+    model = _slt_shell(native_llm)
+
+    model.inject_llm_lora(
+        LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=2,
+            lora_alpha=4,
+            target_modules=["q_proj", "v_proj"],
+        ),
+        layer_spec={"anchor": "first", "pattern": "layers", "count": 1},
+    )
+
+    assert model.config.llm_lora_config["layers_to_transform"] == [0]
+    adapted = {
+        name for name, _ in native_llm.named_parameters() if "lora_" in name
+    }
+    assert adapted
+    assert all(".layers.0." in name for name in adapted)
+
+
+def test_llm_lora_layer_spec_first_anchor_null_count_covers_every_layer():
+    native_llm = _tiny_native_llm()  # num_hidden_layers=2
+    model = _slt_shell(native_llm)
+
+    model.inject_llm_lora(
+        LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=2,
+            lora_alpha=4,
+            target_modules=["q_proj", "v_proj"],
+        ),
+        layer_spec={"anchor": "first", "count": None},
+    )
+
+    assert model.config.llm_lora_config["layers_to_transform"] is None
+    adapted = {
+        name for name, _ in native_llm.named_parameters() if "lora_" in name
+    }
+    assert {".layers.0.", ".layers.1."} == {
+        name[name.index(".layers.") : name.index(".layers.") + 10]
+        for name in adapted
+    }
 
 
 def test_llm_lora_layer_spec_conflicts_with_explicit_layers_to_transform():

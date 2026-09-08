@@ -9,6 +9,8 @@ The peft config files therefore stay pure ``LoraConfig`` and carry the layer
 choice in a sibling ``*_lora_layers`` mapping:
 
 * ``{"count": 4}``                           -- the last 4 blocks
+* ``{"anchor": "first", "count": 4}``        -- the first 4 blocks, counted
+  from the input side (``count: null`` -> every block)
 * ``{"anchor": "output_layer", "count": 4}`` -- the 4 blocks ending at the
   backbone's ``output_layer``
 
@@ -38,7 +40,7 @@ _LAYER_LIST_PATHS = (
 )
 
 _ALLOWED_SPEC_KEYS = frozenset({"anchor", "count", "pattern"})
-_ALLOWED_ANCHORS = ("last", "output_layer")
+_ALLOWED_ANCHORS = ("last", "first", "output_layer")
 
 
 def _resolve_module(root: nn.Module, path: str) -> nn.Module | None:
@@ -95,11 +97,37 @@ def last_n_layer_indices(
     return list(range(start, end + 1))
 
 
+def first_n_layer_indices(num_layers: int, count: int | None) -> list[int] | None:
+    """The first ``count`` block indices, counted from the input side.
+
+    ``count is None`` returns ``None`` -- peft reads that as "every layer" --
+    so an ``anchor: first`` spec degrades to the full-depth default the same
+    way ``last`` does. There is no ``end`` parameter: the span is pinned to
+    block 0, which no backbone truncates away, so it never needs an anchor
+    resolved against ``output_layer``.
+    """
+    if count is None:
+        return None
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise ValueError(
+            f"lora layer count must be a positive integer, got {count!r}"
+        )
+    if num_layers <= 0:
+        raise ValueError("num_layers must be a positive integer")
+    if count > num_layers:
+        raise ValueError(
+            f"requested the first {count} blocks, but the module has only "
+            f"{num_layers}"
+        )
+    return list(range(count))
+
+
 def normalize_layer_spec(spec: Mapping[str, object] | None) -> dict | None:
     """Validate a ``*_lora_layers`` mapping; return a plain dict or ``None``.
 
-    Keys: ``count`` (required, positive int), ``anchor`` (``last`` default, or
-    ``output_layer``), ``pattern`` (optional -- the ``layers_pattern`` peft
+    Keys: ``count`` (required, positive int), ``anchor`` (``last`` default,
+    ``first``, or ``output_layer``), ``pattern`` (optional -- the
+    ``layers_pattern`` peft
     needs to read ``layers_to_transform`` against non-``layers`` module names,
     such as a timm ViT's ``blocks``). ``pattern`` lives here rather than in the
     LoRA config because peft rejects ``layers_pattern`` without an accompanying
@@ -167,6 +195,8 @@ def resolve_layers_to_transform(
             "supplied by the caller"
         )
     layers = find_transformer_layers(module)
+    if normalized["anchor"] == "first":
+        return first_n_layer_indices(len(layers), normalized["count"])
     resolved_end = end_index if normalized["anchor"] == "output_layer" else None
     return last_n_layer_indices(
         len(layers), normalized["count"], end=resolved_end

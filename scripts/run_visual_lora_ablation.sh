@@ -10,6 +10,27 @@
 
 set -euo pipefail
 
+# =========================================================================== #
+# USAGE
+#   sbatch [-J JOB_NAME] scripts/run_visual_lora_ablation.sh [COUNT] [RANK] [EPOCHS] [debug] [share]
+#   bash scripts/run_visual_lora_ablation.sh [COUNT] [RANK] [EPOCHS] [debug] [share]
+#
+# Defaults: COUNT=2, RANK=8, ALPHA=2*RANK, LR=1e-3, EPOCHS=20.
+# Example:  sbatch -J slt_vlora_n4_r16 scripts/run_visual_lora_ablation.sh 4 16 30
+# Help:     scripts/run_visual_lora_ablation.sh --help
+# =========================================================================== #
+
+usage() {
+  sed -n '/^# USAGE$/,/^# =\{10,\} #$/p' "$0" \
+    | sed 's/^# \{0,1\}//' \
+    | sed '$d'
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
 export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
 
 if [[ "$(hostname -f)" == "tubbs.eng.gla.ac.uk" ]]; then
@@ -35,11 +56,9 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 # run_cognition_outputlayer.sh).
 #
 # Config: train/lora_visual_encoder/base. What it moves:
-#   * visual_backbone LoRA  -- lr = engine.training_args.learning_rate (5e-4)
-#   * visual_adapter        -- lr 1e-5, 0.5 projection dropout still active
-#   * ctc_head              -- lr 1e-5
-#   * visual_boundary_embeddings / visual_scale -- trainable
-#   frozen: LLM, learned visual position table.
+#   * visual_backbone LoRA  -- lr = 1e-3 by default in this launcher
+#   frozen: LLM, visual adapter, CTC head, learned visual position table,
+#           visual boundary embeddings, and visual_scale.
 #
 # The ablation knobs. Run experiments one at a time; nothing is swept here.
 #   $1  count  -- how many final C-RADIO ViT blocks get LoRA   (default 2)
@@ -55,13 +74,13 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 #   bash scripts/run_visual_lora_ablation.sh 2 8 debug share
 # --------------------------------------------------------------------------- #
 
-# Stage-1 checkpoint. checkpoint-60000 is the best of the two kept
-# (eval_overall_weighted_bleu4 0.1677 vs checkpoint-48000's 0.1593).
-CKPT_ROOT="/mnt/scratch/users/2533494w/slt_outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-0907.224x224"
-CHECKPOINT_DIR="${CKPT_ROOT}/checkpoint-60000"
+# Default stage-1 checkpoint used by the visual-LoRA continuation.
+CKPT_ROOT="/mnt/scratch/users/2533494w/slt_outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-0907.224x224"
+CHECKPOINT_DIR="${CKPT_ROOT}/checkpoint-96000"
 
 COUNT="${1:-2}"
 RANK="${2:-8}"
+LEARNING_RATE="1e-3"
 if [[ ! "$COUNT" =~ ^[0-9]+$ ]] || (( COUNT < 1 )); then
   echo "count must be a positive integer, got: $COUNT" >&2
   exit 2
@@ -104,7 +123,7 @@ EP_SUFFIX=""
 if [[ -n "$NUM_TRAIN_EPOCHS" ]]; then
   EP_SUFFIX="-ep${NUM_TRAIN_EPOCHS}"
 fi
-RUN_TAG="vlora-n${COUNT}-r${RANK}a${ALPHA}${EP_SUFFIX}"
+RUN_TAG="vlora-only-ckpt96k-n${COUNT}-r${RANK}a${ALPHA}-lr${LEARNING_RATE}${EP_SUFFIX}"
 
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
@@ -112,7 +131,7 @@ if [[ "$DEBUG" == true ]]; then
   OUTPUT_DIR="outputs/debug"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="visual-lora,ol-8,best-adapter,adapter-nudge,${RUN_TAG}"
+  export WANDB_TAGS="visual-lora,lora-only,ol-8,ckpt96k,lr-${LEARNING_RATE},${RUN_TAG}"
   REPORT_TO=wandb
   OUTPUT_DIR="outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-ol-8-${RUN_TAG}-0908.224x224"
 fi
@@ -136,7 +155,7 @@ else
     "$HOME/localscratch/ph14t")
 fi
 echo "DATASET_PATH=$DATASET_PATH"
-echo "COUNT=$COUNT  RANK=$RANK  ALPHA=$ALPHA"
+echo "COUNT=$COUNT  RANK=$RANK  ALPHA=$ALPHA  LEARNING_RATE=$LEARNING_RATE"
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 
@@ -151,6 +170,7 @@ CMD_ARGS=(
   peft.visual_lora_layers.count="$COUNT"
   peft.visual_lora_config.r="$RANK"
   peft.visual_lora_config.lora_alpha="$ALPHA"
+  engine.training_args.learning_rate="$LEARNING_RATE"
   # --------------------------
   engine.training_args.output_dir="$OUTPUT_DIR"
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"

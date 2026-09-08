@@ -57,3 +57,16 @@ MotionTemporal 与 NextFrame 二选一，spatial dropout / mean→conv / displac
 下一步：行 10（hand-ROI + NextFrame）叠加 projection dropout，验证能否把 gap 49.7 压下来。
 
 #experiment #visual-adapter #ablation
+
+---
+
+## 2026-09-08 15:20
+
+复盘了更早那次把模型跑差的 GRPO run。结论：不是 `do_sample` 的锅，是四个配置——
+`beta=0`（无 KL，且 `trainer.py:169-170` 硬写死不让开）、`num_generations=2`（advantage
+退化成 ±1 符号位）、sentence BLEU 当 reward（稀疏可 hack）、`metric_for_best_model=eval_reward`
+（挑出真实指标最差的 checkpoint）。采样只是放大器。完整诊断、配置出处和重启 RL 前的最小
+改动清单见 [grpo_first_run_regression_diagnosis.md](grpo_first_run_regression_diagnosis.md)。
+碰 RL 之前代码必须先补回 KL 项。
+
+#grpo #rlhf #diagnosis #todo

@@ -8,6 +8,7 @@ from peft import LoraConfig
 from csi_slt.modeling_slt.lora_layers import (
     apply_layer_spec,
     find_transformer_layers,
+    first_n_layer_indices,
     last_n_layer_indices,
     normalize_layer_spec,
     resolve_layers_to_transform,
@@ -54,6 +55,45 @@ def test_last_n_rejects_span_running_off_the_front():
 def test_last_n_rejects_anchor_out_of_range():
     with pytest.raises(ValueError, match="out of range"):
         last_n_layer_indices(27, 2, end=27)
+
+
+def test_first_n_counts_from_the_input_side():
+    assert first_n_layer_indices(27, 4) == [0, 1, 2, 3]
+
+
+def test_first_n_none_count_selects_every_layer():
+    assert first_n_layer_indices(27, None) is None
+
+
+@pytest.mark.parametrize("count", [0, -1, 1.5, True])
+def test_first_n_rejects_non_positive_int_count(count):
+    with pytest.raises(ValueError, match="positive integer"):
+        first_n_layer_indices(27, count)
+
+
+def test_first_n_rejects_span_deeper_than_the_module():
+    with pytest.raises(ValueError, match="only 27"):
+        first_n_layer_indices(27, 28)
+
+
+def test_normalize_keeps_first_anchor():
+    assert normalize_layer_spec({"anchor": "first", "count": 4}) == {
+        "anchor": "first",
+        "count": 4,
+        "pattern": None,
+    }
+
+
+def test_resolve_against_live_module_first_anchor():
+    assert resolve_layers_to_transform(
+        _Decoder(6), {"anchor": "first", "count": 2}
+    ) == [0, 1]
+
+
+def test_resolve_first_anchor_none_count_selects_every_layer():
+    assert resolve_layers_to_transform(
+        _Decoder(6), {"anchor": "first", "count": None}
+    ) is None
 
 
 def test_normalize_defaults_anchor_to_last():

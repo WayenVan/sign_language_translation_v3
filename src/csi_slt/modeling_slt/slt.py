@@ -65,8 +65,10 @@ def _apply_lora_layer_spec(
 
     Resolved against ``module`` so the checkpoint serializes explicit indices
     and the reload path never re-resolves. The LLM decoder has no truncatable
-    output, so only ``anchor: last`` (the default) is accepted here; the visual
-    side owns ``anchor: output_layer`` in ``SltModel.inject_visual_lora``.
+    output, so ``anchor: output_layer`` is rejected here; ``last`` (the
+    default) and ``first`` -- the first N blocks from the input side -- are
+    both accepted. The visual side owns ``anchor: output_layer`` in
+    ``SltModel.inject_visual_lora``.
     """
     if layer_spec is None:
         return
@@ -76,8 +78,11 @@ def _apply_lora_layer_spec(
             f"{side}_lora_layers, not both"
         )
     normalized = normalize_layer_spec(layer_spec)
-    if normalized["anchor"] != "last":
-        raise ValueError(f"{side}_lora_layers only supports anchor: last")
+    if normalized["anchor"] not in ("last", "first"):
+        raise ValueError(
+            f"{side}_lora_layers supports anchor: last or first, not "
+            f"{normalized['anchor']!r}"
+        )
     apply_layer_spec(
         peft_config,
         resolve_layers_to_transform(module, layer_spec),
