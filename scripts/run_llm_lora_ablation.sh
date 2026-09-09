@@ -2,11 +2,12 @@
 #
 # =========================================================================== #
 # USAGE
-#   sbatch [-J JOB_NAME] scripts/run_llm_lora_ablation.sh [COUNT] [RANK] [EPOCHS] [debug] [share]
-#   bash scripts/run_llm_lora_ablation.sh [COUNT] [RANK] [EPOCHS] [debug] [share]
+#   sbatch [-J JOB_NAME] scripts/run_llm_lora_ablation.sh [TARGETS] [RANK] [EPOCHS] [debug] [share]
+#   bash scripts/run_llm_lora_ablation.sh [TARGETS] [RANK] [EPOCHS] [debug] [share]
 #
-# Defaults: COUNT=18, RANK=8, ALPHA=2*RANK, LR=1e-4, EPOCHS=config (12).
-# Example:  sbatch -J slt_llora_n12_r8  scripts/run_llm_lora_ablation.sh 12 8
+# TARGETS: qv or qkvo. Defaults: qv, RANK=8, ALPHA=2*RANK, all 36 layers,
+# LR=1e-4, EPOCHS=config (12).
+# Example:  sbatch -J slt_llora_qkvo_r8 scripts/run_llm_lora_ablation.sh qkvo 8
 # Env:      LLM_LORA_LR overrides the LoRA learning rate (default 1e-4).
 # Help:     scripts/run_llm_lora_ablation.sh --help
 # =========================================================================== #
@@ -72,30 +73,28 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 # Continues from the stage-1 checkpoint below (visual adapter trained against a
 # frozen Qwen3-4B + frozen C-RADIO, output_layer=-8, learned visual position
 # table; checkpoint-96000 is that run's best_model_checkpoint, test de_bleu4
-# 0.1715) and injects LoRA into the FIRST N Qwen3-4B decoder blocks, counted
-# from the input side.
+# 0.1715) and injects LoRA into all 36 Qwen3-4B decoder blocks.
 #
 # Config: train/lora_llm/base. What it moves:
-#   * llm LoRA (q_proj, v_proj, first N blocks)  -- lr = 1e-4 by default here
-#   * visual_adapter (full)                      -- lr = 1e-5, from the config
-#   frozen: C-RADIO backbone, CTC head, learned visual position table,
-#           visual boundary embeddings, and visual_scale.
+#   * llm LoRA (selected attention projections, all blocks) -- lr = 1e-4
+#   * visual-side interface (adapter, CTC head, learned positions, boundary
+#     embeddings, and visual_scale)              -- lr = 1e-5, from the config
+#   frozen: C-RADIO backbone.
 # The adapter stays trainable on purpose: every v4.0 stage-2 run that froze it
 # lost ground against its own stage-1 checkpoint.
 #
 # The ablation knobs. Run experiments one at a time; nothing is swept here.
-#   $1  count  -- how many first Qwen3-4B decoder blocks get LoRA  (default 18,
-#                 the first half of 36; max 36 = every block)
-#   $2  rank   -- LoRA rank; lora_alpha is set to 2 * rank         (default 8)
+#   $1  targets -- qv => q_proj/v_proj; qkvo => q/k/v/o projections (default qv)
+#   $2  rank    -- LoRA rank; lora_alpha is set to 2 * rank        (default 8)
 #   $3  epochs -- optional positive int; omitted keeps the config default (12)
 # plus, anywhere after those: debug (no WandB, outputs/debug), share (use the
 # shared dataset path instead of staging to local scratch).
 #
 # Examples:
-#   sbatch -J slt_llora_n18_r8     scripts/run_llm_lora_ablation.sh 18 8
-#   sbatch -J slt_llora_n12_r16    scripts/run_llm_lora_ablation.sh 12 16
-#   sbatch -J slt_llora_n36_r8_ep20 scripts/run_llm_lora_ablation.sh 36 8 20
-#   bash scripts/run_llm_lora_ablation.sh 18 8 debug share
+#   sbatch -J slt_llora_qv_r8       scripts/run_llm_lora_ablation.sh qv 8
+#   sbatch -J slt_llora_qkvo_r16    scripts/run_llm_lora_ablation.sh qkvo 16
+#   sbatch -J slt_llora_qv_r8_ep20  scripts/run_llm_lora_ablation.sh qv 8 20
+#   bash scripts/run_llm_lora_ablation.sh qkvo 8 debug share
 # --------------------------------------------------------------------------- #
 
 # Default stage-1 checkpoint used by the LLM-LoRA continuation. Prefer the
@@ -107,13 +106,14 @@ else
   CHECKPOINT_DIR="${SCRIPT_DIR}/outputs/${CKPT_LEAF}"
 fi
 
-COUNT="${1:-18}"
+TARGETS="${1:-qv}"
 RANK="${2:-8}"
 LEARNING_RATE="${LLM_LORA_LR:-1e-4}"
-if [[ ! "$COUNT" =~ ^[0-9]+$ ]] || (( COUNT < 1 )) || (( COUNT > 36 )); then
-  echo "count must be an integer in 1..36 (Qwen3-4B has 36 blocks), got: $COUNT" >&2
-  exit 2
-fi
+case "$TARGETS" in
+qv) TARGET_MODULES='[q_proj,v_proj]' ;;
+qkvo) TARGET_MODULES='[q_proj,k_proj,v_proj,o_proj]' ;;
+*) echo "targets must be qv or qkvo, got: $TARGETS" >&2; exit 2 ;;
+esac
 if [[ ! "$RANK" =~ ^[0-9]+$ ]] || (( RANK < 1 )); then
   echo "rank must be a positive integer, got: $RANK" >&2
   exit 2
@@ -152,7 +152,8 @@ EP_SUFFIX=""
 if [[ -n "$NUM_TRAIN_EPOCHS" ]]; then
   EP_SUFFIX="-ep${NUM_TRAIN_EPOCHS}"
 fi
-RUN_TAG="llmlora-firstn-ckpt96k-n${COUNT}-r${RANK}a${ALPHA}-lr${LEARNING_RATE}${EP_SUFFIX}"
+TARGET_LANGUAGE=de
+RUN_TAG="llmlora-all-ckpt96k-${TARGET_LANGUAGE}-${TARGETS}-r${RANK}a${ALPHA}-lr${LEARNING_RATE}${EP_SUFFIX}"
 
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
@@ -160,7 +161,7 @@ if [[ "$DEBUG" == true ]]; then
   OUTPUT_DIR="outputs/debug"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="llm-lora,firstn,ol-8,ckpt96k,lr-${LEARNING_RATE},${RUN_TAG}"
+  export WANDB_TAGS="llm-lora,all-layers,targets-${TARGETS},ol-8,ckpt96k,language-${TARGET_LANGUAGE},lr-${LEARNING_RATE},${RUN_TAG}"
   REPORT_TO=wandb
   OUTPUT_DIR="outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-ol-8-${RUN_TAG}-0908.224x224"
 fi
@@ -185,7 +186,9 @@ else
     "$HOME/localscratch/ph14t")
 fi
 echo "DATASET_PATH=$DATASET_PATH"
-echo "COUNT=$COUNT  RANK=$RANK  ALPHA=$ALPHA  LEARNING_RATE=$LEARNING_RATE"
+echo "TARGET_LANGUAGE=$TARGET_LANGUAGE"
+echo "TARGETS=$TARGETS  TARGET_MODULES=$TARGET_MODULES"
+echo "LAYERS=all  RANK=$RANK  ALPHA=$ALPHA  LEARNING_RATE=$LEARNING_RATE"
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 
@@ -197,8 +200,7 @@ CMD_ARGS=(
   --config-name=train/lora_llm/base
   model.checkpoint_dir="$CHECKPOINT_DIR"
   # --- the ablation knobs ---
-  peft.llm_lora_layers.anchor=first
-  peft.llm_lora_layers.count="$COUNT"
+  peft.llm_lora_config.target_modules="$TARGET_MODULES"
   peft.llm_lora_config.r="$RANK"
   peft.llm_lora_config.lora_alpha="$ALPHA"
   engine.optimization.llm.learning_rate="$LEARNING_RATE"
@@ -207,6 +209,7 @@ CMD_ARGS=(
   engine.training_args.disable_tqdm="$HG_TQDM_DISABLE"
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
+  data.language="$TARGET_LANGUAGE"
 )
 
 # Optional longer/shorter run: override only when an epoch count was passed,

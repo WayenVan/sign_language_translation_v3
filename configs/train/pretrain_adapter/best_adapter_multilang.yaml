@@ -1,0 +1,17 @@
+# @package _global_
+
+# Multilingual continuation of the best adapter recipe. Keep the data and
+# prompt choices explicit here so changes to the shared base do not silently
+# alter this experiment.
+defaults:
+  - /train/pretrain_adapter/best_adapter
+  - override /data: ph14t_*x224x224_qwen_multiling
+  - override /prompt: fixed_prompt
+  - _self_
+
+engine:
+  training_args:
+    # PH14T multilingual contains roughly three target-language examples per
+    # source video. The compute-matched equivalent of 50 single-language epochs
+    # is about 17; use 20 to leave modest extra room for multilingual convergence.
+    num_train_epochs: 20

@@ -26,6 +26,9 @@ defaults:
 
 model:
   config:
+    # Learn an adapter-side temporal position table for the emitted visual
+    # tokens. Qwen's RoPE still applies afterwards inside the language model.
+    visual_position_embedding_type: learned
     visual_adapter_kwargs:
       # 行 9, applied uniformly at 0.5 to every branch projection's hidden layer
       # (Linear -> GELU -> Dropout -> Linear):
@@ -47,3 +50,10 @@ model:
       projection_dropout: 0.5
       roi_projection_dropout: 0.5
       cls_projection_dropout: 0.5
+
+engine:
+  trainability:
+    # The base recipe freezes this component because it uses
+    # visual_position_embedding_type=none. This recipe constructs the learned
+    # table, so it must also opt it into optimization.
+    visual_position_embedding: { parameter_mode: full }

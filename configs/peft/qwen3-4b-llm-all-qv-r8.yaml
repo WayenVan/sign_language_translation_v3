@@ -17,6 +17,9 @@ type: lora
 # 2.95M over 36 layers -- still under a sixth of the 20M visual adapter this
 # runs alongside, which is why the rank is the cheap knob here and the adapter
 # learning rate is the expensive one.
+#
+# The training recipe decides which non-LLM components move; this file only
+# defines the default full-depth q/v LLM LoRA injection.
 llm_lora_config:
   r: 8
   lora_alpha: 16

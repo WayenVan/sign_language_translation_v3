@@ -7,13 +7,10 @@
 # unfreezes the LLM through LoRA while keeping the adapter trainable at a much
 # smaller rate.
 #
-# Difference from train/lora_llm/stage2_llm_lora (which injects LoRA into all
-# 36 blocks): this base injects LoRA into the FIRST HALF of the decoder only --
-# blocks [0 .. 17] of Qwen3-4B's 36. Re-reading a new token type is work the
-# lower and middle blocks do; the input-side half is where that adaptation has
-# to happen, and half the blocks is half the LoRA parameter budget. A launcher
-# overrides peft.llm_lora_layers.count to sweep the depth (count: null -> every
-# block, i.e. the stage2_llm_lora setting).
+# The default is full-depth q/v LoRA over all 36 Qwen3-4B decoder blocks with
+# r=8 and alpha=16. Launchers may ablate rank and the attention projections,
+# but depth stays fixed so each comparison tests one LoRA design choice rather
+# than mixing it with layer coverage.
 #
 # Two decisions carried over from the repo's v4.0 continuation runs on this
 # same 7,096-sentence dataset:
@@ -24,19 +21,17 @@
 #      LLM's input-side reading of the visual tokens; the adapter has to move
 #      with it. Overfitting is controlled by giving the adapter a 10x smaller
 #      learning rate than the LoRA, not by freezing it.
-#   2. Low rank (r=8) over many layers rather than high rank over a few --
-#      see configs/peft/qwen3-4b-llm-firstn-qv-r8.yaml.
+#   2. Low rank (r=8) over all layers rather than high rank over a few -- see
+#      configs/peft/qwen3-4b-llm-all-qv-r8.yaml.
 #
-# The CTC head stays frozen while ctc_loss_weight stays at 1.0, so the auxiliary
-# loss is still computed (SltModel gates it on ctc_enabled and the weight, not
-# on the head's requires_grad). A frozen head makes it a fixed probe: the
-# adapter must keep producing features stage 1's gloss classifier can still
-# decode, which is the cheapest anti-drift anchor available here.
+# The complete visual-to-language interface continues adapting at 1e-5: the
+# adapter, CTC head, learned positions, boundary embeddings, and visual scale.
+# The visual backbone remains frozen, while the LLM moves only through LoRA.
 
 defaults:
   - /train/pretrain_adapter/baseline_ablation
   - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
-  - override /peft: qwen3-4b-llm-firstn-qv-r8
+  - override /peft: qwen3-4b-llm-all-qv-r8
   - _self_
 
 model:
@@ -44,14 +39,6 @@ model:
   # records which stage-1 recipe this continues.
   load_from_checkpoint: true
   checkpoint_dir: ???
-
-peft:
-  llm_lora_layers:
-    # First half of Qwen3-4B's 36 decoder blocks: [0 .. 17]. Override
-    # peft.llm_lora_layers.count from the launcher to sweep depth; count: null
-    # restores all-layer injection.
-    anchor: first
-    count: 18
 
 engine:
   trainability:
@@ -61,11 +48,8 @@ engine:
     llm: { parameter_mode: lora }
     visual_backbone: { parameter_mode: frozen }
     visual_adapter: { parameter_mode: full }
-    ctc_head: { parameter_mode: frozen }
-    visual_position_embedding: { parameter_mode: frozen }
-    # ~5k parameters between them. Left trainable because the useful magnitude
-    # of the visual stream relative to the text stream is exactly what changes
-    # once the LLM stops being frozen.
+    ctc_head: { parameter_mode: full }
+    visual_position_embedding: { parameter_mode: full }
     visual_boundary_embeddings: { parameter_mode: full }
     visual_scale: { parameter_mode: full }
 
@@ -80,6 +64,18 @@ engine:
       learning_rate: 1.0e-4
       weight_decay: 0.0
     visual_adapter:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    ctc_head:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    visual_position_embedding:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    visual_boundary_embeddings:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    visual_scale:
       learning_rate: 1.0e-5
       weight_decay: 0.01
 
