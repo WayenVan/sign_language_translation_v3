@@ -10,12 +10,31 @@
 
 set -euo pipefail
 
-export NCCL_P2P_DISABLE=1
-
-if [[ "$(hostname -f)" == "tubbs.eng.gla.ac.uk" ]]; then
+# Host allowlist. An unrecognized host is a hard stop so a stray launch
+# (laptop, wrong login node) fails immediately instead of cd-ing into a path
+# that does not exist and half-running.
+#
+# Per-host, IS_TUBBS also decides two things below:
+#   * dataset: tubbs has it extracted in-repo, so skip the stage-to-scratch step;
+#   * NCCL P2P: only the cluster fabric needs NCCL_P2P_DISABLE=1; tubbs's local
+#     GPUs keep P2P enabled.
+HOST_FQDN="$(hostname -f)"
+if [[ "$HOST_FQDN" == "tubbs.eng.gla.ac.uk" ]]; then
   SCRIPT_DIR=/home/2533494W/project/sign_language_translation_v3
-else
+  IS_TUBBS=true
+elif [[ -d /users/2533494w/projects/sign_language_translation_v3 ]]; then
+  # Glasgow HPC cluster.
   SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
+  IS_TUBBS=false
+else
+  echo "unrecognized host '$HOST_FQDN': no known sign_language_translation_v3 checkout here; refusing to run." >&2
+  exit 4
+fi
+
+if [[ "$IS_TUBBS" == true ]]; then
+  unset NCCL_P2P_DISABLE
+else
+  export NCCL_P2P_DISABLE=1
 fi
 
 cd "$SCRIPT_DIR"
@@ -74,7 +93,9 @@ else
   HG_TQDM_DISABLE=True
 fi
 
-if [[ "$SHARED_DATASET" == true ]]; then
+# tubbs 上数据集已在仓库内解压好，直接用；share 模式同理走共享路径。
+# 只有集群需要把数据集迁移(stage)到本地 scratch。
+if [[ "$IS_TUBBS" == true || "$SHARED_DATASET" == true ]]; then
   DATASET_PATH="$SCRIPT_DIR/dataset/PHOENIX-2014-T-release-v3"
 else
   source "$SCRIPT_DIR/scripts/prepare_dataset.sh"
