@@ -57,3 +57,10 @@ engine:
     # visual_position_embedding_type=none. This recipe constructs the learned
     # table, so it must also opt it into optimization.
     visual_position_embedding: { parameter_mode: full }
+
+data:
+  processor:
+    # The adapter emits one visual token per two input frames. The processor
+    # must reserve the same number of <video_soft_token> slots in the text;
+    # leaving the multilingual data default (1.0) makes it reserve 2x too many.
+    video_token_scale: 0.5
