@@ -1,0 +1,126 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# Scale-up of qwen3-4b-cradio-l-spatiotemporal-next-frame-handroi-cls-20m on
+# both ends of the adapter, with the adapter itself left structurally intact:
+#
+#   visual backbone : C-RADIOv4-SO400M (27 blocks, 1152-d) -> C-RADIOv4-H
+#                     (vit_huge_patch16, 32 blocks, 1280-d, summary 2560-d)
+#   language model  : Qwen3-4B (2560-d) -> Qwen3-8B (4096-d)
+#
+# Same adapter type, same three projection ranks, same fusion / gate / top-k
+# settings. Only the widths the backbone and the LLM dictate change, so the
+# parameter count grows from 20.0M to 27.5M purely through the input and output
+# Linears -- the per-token bottleneck is the reference's. See the budget note.
+#
+# Unlike the reference, which ships every dropout at 0.0 to reproduce 表 B
+# 行 10, this file is not an ablation row: it ships the best-recipe
+# regularization (行 9, projection dropout 0.5 on all three branches) as its
+# default.
+#
+# Prior on the backbone swap: v4.0 compared the two on Qwen3-1.7B with the
+# dinoframe_cross_v28_shuffle adapter at output_layer=-1, and H lost
+# (0.1547 vs 0.1723 dev BLEU-4). That was a different adapter and a layer the
+# v5 sweep later found to be the worst region, so it does not settle the
+# question -- but it is why a run of this config should be read against an
+# H + Qwen3-4B control before the gain is credited to the LLM.
+
+config:
+  # Qwen3-8B embedding width; adapter output_dim must match this exactly.
+  hidden_size: 4096
+  # Qwen3 shares one tokenizer across sizes, so the soft-token id is unchanged.
+  video_soft_token_id: 151656
+
+  # The adapter emits one token for every two input frames. The data
+  # processor's video_token_scale must be set to the same value by the recipe.
+  video_token_scale: 0.5
+
+  # Keep the standard causal LLM attention mask.
+  video_bidirectional_attention: false
+  # train/pretrain_adapter/base.yaml forces this to `none` after the model group
+  # is merged, so a value here would be silently overwritten. The recipe owns
+  # it: set visual_position_embedding_type=learned together with
+  # engine.trainability.visual_position_embedding.parameter_mode=full.
+  visual_position_embedding_type: none
+
+  # CTC consumes the adapter output at T/2 before visual_scale is applied.
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-8B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-H
+    # Same relative depth as the reference recipe's -8 on SO400M: block 23/32
+    # (71.9%) against 19/27 (70.4%). The SO400M sweep was flat across -7..-10
+    # and fell off at -1 and -14, so this lands in the middle of that plateau.
+    # Must match what the scorer was fitted on; a mismatch degrades its ranking
+    # silently rather than failing. The scorer's own config records what it was
+    # fitted against.
+    output_layer: -9
+
+  visual_adapter_type: spatiotemporal_next_frame_hand_roi_cls
+  visual_adapter_kwargs:
+    # C-RADIOv4-H patch width and Qwen3-8B embedding width.
+    input_dim: 1280
+    output_dim: 4096
+    # C-RADIOv4-H summary / CLS width, carried in pooled_visual_features.
+    cls_input_dim: 2560
+
+    # Window size of the temporal mean. Every video's frame count must be
+    # divisible by it.
+    temporal_scale_factor: 2
+
+    # --- next-frame patch fusion -----------------------------------------------
+    # Identical to the reference. H is patch16 like SO400M, so a 224x224 frame
+    # is still a 14x14 grid and the window radius means the same distance.
+    patch_grid_size: null
+    # 1280-d input: the block now costs 3,942,657 parameters at H=1024.
+    patch_fusion_hidden_dim: 1024
+    patch_fusion_temperature: 0.1
+    patch_fusion_matching_top_k: 1
+    patch_fusion_window_radius: 3
+    patch_fusion_gate_init: 1.0
+
+    # --- hand-ROI pooling ----------------------------------------------------
+    # A scorer is an affine map over one backbone's features at one layer, so
+    # the SO400M scorers (1152-d) cannot be reused. This one must be fitted on
+    # C-RADIOv4-H at output_layer=-9 before a run can be built:
+    #   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh     # fits -9 / -8 / -10 / -7 / -11
+    # Change output_layer and this path together.
+    scorer_path: outputs/hand_patch_scorer_cradio-h_L9
+    top_k: 24
+    freeze_scorer: true
+
+    fusion_mode: gated
+    gate_init: -2.0
+    cls_gate_init: -2.0
+
+    # --- budget --------------------------------------------------------------
+    # Global branch : 1280 -> 2349 -> GELU -> 4096
+    # ROI residual  : 1280 -> 1265 -> GELU -> 4096 -> LayerNorm(non-affine)
+    # CLS residual  : 2560 ->  620 -> GELU -> 4096 -> LayerNorm(non-affine)
+    #
+    # Ranks held at the reference's 2349 / 1265 / 620 rather than shrunk back to
+    # 20M: shrinking them would narrow the bottleneck below the reference and
+    # confound the scale-up in the other direction.
+    #
+    # Verified by instantiating the adapter: 27,525,005 trainable parameters
+    # (global 12,634,669 / ROI 6,806,001 / CLS 4,131,436 / next-frame fusion
+    # 3,942,657 / norms + gates 10,242). The frozen scorer is excluded.
+    projection_rank: 2349
+    roi_projection_rank: 1265
+    cls_projection_rank: 620
+    use_layer_norm: true
+
+    # Best-recipe regularization, on by default here (see header). On the two
+    # residual branches the trailing non-affine LayerNorm restores the norm, so
+    # 0.5 there is direction noise rather than damping -- watch roi_gate /
+    # cls_gate; if either collapses toward zero, back its dropout down first.
+    spatial_dropout: 0.0
+    projection_dropout: 0.5
+    roi_projection_dropout: 0.5
+    cls_projection_dropout: 0.5
