@@ -1,4 +1,11 @@
 #! /bin/bash
+#
+# Usage:
+#   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh              # -9 -8 -10 -7 -11
+#   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh -9           # one layer
+#   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh -9 force     # refit, reuse the feature cache
+#
+# C-RADIOv4-H hand-patch scorer sweep; see below.
 
 #SBATCH --job-name=scorer_cradio_h
 #SBATCH --output=outputs/logs/%x_%j.out
@@ -51,11 +58,6 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 # Outputs, named so they cannot collide with the SO400M L* directories:
 #   dataset/ph14_scorer_features_cradio-h_L<N>
 #   outputs/hand_patch_scorer_cradio-h_L<N>
-#
-# Usage:
-#   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh              # -9 -8 -10 -7 -11
-#   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh -9           # one layer
-#   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh -9 force     # refit, reuse cache
 #
 # `force` refits scorers that already exist; the feature cache is still reused.
 # To re-extract, delete the feature directory. A feature directory whose
