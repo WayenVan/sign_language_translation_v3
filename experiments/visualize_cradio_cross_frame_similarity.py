@@ -65,7 +65,17 @@ ARROW_STRIDE = 1
 ARROW_MIN_PROBABILITY = 0.0
 ARROW_THICKNESS = 1
 ARROW_TIP_LENGTH = 0.25
+# Arrows stay colored by Top-1 matching probability, but on a colormap whose
+# confident end is green: p ~ 1 is the common case, and TURBO put it at dark red,
+# so a frame of perfectly good matches read as a field of errors. WINTER runs
+# blue -> green, leaving green "matched confidently" and blue "unsure".
+ARROW_COLORMAP = cv2.COLORMAP_WINTER
 STATIONARY_DOT_RADIUS = 2
+# A patch whose match lands on its own cell is drawn as a dot rather than an
+# arrow, so "matched, did not move" stays distinguishable from "not drawn".
+# Turn this on to drop those dots and leave only the patches that actually move:
+# on a mostly static frame the dot field is what hides the moving hands.
+HIDE_STATIONARY_PATCHES = True
 # Keep the full probability range visible: values above an artificial cap would
 # otherwise become indistinguishable precisely when checking Top-K sharpness.
 PROBABILITY_VMIN = 0.0
@@ -199,6 +209,22 @@ def patch_center(
     x = round((column + 0.5) * image_width / grid_width)
     y = round((row + 0.5) * image_height / grid_height)
     return x, y
+
+
+def arrow_color(probability: float) -> tuple[int, ...]:
+    """BGR for one arrow or dot, keyed to its Top-1 matching probability."""
+    color_index = round(
+        255
+        * np.clip(
+            (probability - PROBABILITY_VMIN) / (PROBABILITY_VMAX - PROBABILITY_VMIN),
+            0.0,
+            1.0,
+        )
+    )
+    color = cv2.applyColorMap(
+        np.array([[color_index]], dtype=np.uint8), ARROW_COLORMAP
+    )[0, 0]
+    return tuple(int(channel) for channel in color)
 
 
 def draw_query_patch(
@@ -451,29 +477,17 @@ def render_outputs(
                         frame_height,
                         frame_width,
                     )
-                    color_index = round(
-                        255
-                        * np.clip(
-                            (probability - PROBABILITY_VMIN)
-                            / (PROBABILITY_VMAX - PROBABILITY_VMIN),
-                            0.0,
-                            1.0,
-                        )
-                    )
-                    color = cv2.applyColorMap(
-                        np.array([[color_index]], dtype=np.uint8),
-                        cv2.COLORMAP_TURBO,
-                    )[0, 0]
-                    color_tuple = tuple(int(channel) for channel in color)
+                    color_tuple = arrow_color(probability)
                     if start == end:
-                        cv2.circle(
-                            displacement,
-                            start,
-                            STATIONARY_DOT_RADIUS,
-                            color_tuple,
-                            -1,
-                            cv2.LINE_AA,
-                        )
+                        if not HIDE_STATIONARY_PATCHES:
+                            cv2.circle(
+                                displacement,
+                                start,
+                                STATIONARY_DOT_RADIUS,
+                                color_tuple,
+                                -1,
+                                cv2.LINE_AA,
+                            )
                     else:
                         cv2.arrowedLine(
                             displacement,
@@ -518,29 +532,17 @@ def render_outputs(
                         frame_height,
                         frame_width,
                     )
-                    color_index = round(
-                        255
-                        * np.clip(
-                            (probability - PROBABILITY_VMIN)
-                            / (PROBABILITY_VMAX - PROBABILITY_VMIN),
-                            0.0,
-                            1.0,
-                        )
-                    )
-                    color = cv2.applyColorMap(
-                        np.array([[color_index]], dtype=np.uint8),
-                        cv2.COLORMAP_TURBO,
-                    )[0, 0]
-                    color_tuple = tuple(int(channel) for channel in color)
+                    color_tuple = arrow_color(probability)
                     if start == end:
-                        cv2.circle(
-                            expected_displacement,
-                            start,
-                            STATIONARY_DOT_RADIUS,
-                            color_tuple,
-                            -1,
-                            cv2.LINE_AA,
-                        )
+                        if not HIDE_STATIONARY_PATCHES:
+                            cv2.circle(
+                                expected_displacement,
+                                start,
+                                STATIONARY_DOT_RADIUS,
+                                color_tuple,
+                                -1,
+                                cv2.LINE_AA,
+                            )
                     else:
                         cv2.arrowedLine(
                             expected_displacement,
@@ -641,6 +643,8 @@ def main() -> None:
         "spatial_window_radius": SPATIAL_WINDOW_RADIUS,
         "matching_top_k": MATCHING_TOP_K,
         "probability_color_range": [PROBABILITY_VMIN, PROBABILITY_VMAX],
+        # Why a rendering may carry no stationary dots.
+        "hide_stationary_patches": HIDE_STATIONARY_PATCHES,
         "config_name": CONFIG_NAME,
         "config_overrides": CONFIG_OVERRIDES,
         **statistics,
