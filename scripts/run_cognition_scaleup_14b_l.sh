@@ -1,10 +1,17 @@
 #! /bin/bash
 #
 # Usage:
-#   sbatch scripts/run_cognition_scaleup_14b_l.sh              # de (default)
-#   sbatch scripts/run_cognition_scaleup_14b_l.sh en           # target language: de | en | zh
-#   sbatch scripts/run_cognition_scaleup_14b_l.sh de share     # shared dataset path, no scratch staging
-#   sbatch scripts/run_cognition_scaleup_14b_l.sh debug        # no WandB; outputs/debug-scaleup-14b-l-<lang>
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh                # de, fixed prompt (default)
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh en             # single target language: de | en | zh
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh multi          # multilingual joint training (de+en+zh)
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh multi diverse  # joint training with diverse train prompts
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh multi 60       # override the epoch count
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh de share       # shared dataset path, no scratch staging
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh debug          # no WandB; outputs/debug-scaleup-14b-l-<tag>
+#
+# Arguments are order-free keywords: de|en|zh|multi, fixed|diverse, debug, share,
+# plus a bare positive integer for the epoch count (default 80 single / 40 multi).
+# `diverse` is accepted only together with `multi` -- see the prompt note below.
 #
 # Qwen3-14B + C-RADIOv4-SO400M scale-up of the best Qwen3-4B checkpoint; see below.
 
@@ -67,34 +74,106 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 #
 # Keep the original two-H100 allocation and 60-hour time limit. Runtime and
 # peak memory for the 14B model still need to be measured.
+#
+# Two training modes share this recipe:
+#   * single language (de | en | zh) -- baseline_ablation over the single-
+#     language data group, 80 epochs, fixed prompt only;
+#   * multilingual joint (multi)     -- best_adapter_multilang's data group,
+#     de+en+zh in one run at a compute-matched epoch count, fixed or diverse
+#     training prompts.
+# Everything below -- model, scorer, dropouts, positional embedding, schedule
+# cadence -- is identical across both, so the modes stay comparable.
 # --------------------------------------------------------------------------- #
 
 # de by default: the language of the 4B checkpoint this run is compared against.
+# `multi` switches to multilingual joint training on de+en+zh instead.
 TARGET_LANGUAGE=de
+MULTILANG=false
+LANG_ARG_SEEN=false
+PROMPT_CONFIG=fixed_prompt
+EPOCHS_OVERRIDE=
 DEBUG=false
 SHARED_DATASET=false
 for arg in "$@"; do
   case "$arg" in
-  de | en | zh) TARGET_LANGUAGE="$arg" ;;
+  de | en | zh)
+    TARGET_LANGUAGE="$arg"
+    LANG_ARG_SEEN=true
+    ;;
+  multi | multilang) MULTILANG=true ;;
+  fixed | fixed_prompt) PROMPT_CONFIG=fixed_prompt ;;
+  diverse | diverse_train) PROMPT_CONFIG=diverse_train ;;
   debug) DEBUG=true ;;
   share) SHARED_DATASET=true ;;
+  [0-9]*)
+    if [[ ! "$arg" =~ ^[0-9]+$ ]] || ((10#$arg < 1)); then
+      echo "epochs must be a positive integer, got: $arg" >&2
+      exit 2
+    fi
+    EPOCHS_OVERRIDE="$arg"
+    ;;
   *)
-    echo "Unknown argument: $arg (supported: de, en, zh, debug, share)" >&2
+    echo "Unknown argument: $arg (supported: de, en, zh, multi, fixed, diverse, debug, share, <epochs>)" >&2
     exit 2
     ;;
   esac
 done
 
-RUN_TAG="${TARGET_LANGUAGE}"
+if [[ "$MULTILANG" == true && "$LANG_ARG_SEEN" == true ]]; then
+  echo "'multi' trains de+en+zh jointly; do not also pass a single language ($TARGET_LANGUAGE)." >&2
+  exit 2
+fi
+
+# Prompt diversity is a multilingual-only variable here. In a single-language
+# run the diverse resolver would sample paraphrases of one and the same target
+# instruction, which confounds the prompt with nothing and makes the run
+# incomparable to the fixed-prompt 4B reference. Refuse instead of launching it.
+if [[ "$PROMPT_CONFIG" == diverse_train && "$MULTILANG" != true ]]; then
+  echo "diverse prompts are only allowed for multilingual joint training; pass 'multi diverse'." >&2
+  exit 2
+fi
+
+if [[ "$MULTILANG" == true ]]; then
+  # PH14T multilingual holds ~3 target-language examples per source video, so a
+  # compute-matched equivalent of the 80 single-language epochs below is ~27;
+  # 40 gives multilingual convergence clear extra room over that.
+  NUM_TRAIN_EPOCHS=40
+  # Recipe with the multilingual data group already wired in; the model, scorer
+  # and regularization overrides below still apply on top of it.
+  TRAIN_CONFIG=train/pretrain_adapter/best_adapter_multilang
+  LANG_TAG=multilang
+else
+  NUM_TRAIN_EPOCHS=80
+  TRAIN_CONFIG=train/pretrain_adapter/baseline_ablation
+  LANG_TAG="$TARGET_LANGUAGE"
+fi
+# A bare integer argument replaces the per-mode default; it also lands in the
+# output directory and WandB tags, so two epoch counts never share a run dir.
+NUM_TRAIN_EPOCHS="${EPOCHS_OVERRIDE:-$NUM_TRAIN_EPOCHS}"
+
+if [[ "$PROMPT_CONFIG" == diverse_train ]]; then
+  PROMPT_TAG=diverse
+else
+  PROMPT_TAG=fixed
+fi
+
+# Single-language fixed-prompt runs keep their historical tag (de / en / zh) so
+# their output directories stay where earlier launches put them.
+if [[ "$MULTILANG" == true ]]; then
+  RUN_TAG="${LANG_TAG}-${PROMPT_TAG}"
+else
+  RUN_TAG="${LANG_TAG}"
+fi
+
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug-scaleup-14b-l-${RUN_TAG}."
   REPORT_TO=none
   OUTPUT_DIR="outputs/debug-scaleup-14b-l-${RUN_TAG}"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="next-frame,hand-roi,cls,31m,qwen3-14b,cradio-l,fixed-prompt,proj-dropout,posenc-learned,output-layer--8,ep80,scale-up,${RUN_TAG}"
+  export WANDB_TAGS="next-frame,hand-roi,cls,31m,qwen3-14b,cradio-l,${PROMPT_TAG}-prompt,proj-dropout,posenc-learned,output-layer--8,ep${NUM_TRAIN_EPOCHS},scale-up,${LANG_TAG}"
   REPORT_TO=wandb
-  OUTPUT_DIR="outputs/v5.0-qwen3-14b-cradio-l-nextframe-handroi-cls-31m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-${RUN_TAG}-0911.224x224"
+  OUTPUT_DIR="outputs/v5.0-qwen3-14b-cradio-l-nextframe-handroi-cls-31m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep${NUM_TRAIN_EPOCHS}-${RUN_TAG}-0911.224x224"
 fi
 
 if [[ -t 2 ]]; then
@@ -115,7 +194,12 @@ else
     "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
     "$HOME/localscratch/ph14t")
 fi
-echo "TARGET_LANGUAGE=$TARGET_LANGUAGE  DATASET_PATH=$DATASET_PATH  OUTPUT_DIR=$OUTPUT_DIR"
+if [[ "$MULTILANG" == true ]]; then
+  echo "LANGUAGES=de+en+zh (joint)  PROMPT=$PROMPT_CONFIG  EPOCHS=$NUM_TRAIN_EPOCHS"
+else
+  echo "TARGET_LANGUAGE=$TARGET_LANGUAGE  PROMPT=$PROMPT_CONFIG  EPOCHS=$NUM_TRAIN_EPOCHS"
+fi
+echo "DATASET_PATH=$DATASET_PATH  OUTPUT_DIR=$OUTPUT_DIR"
 
 # Same SO400M L8 scorer as the best 4B checkpoint. Must match OUTPUT_LAYER:
 # the adapter raises if the scorer's recorded layer disagrees with the backbone.
@@ -131,10 +215,11 @@ CMD_ARGS=(
   --mixed_precision=bf16
   --debug
   -m csi_slt.commands.train
-  --config-name=train/pretrain_adapter/baseline_ablation
-  # Fixed for every split; its resolver maps en/de/zh to their canonical IDs.
-  prompt=fixed_prompt
-  data.language="$TARGET_LANGUAGE"
+  --config-name="$TRAIN_CONFIG"
+  # fixed_prompt resolves en/de/zh to their canonical IDs in every split;
+  # diverse_train (multilingual only) randomizes the training prompt and keeps
+  # the canonical one for val/test.
+  prompt="$PROMPT_CONFIG"
   # Scale-up architecture: Qwen3-14B + C-RADIOv4-SO400M, same adapter ranks (30.85M).
   model=qwen3-14b-cradio-l-spatiotemporal-next-frame-handroi-cls-31m
   model.config.visual_backbone_config.output_layer="$OUTPUT_LAYER"
@@ -148,7 +233,7 @@ CMD_ARGS=(
   engine.trainability.visual_position_embedding.parameter_mode=full
   +engine.optimization.visual_adapter.parameter_groups.gates.learning_rate=1e-3
   # Best-checkpoint training schedule and logging cadence.
-  engine.training_args.num_train_epochs=80
+  engine.training_args.num_train_epochs="$NUM_TRAIN_EPOCHS"
   engine.training_args.dataloader_num_workers=8
   engine.training_args.eval_steps=6000
   engine.training_args.logging_steps=15
@@ -158,5 +243,11 @@ CMD_ARGS=(
   engine.training_args.report_to="$REPORT_TO"
   data.data_root="$DATASET_PATH"
 )
+
+# The multilingual data group has no `language` key -- the dataset yields all
+# three targets -- so this override belongs to the single-language recipe only.
+if [[ "$MULTILANG" != true ]]; then
+  CMD_ARGS+=(data.language="$TARGET_LANGUAGE")
+fi
 
 accelerate launch "${CMD_ARGS[@]}"
