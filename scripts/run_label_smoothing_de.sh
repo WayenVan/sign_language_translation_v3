@@ -13,13 +13,16 @@ set -euo pipefail
 # Host handling, mirrored from scripts/run_visual_lora_ablation.sh: force
 # NCCL_P2P_DISABLE on for every host (the cluster fabric misbehaves without it),
 # then pick the checkout path by hostname, defaulting to the Glasgow HPC
-# cluster. No allowlist / hard stop and no IS_TUBBS branch here.
+# cluster. No allowlist / hard stop; IS_TUBBS is retained below so tubbs can
+# use the already extracted shared dataset instead of staging it to scratch.
 export NCCL_P2P_DISABLE=1 # NOTE: 测试的时候集群通信容易出问题 集群出现了问题
 
 if [[ "$(hostname -f)" == "tubbs.eng.gla.ac.uk" ]]; then
   SCRIPT_DIR=/home/2533494W/project/sign_language_translation_v3
+  IS_TUBBS=true
 else
   SCRIPT_DIR=/users/2533494w/projects/sign_language_translation_v3
+  IS_TUBBS=false
 fi
 
 cd "$SCRIPT_DIR"
@@ -112,8 +115,8 @@ else
   HG_TQDM_DISABLE=True
 fi
 
-# share 模式下直接使用共享路径，否则准备数据集到本地 scratch。
-if [[ "$SHARED_DATASET" == true ]]; then
+# tubbs 上直接使用共享数据集；集群上只有非 share 模式才复制到本地 scratch。
+if [[ "$IS_TUBBS" == true || "$SHARED_DATASET" == true ]]; then
   DATASET_PATH="$SCRIPT_DIR/dataset/PHOENIX-2014-T-release-v3"
 else
   source "$SCRIPT_DIR/scripts/prepare_dataset.sh"
