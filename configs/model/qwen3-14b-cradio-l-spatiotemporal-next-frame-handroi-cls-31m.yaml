@@ -1,0 +1,68 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# Qwen3-14B + C-RADIO-L variant of the Qwen3-8B + C-RADIO-H 28M config.
+# Keep the adapter structure, projection ranks, gates and regularization.
+# C-RADIO-L here is C-RADIOv4-SO400M, matching the existing 4B configs.
+
+config:
+  # Qwen3-14B embedding width; must match adapter output_dim.
+  hidden_size: 5120
+  video_soft_token_id: 151656
+
+  # One visual token per two frames; match the data processor in the recipe.
+  video_token_scale: 0.5
+  video_bidirectional_attention: false
+  # The training recipe owns positional embeddings, as in the 8B reference.
+  visual_position_embedding_type: none
+
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-14B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-SO400M
+    # Keep the feature layer and the fitted hand scorer paired.
+    output_layer: -8
+
+  visual_adapter_type: spatiotemporal_next_frame_hand_roi_cls
+  visual_adapter_kwargs:
+    input_dim: 1152
+    output_dim: 5120
+    cls_input_dim: 2304
+    temporal_scale_factor: 2
+
+    # Next-frame patch fusion, unchanged from the reference.
+    patch_grid_size: null
+    patch_fusion_hidden_dim: 1024
+    patch_fusion_temperature: 0.1
+    patch_fusion_matching_top_k: 1
+    patch_fusion_window_radius: 3
+    patch_fusion_gate_init: 1.0
+
+    # SO400M scorer fitted at output_layer=-8.
+    scorer_path: outputs/hand_patch_scorer_L8
+    top_k: 24
+    freeze_scorer: true
+
+    fusion_mode: gated
+    gate_init: -2.0
+    cls_gate_init: -2.0
+
+    # Global: 1152 -> 2349 -> 5120; ROI: 1152 -> 1265 -> 5120;
+    # CLS: 2304 -> 620 -> 5120. Keep the reference bottleneck widths.
+    # Adapter: 30,847,501 trainable parameters, excluding the frozen scorer.
+    projection_rank: 2349
+    roi_projection_rank: 1265
+    cls_projection_rank: 620
+    use_layer_norm: true
+
+    # Same regularization as the 8B / C-RADIO-H reference.
+    spatial_dropout: 0.0
+    projection_dropout: 0.5
+    roi_projection_dropout: 0.5
+    cls_projection_dropout: 0.5

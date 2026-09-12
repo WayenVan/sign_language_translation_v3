@@ -1,14 +1,14 @@
 #! /bin/bash
 #
 # Usage:
-#   sbatch scripts/run_cognition_scaleup_8b_h.sh              # de (default)
-#   sbatch scripts/run_cognition_scaleup_8b_h.sh en           # target language: de | en | zh
-#   sbatch scripts/run_cognition_scaleup_8b_h.sh de share     # shared dataset path, no scratch staging
-#   sbatch scripts/run_cognition_scaleup_8b_h.sh debug        # no WandB; outputs/debug-scaleup-<lang>
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh              # de (default)
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh en           # target language: de | en | zh
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh de share     # shared dataset path, no scratch staging
+#   sbatch scripts/run_cognition_scaleup_14b_l.sh debug        # no WandB; outputs/debug-scaleup-14b-l-<lang>
 #
-# Qwen3-8B + C-RADIOv4-H scale-up of the best Qwen3-4B checkpoint; see below.
+# Qwen3-14B + C-RADIOv4-SO400M scale-up of the best Qwen3-4B checkpoint; see below.
 
-#SBATCH --job-name=slt_scaleup_qwen3_8b_cradio_h
+#SBATCH --job-name=slt_scaleup_qwen3_14b_cradio_l
 #SBATCH --output=outputs/logs/%x_%j.out
 #SBATCH --error=outputs/logs/%x_%j.err
 #SBATCH --partition=gpu-h100
@@ -53,7 +53,7 @@ source "$SCRIPT_DIR/.venv/bin/activate"
 export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
 # --------------------------------------------------------------------------- #
-# Scale-up run: Qwen3-8B + C-RADIOv4-H (output layer -9), with the adapter and
+# Scale-up run: Qwen3-14B + C-RADIOv4-SO400M (output layer -8), with the adapter and
 # every training setting of the best Qwen3-4B checkpoint:
 #
 #   outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-gate1-hardmatch-
@@ -61,16 +61,12 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 #   (de, dev BLEU-4 0.1715; its en run reached 0.1843)
 #
 # The overrides below are scripts/run_cognition_target_language.sh's, changed
-# only where the scale-up requires it: model, output layer, and scorer.
+# only in the language model and its matching adapter output width. The
+# SO400M output layer and scorer match the 4B reference. The LLM and visual
+# backbone remain frozen; this is adapter pretraining, with no LoRA.
 #
-# Partition: H100, not L40S. The 4B reference ran on H100 NVL (node12) and
-# peaked at 39.0 GiB on one rank; Qwen3-8B adds ~7.8 GiB of frozen bf16 weights
-# on top, past the ~45 GiB an L40S exposes.
-#
-# Time limit: the 4B reference took 16.5 h (59,309 s) for 141,920 steps, about
-# 12 h training and 4.5 h evaluation / train-probe generation. Doubling both
-# for 8B + H gives ~31 h; 2-12:00:00 is ~1.9x that. save_strategy=best keeps no
-# resumable last checkpoint, so the margin errs on the generous side.
+# Keep the original two-H100 allocation and 60-hour time limit. Runtime and
+# peak memory for the 14B model still need to be measured.
 # --------------------------------------------------------------------------- #
 
 # de by default: the language of the 4B checkpoint this run is compared against.
@@ -91,14 +87,14 @@ done
 
 RUN_TAG="${TARGET_LANGUAGE}"
 if [[ "$DEBUG" == true ]]; then
-  echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug-scaleup-${RUN_TAG}."
+  echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug-scaleup-14b-l-${RUN_TAG}."
   REPORT_TO=none
-  OUTPUT_DIR="outputs/debug-scaleup-${RUN_TAG}"
+  OUTPUT_DIR="outputs/debug-scaleup-14b-l-${RUN_TAG}"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="next-frame,hand-roi,cls,28m,qwen3-8b,cradio-h,fixed-prompt,proj-dropout,posenc-learned,output-layer--9,ep80,scale-up,${RUN_TAG}"
+  export WANDB_TAGS="next-frame,hand-roi,cls,31m,qwen3-14b,cradio-l,fixed-prompt,proj-dropout,posenc-learned,output-layer--8,ep80,scale-up,${RUN_TAG}"
   REPORT_TO=wandb
-  OUTPUT_DIR="outputs/v5.0-qwen3-8b-cradio-h-nextframe-handroi-cls-28m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-9-ep80-${RUN_TAG}-0911.224x224"
+  OUTPUT_DIR="outputs/v5.0-qwen3-14b-cradio-l-nextframe-handroi-cls-31m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-${RUN_TAG}-0911.224x224"
 fi
 
 if [[ -t 2 ]]; then
@@ -121,10 +117,10 @@ else
 fi
 echo "TARGET_LANGUAGE=$TARGET_LANGUAGE  DATASET_PATH=$DATASET_PATH  OUTPUT_DIR=$OUTPUT_DIR"
 
-# Fitted by scripts/swaps/run_scorer_cradio_h_sweep.sh. Must match OUTPUT_LAYER:
+# Same SO400M L8 scorer as the best 4B checkpoint. Must match OUTPUT_LAYER:
 # the adapter raises if the scorer's recorded layer disagrees with the backbone.
-OUTPUT_LAYER=-9
-SCORER_PATH=outputs/hand_patch_scorer_cradio-h_L9
+OUTPUT_LAYER=-8
+SCORER_PATH=outputs/hand_patch_scorer_L8
 if [[ ! -f "$SCRIPT_DIR/$SCORER_PATH/config.json" ]]; then
   echo "no fitted scorer at $SCORER_PATH" >&2
   exit 3
@@ -139,8 +135,8 @@ CMD_ARGS=(
   # Fixed for every split; its resolver maps en/de/zh to their canonical IDs.
   prompt=fixed_prompt
   data.language="$TARGET_LANGUAGE"
-  # Scale-up architecture: Qwen3-8B + C-RADIOv4-H, same adapter ranks (27.5M).
-  model=qwen3-8b-cradio-h-spatiotemporal-next-frame-handroi-cls-28m
+  # Scale-up architecture: Qwen3-14B + C-RADIOv4-SO400M, same adapter ranks (30.85M).
+  model=qwen3-14b-cradio-l-spatiotemporal-next-frame-handroi-cls-31m
   model.config.visual_backbone_config.output_layer="$OUTPUT_LAYER"
   model.config.visual_adapter_kwargs.scorer_path="$SCORER_PATH"
   # Best-checkpoint regularization. The model file already defaults to these;
