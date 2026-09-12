@@ -37,7 +37,7 @@ from csi_slt.modeling_slt.visual_backbones.c_radio_v4_backbone import (
 
 
 # Experiment knobs: kept local rather than adding a Hydra configuration.
-CONFIG_NAME = "train/base"
+CONFIG_NAME = "train/pretrain_adapter/base"
 CONFIG_OVERRIDES = [
     "model=qwen3-1.7b-cradio-l-dinoframecrossv3",
     "data=ph14t_*x224x224_qwen_multiling",
