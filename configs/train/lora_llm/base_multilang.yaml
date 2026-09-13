@@ -1,0 +1,71 @@
+# @package _global_
+
+# Multilingual counterpart of train/lora_llm/base. Same LoRA continuation
+# recipe (all 36 layers, adapter/CTC head/positions/boundary/scale trainable
+# at 1e-5), but continues from a multilingual stage-1 checkpoint instead of a
+# single-language one: data group and prompt default come from
+# best_adapter_multilang (de+en+zh joint, ph14t_*x224x224_qwen_multiling).
+#
+# See train/lora_llm/base.yaml for the rationale shared by both files.
+
+defaults:
+  - /train/pretrain_adapter/best_adapter_multilang
+  - override /model: qwen3-4b-cradio-l-spatiotemporal-next-frame-20m
+  - override /peft: qwen3-4b-llm-all-qv-r8
+  - _self_
+
+model:
+  # The architecture comes from the checkpoint; the model group above only
+  # records which stage-1 recipe this continues.
+  load_from_checkpoint: true
+  checkpoint_dir: ???
+
+engine:
+  trainability:
+    llm: { parameter_mode: lora }
+    visual_backbone: { parameter_mode: frozen }
+    visual_adapter: { parameter_mode: full }
+    ctc_head: { parameter_mode: full }
+    visual_position_embedding: { parameter_mode: full }
+    visual_boundary_embeddings: { parameter_mode: full }
+    visual_scale: { parameter_mode: full }
+
+  optimization:
+    llm:
+      learning_rate: 1.0e-4
+      weight_decay: 0.0
+    visual_adapter:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    ctc_head:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    visual_position_embedding:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    visual_boundary_embeddings:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+    visual_scale:
+      learning_rate: 1.0e-5
+      weight_decay: 0.01
+
+  evaluate_before_training: true
+
+  train_probe:
+    every_n_evaluations: 1
+    num_samples: 800
+
+  training_args:
+    # PH14T multilingual holds ~3 target-language examples per source video, so
+    # a compute-matched equivalent of the single-language default (12 epochs)
+    # is lower; 10 leaves modest extra room for multilingual convergence.
+    num_train_epochs: 10
+
+    learning_rate: 1.0e-4
+    weight_decay: 0.01
+    warmup_steps: 0.03
+    lr_scheduler_type: cosine
+
+    eval_steps: 0.05
+    logging_steps: 15
