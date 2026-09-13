@@ -251,6 +251,13 @@ fi
 CKPT_STEP="$(basename "$CHECKPOINT_DIR")"
 CKPT_RUN_NAME="$(basename "$(dirname "$CHECKPOINT_DIR")")"
 CKPT_TAG="${CKPT_RUN_NAME}-${CKPT_STEP}"
+# Short, collision-resistant stand-in for CKPT_RUN_NAME: WandB rejects any
+# single tag over 64 characters, and CKPT_TAG (the full stage-1 run directory
+# name) routinely blows past that. The full name still lives in OUTPUT_DIR.
+CKPT_HASH="$(echo -n "$CKPT_RUN_NAME" | md5sum | cut -c1-8)"
+# checkpoint-54000 -> 54000; the wandb tag's own "ckpt-" prefix already says
+# "checkpoint", no need to say it twice.
+CKPT_STEP_NUM="${CKPT_STEP#checkpoint-}"
 
 RUN_TAG="llmlora-${CKPT_TAG}-${LANG_TAG}-qkvo-r${RANK}a${ALPHA}${EP_SUFFIX}${PROMPT_SUFFIX}"
 
@@ -260,7 +267,10 @@ if [[ "$DEBUG" == true ]]; then
   OUTPUT_DIR="outputs/debug"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="llm-lora,targets-qkvo,language-${LANG_TAG},${PROMPT_TAG}-prompt,rank${RANK},lr${LEARNING_RATE},ckpt-${CKPT_TAG},${RUN_TAG}"
+  # Every tag here must stay under WandB's 64-character-per-tag limit, so this
+  # carries short pieces only; RUN_TAG/OUTPUT_DIR (unbounded) is the full
+  # record and shows up in the run's config instead.
+  export WANDB_TAGS="llm-lora,targets-qkvo,language-${LANG_TAG},${PROMPT_TAG}-prompt,rank${RANK},lr${LEARNING_RATE},ckpt-${CKPT_HASH}-${CKPT_STEP_NUM}"
   REPORT_TO=wandb
   OUTPUT_DIR="outputs/${RUN_TAG}"
 fi
