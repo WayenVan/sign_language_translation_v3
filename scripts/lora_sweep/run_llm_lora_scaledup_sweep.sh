@@ -5,7 +5,7 @@
 #   bash scripts/lora_sweep/run_llm_lora_scaledup_sweep.sh --sbatch    # submit to Slurm
 #   bash scripts/lora_sweep/run_llm_lora_scaledup_sweep.sh --dry-run   # preview only
 #
-# Qwen3-14B scaled-up sweep. It continues from the checkpoint-12000 in the
+# Qwen3-14B scaled-up sweep. It continues from the checkpoint-48000 in the
 # requested stage-1 run and injects q/k/v/o LoRA into all 40 decoder blocks.
 # The only sweep dimension is rank: 256 and 512. Alpha remains 2 * rank.
 
@@ -14,9 +14,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 CHILD_SCRIPT="$SCRIPT_DIR/run_llm_lora_ablation.sh"
 
-export LLM_LORA_CKPT_LEAF="v5.0-qwen3-14b-cradio-l-nextframe-handroi-cls-31m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-de-0911.224x224/checkpoint-12000"
+export LLM_LORA_CKPT_LEAF="v5.0-qwen3-14b-cradio-l-nextframe-handroi-cls-31m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-de-0911.224x224/checkpoint-48000"
 export LLM_LORA_CHECKPOINT_DIR="/users/2533494w/projects/sign_language_translation_v3/outputs/${LLM_LORA_CKPT_LEAF}"
-export LLM_LORA_CKPT_TAG="ckpt12k"
+export LLM_LORA_CKPT_TAG="ckpt48k"
 export LLM_LORA_MODEL_RUN_SLUG="qwen3-14b-cradio-l-nextframe-handroi-cls-31m"
 export LLM_LORA_MODEL_WANDB_TAG="qwen3-14b"
 export LLM_LORA_LAYER_COUNT=40
@@ -51,7 +51,7 @@ read -r -a CHILD_EXTRA_ARGS <<< "$EXTRA_ARGS"
 
 echo "Mode: $MODE"
 echo "Sweep: fixed TARGETS=qkvo x RANK={256,512} (2 jobs)"
-echo "Fixed: Qwen3-14B, all 40 layers, checkpoint-12000, EPOCHS=${EPOCHS:-config-default-12}"
+echo "Fixed: Qwen3-14B, all 40 layers, checkpoint-48000, EPOCHS=${EPOCHS:-config-default-12}"
 
 for rank in "${RANKS[@]}"; do
   alpha=$((2 * rank))
