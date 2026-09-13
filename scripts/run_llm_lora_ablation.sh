@@ -97,10 +97,18 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 #   bash scripts/run_llm_lora_ablation.sh qkvo 8 debug share
 # --------------------------------------------------------------------------- #
 
-# Default stage-1 checkpoint used by the LLM-LoRA continuation. Prefer the
-# scratch copy on the cluster; fall back to the in-repo outputs/ tree.
-CKPT_LEAF="v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-0907.224x224/checkpoint-96000"
-if [[ -d "/mnt/scratch/users/2533494w/slt_outputs/${CKPT_LEAF}" ]]; then
+# Default stage-1 checkpoint used by the LLM-LoRA continuation. Sweep wrappers
+# may override the identity variables below for a scale-up checkpoint. Prefer
+# the scratch copy on the cluster; fall back to the in-repo outputs/ tree.
+CKPT_LEAF="${LLM_LORA_CKPT_LEAF:-v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep80-0907.224x224/checkpoint-96000}"
+CKPT_TAG="${LLM_LORA_CKPT_TAG:-ckpt96k}"
+MODEL_RUN_SLUG="${LLM_LORA_MODEL_RUN_SLUG:-qwen3-4b-cradio-l-nextframe-handroi-cls-20m}"
+MODEL_WANDB_TAG="${LLM_LORA_MODEL_WANDB_TAG:-qwen3-4b}"
+LLM_LAYER_COUNT="${LLM_LORA_LAYER_COUNT:-36}"
+OUTPUT_DATE_TAG="${LLM_LORA_OUTPUT_DATE_TAG:-0908}"
+if [[ -n "${LLM_LORA_CHECKPOINT_DIR:-}" ]]; then
+  CHECKPOINT_DIR="$LLM_LORA_CHECKPOINT_DIR"
+elif [[ -d "/mnt/scratch/users/2533494w/slt_outputs/${CKPT_LEAF}" ]]; then
   CHECKPOINT_DIR="/mnt/scratch/users/2533494w/slt_outputs/${CKPT_LEAF}"
 else
   CHECKPOINT_DIR="${SCRIPT_DIR}/outputs/${CKPT_LEAF}"
@@ -153,7 +161,7 @@ if [[ -n "$NUM_TRAIN_EPOCHS" ]]; then
   EP_SUFFIX="-ep${NUM_TRAIN_EPOCHS}"
 fi
 TARGET_LANGUAGE=de
-RUN_TAG="llmlora-all-ckpt96k-${TARGET_LANGUAGE}-${TARGETS}-r${RANK}a${ALPHA}-lr${LEARNING_RATE}${EP_SUFFIX}"
+RUN_TAG="llmlora-all-${CKPT_TAG}-${TARGET_LANGUAGE}-${TARGETS}-r${RANK}a${ALPHA}-lr${LEARNING_RATE}${EP_SUFFIX}"
 
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
@@ -161,9 +169,9 @@ if [[ "$DEBUG" == true ]]; then
   OUTPUT_DIR="outputs/debug"
 else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
-  export WANDB_TAGS="llm-lora,all-layers,targets-${TARGETS},ol-8,ckpt96k,language-${TARGET_LANGUAGE},lr-${LEARNING_RATE},${RUN_TAG}"
+  export WANDB_TAGS="llm-lora,all-layers,targets-${TARGETS},ol-8,${CKPT_TAG},${MODEL_WANDB_TAG},language-${TARGET_LANGUAGE},lr-${LEARNING_RATE},${RUN_TAG}"
   REPORT_TO=wandb
-  OUTPUT_DIR="outputs/v5.0-qwen3-4b-cradio-l-nextframe-handroi-cls-20m-ol-8-${RUN_TAG}-0908.224x224"
+  OUTPUT_DIR="outputs/v5.0-${MODEL_RUN_SLUG}-ol-8-${RUN_TAG}-${OUTPUT_DATE_TAG}.224x224"
 fi
 
 # 设置 TQDM_DISABLE 和 HG_TQDM_DISABLE 用于 accelerate launch
@@ -188,7 +196,7 @@ fi
 echo "DATASET_PATH=$DATASET_PATH"
 echo "TARGET_LANGUAGE=$TARGET_LANGUAGE"
 echo "TARGETS=$TARGETS  TARGET_MODULES=$TARGET_MODULES"
-echo "LAYERS=all  RANK=$RANK  ALPHA=$ALPHA  LEARNING_RATE=$LEARNING_RATE"
+echo "LAYERS=all-${LLM_LAYER_COUNT}  RANK=$RANK  ALPHA=$ALPHA  LEARNING_RATE=$LEARNING_RATE"
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 
