@@ -225,7 +225,10 @@ class SaveBestMetricCallback(TrainerCallback):
                 if _is_peft_model(unwrapped_model):
                     # 保存基础模型
                     base_model = unwrapped_model.get_base_model()
-                    base_model.save_pretrained(checkpoint_path)
+                    base_model.save_pretrained(
+                        checkpoint_path,
+                        max_shard_size=args.checkpoint_max_shard_size,
+                    )
                     logger.info(
                         f"Saved base model of PEFT at {checkpoint_path} for best {self.metric_name}"
                     )
@@ -409,7 +412,10 @@ class SaveBaseModelInPEFT(TrainerCallback):
                     save_dir = os.path.join(
                         args.output_dir, f"checkpoint-{state.global_step}"
                     )
-                    base_model.save_pretrained(save_dir)
+                    base_model.save_pretrained(
+                        save_dir,
+                        max_shard_size=args.checkpoint_max_shard_size,
+                    )
                     logger.info(
                         f"Saved base model of PEFT at {save_dir} for checkpoint-{state.global_step}"
                     )

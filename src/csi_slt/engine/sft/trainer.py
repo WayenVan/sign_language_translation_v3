@@ -22,6 +22,12 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.integrations.fsdp import is_fsdp_managed_module
 from transformers.trainer_utils import PredictionOutput, seed_worker
 from transformers.utils import is_datasets_available
+from transformers import PreTrainedModel
+from transformers.utils import is_peft_available
+from transformers.utils import SAFE_WEIGHTS_NAME
+from transformers.trainer import TRAINING_ARGS_NAME
+import safetensors.torch
+import os
 
 
 import datasets
@@ -168,6 +174,52 @@ class SltTrainer(Seq2SeqTrainer):
     _NO_DECAY_NAME_PATTERN = re.compile(
         r"type_embedding|position_embedding|start_video_embds|end_video_embeds"
     )
+
+    def _save(self, output_dir=None, state_dict=None) -> None:
+        """Save checkpoints with the project-wide model shard-size limit."""
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving model checkpoint to {output_dir}")
+
+        supported_classes = (
+            (PreTrainedModel,)
+            if not is_peft_available()
+            else (PreTrainedModel, __import__("peft").PeftModel)
+        )
+        save_kwargs = {"max_shard_size": self.args.checkpoint_max_shard_size}
+
+        if not isinstance(self.model, supported_classes):
+            if state_dict is None:
+                state_dict = self.model.state_dict()
+            unwrapped_model = self.accelerator.unwrap_model(
+                self.model, keep_torch_compile=False
+            )
+            if isinstance(unwrapped_model, supported_classes):
+                unwrapped_model.save_pretrained(
+                    output_dir, state_dict=state_dict, **save_kwargs
+                )
+            else:
+                logger.info(
+                    "Trainer.model is not a `PreTrainedModel`, only saving its state dict."
+                )
+                safetensors.torch.save_file(
+                    state_dict,
+                    os.path.join(output_dir, SAFE_WEIGHTS_NAME),
+                    metadata={"format": "pt"},
+                )
+        else:
+            self.model.save_pretrained(output_dir, state_dict=state_dict, **save_kwargs)
+
+        if self.processing_class is not None:
+            self.processing_class.save_pretrained(output_dir)
+        elif (
+            self.data_collator is not None
+            and hasattr(self.data_collator, "tokenizer")
+            and self.data_collator.tokenizer is not None
+        ):
+            self.data_collator.tokenizer.save_pretrained(output_dir)
+
+        torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
 
     def __init__(
         self,

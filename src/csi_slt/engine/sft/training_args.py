@@ -40,6 +40,12 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
             " The final output directory will be `<auto_output_root>/<model_name>`."
         },
     )
+    checkpoint_max_shard_size: str = field(
+        default="5GB",
+        metadata={
+            "help": "Maximum size of each model-weight shard written by checkpoints."
+        },
+    )
 
     @staticmethod
     def __init_output_base_name():
