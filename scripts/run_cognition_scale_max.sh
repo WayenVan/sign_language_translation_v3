@@ -57,13 +57,13 @@ export PYTHONPATH="$SCRIPT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 # --------------------------------------------------------------------------- #
 # Qwen3-32B dense + C-RADIO-L, with the same 30,847,501-parameter adapter
 # as the 14B model (projection ranks 2349 / 1265 / 620).
-# Default to multilingual de+en+zh with diverse train prompts, 40 epochs; frozen LLM and
+# Default to multilingual de+en+zh with diverse train prompts, 25 epochs; frozen LLM and
 # backbone, trainable adapter/CTC/visual embeddings, no LoRA.
 #
-# Two H100s with FSDP2 parameter sharding and activation checkpointing.
+# Two H100s with FSDP2 parameter sharding; activation checkpointing disabled.
 # CPU RAM covers both ranks loading full weights before sharding. GPU peak
 # memory and throughput still require measurement on the training cluster.
-# Do not also enable Trainer gradient_checkpointing: FSDP owns it here.
+# Measure full forward/backward peak memory with recomputation disabled.
 # --------------------------------------------------------------------------- #
 
 TARGET_LANGUAGE=multi
@@ -94,12 +94,14 @@ for arg in "$@"; do
 done
 
 if [[ "$TARGET_LANGUAGE" == multi ]]; then
-  # Match the 14B scaleup recipe: 40 multi / 80 single epochs.
-  NUM_TRAIN_EPOCHS=40
+  # Shorter 32B multilingual run; evaluate about every 2.25 epochs.
+  NUM_TRAIN_EPOCHS=25
+  EVAL_STEPS=12000
   TRAIN_CONFIG=train/pretrain_adapter/best_adapter_multilang
   LANG_TAG=multilang
 else
   NUM_TRAIN_EPOCHS=80
+  EVAL_STEPS=6000
   TRAIN_CONFIG=train/pretrain_adapter/baseline_ablation
   LANG_TAG="$TARGET_LANGUAGE"
 fi
@@ -134,7 +136,7 @@ else
     "$SCRIPT_DIR/dataset/phoenix-2014-T.v3.tar.gz" \
     "$HOME/localscratch/ph14t")
 fi
-echo "TARGET_LANGUAGE=$TARGET_LANGUAGE  PROMPT=$PROMPT_CONFIG  EPOCHS=$NUM_TRAIN_EPOCHS  DATASET_PATH=$DATASET_PATH  OUTPUT_DIR=$OUTPUT_DIR"
+echo "TARGET_LANGUAGE=$TARGET_LANGUAGE  PROMPT=$PROMPT_CONFIG  EPOCHS=$NUM_TRAIN_EPOCHS  EVAL_STEPS=$EVAL_STEPS  DATASET_PATH=$DATASET_PATH  OUTPUT_DIR=$OUTPUT_DIR"
 
 SCORER_PATH=outputs/hand_patch_scorer_L8
 if [[ ! -f "$SCRIPT_DIR/$SCORER_PATH/config.json" ]]; then
@@ -166,7 +168,7 @@ CMD_ARGS=(
   # Maximum on-disk weight shard size; independent of FSDP GPU sharding.
   +engine.training_args.checkpoint_max_shard_size=8GB
   engine.training_args.dataloader_num_workers=8
-  engine.training_args.eval_steps=6000
+  engine.training_args.eval_steps="$EVAL_STEPS"
   engine.training_args.logging_steps=15
   engine.training_args.ddp_find_unused_parameters=false
   engine.training_args.output_dir="$OUTPUT_DIR"

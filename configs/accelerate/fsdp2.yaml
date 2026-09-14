@@ -49,10 +49,10 @@ fsdp_config:
   #   python -c "from transformers.models.gemma4_unified import *" and inspect
   #   the model's `named_modules()`).
   fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
-  # Free the all-gathered layer weights after forward and re-gather in backward:
-  # the memory/communication trade-off that makes 32B fit at all.
-  fsdp_reshard_after_forward: true
-  fsdp_activation_checkpointing: true
+  # Retain gathered weights after forward to avoid backward all-gathers.
+  # Trades higher peak GPU memory for less communication.
+  fsdp_reshard_after_forward: false
+  fsdp_activation_checkpointing: false
   # WARN: OFF deliberately -- do not turn this on without reading the following.
   # It would save CPU RAM by having only rank 0 materialize the weights, the
   # other ranks building on meta and receiving parameters through
