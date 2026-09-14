@@ -1049,6 +1049,16 @@ class SltModel(PreTrainedModel, GenerationMixin):
         past_key_values: Cache | None = llm_forward_kwargs.pop("past_key_values", None)
         inputs_embeds = llm_forward_kwargs.pop("inputs_embeds", None)
 
+        # Qwen defaults use_cache=None to its config's True. External FSDP
+        # activation checkpointing then replays layers against the same mutable
+        # cache, doubling K/V length during backward. Use the SLT training state:
+        # its frozen LLM deliberately stays in eval mode while gradients flow
+        # through it to the adapter. Leave inference caching unchanged.
+        if self.training:
+            use_cache = False
+            if past_key_values is not None:
+                raise ValueError("past_key_values is not supported during SLT training")
+
         prepare_output = None
         visual_backbone_extras = None
         if inputs_embeds is None:
