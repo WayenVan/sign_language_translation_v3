@@ -9,6 +9,7 @@
 # LR=1e-4, EPOCHS=config (12).
 # Example:  sbatch -J slt_llora_qkvo_r8 scripts/run_llm_lora_ablation.sh qkvo 8
 # Env:      LLM_LORA_LR overrides the LoRA learning rate (default 1e-4).
+#           LLM_LORA_OUTPUT_ROOT groups runs into separate subdirectories there.
 # Help:     scripts/run_llm_lora_ablation.sh --help
 # =========================================================================== #
 
@@ -171,7 +172,11 @@ else
   export WANDB_PROJECT=sign_language_translation_v5.0-dev
   export WANDB_TAGS="llm-lora,all-layers,targets-${TARGETS},ol-8,${CKPT_TAG},${MODEL_WANDB_TAG},language-${TARGET_LANGUAGE},lr-${LEARNING_RATE},${RUN_TAG}"
   REPORT_TO=wandb
-  OUTPUT_DIR="outputs/v5.0-${MODEL_RUN_SLUG}-ol-8-${RUN_TAG}-${OUTPUT_DATE_TAG}.224x224"
+  if [[ -n "${LLM_LORA_OUTPUT_ROOT:-}" ]]; then
+    OUTPUT_DIR="${LLM_LORA_OUTPUT_ROOT}/${RUN_TAG}"
+  else
+    OUTPUT_DIR="outputs/v5.0-${MODEL_RUN_SLUG}-ol-8-${RUN_TAG}-${OUTPUT_DATE_TAG}.224x224"
+  fi
 fi
 
 # 设置 TQDM_DISABLE 和 HG_TQDM_DISABLE 用于 accelerate launch
