@@ -29,6 +29,7 @@ def _model(checkpointed):
         video_bidirectional_attention=False, label_smoothing=0.0, ctc_enabled=False,
     )
     model.has_sliding_layers = False
+    model._llm_accepts_mask_mapping = True
     return model
 
 

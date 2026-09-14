@@ -90,9 +90,13 @@ def _apply_lora_layer_spec(
     )
 
 
-def get_llm_cls_by_model_name(model_name):
+def get_llm_cls_by_model_name(model_name, llm_config=None):
     """Return the supported causal language-model class for ``model_name``."""
-    if "qwen" in model_name.lower():
+    if getattr(llm_config, "model_type", None) == "qwen3_moe":
+        from transformers.models.qwen3_moe import Qwen3MoeForCausalLM
+
+        model_cls = Qwen3MoeForCausalLM
+    elif "qwen" in model_name.lower():
         from transformers.models.qwen3 import Qwen3ForCausalLM
 
         model_cls = Qwen3ForCausalLM
@@ -268,7 +272,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
 
         # Initialize the language model when it was not supplied by the caller.
         if self.llm is None:
-            llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
+            llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path, config.llm_config)
             self.llm = llm_cls._from_config(config.llm_config)
 
         # Keep exactly one configuration object for the language model.
@@ -611,7 +615,7 @@ class SltModel(PreTrainedModel, GenerationMixin):
             config.visual_backbone_config, dtype=visual_backbone_dtype
         )
 
-        llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path)
+        llm_cls = get_llm_cls_by_model_name(config.llm_model_name_or_path, config.llm_config)
         llm = llm_cls.from_pretrained(config.llm_model_name_or_path, dtype=llm_dtype)
 
         # This factory explicitly loaded both components from pretrained
@@ -651,7 +655,21 @@ class SltModel(PreTrainedModel, GenerationMixin):
         generation_config.temperature = None
 
         self.generation_config = generation_config
-        self.has_sliding_layers = "sliding_attention" in text_config.layer_types
+        # Qwen3-MoE's config carries no `layer_types` at all (every layer is
+        # global attention), unlike dense Qwen3/Gemma, which always define it.
+        self.has_sliding_layers = "sliding_attention" in (
+            getattr(text_config, "layer_types", None) or ()
+        )
+        # Dense Qwen3/Gemma3/Gemma4's own forward() detects a dict attention_mask
+        # and indexes it by config.layer_types[i]; that dict convention is what
+        # lets this class hand it a pre-built {"full_attention": ..., possibly
+        # "sliding_attention": ...} mapping carrying the bidirectional video
+        # overlay. Qwen3-MoE's forward has no such branch -- it always treats
+        # attention_mask as a raw tensor/None and rebuilds the mask itself, so a
+        # dict reaches its internals as an unhandled type. The presence of
+        # layer_types is exactly what gates that branch in every backend here,
+        # so it doubles as the capability check.
+        self._llm_accepts_mask_mapping = hasattr(text_config, "layer_types")
 
     @torch.no_grad()
     def _init_weights(self, module: nn.Module) -> None:
@@ -1159,9 +1177,13 @@ class SltModel(PreTrainedModel, GenerationMixin):
                     )
                 causal_mask_mapping["sliding_attention"] = sliding_attention_mask
 
+        llm_attention_mask = causal_mask_mapping
+        if not self._llm_accepts_mask_mapping and isinstance(causal_mask_mapping, dict):
+            llm_attention_mask = causal_mask_mapping["full_attention"]
+
         outputs = self.llm(
             inputs_embeds=inputs_embeds,
-            attention_mask=causal_mask_mapping,
+            attention_mask=llm_attention_mask,
             position_ids=position_ids,
             cache_position=cache_position,
             use_cache=use_cache,
