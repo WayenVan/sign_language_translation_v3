@@ -27,7 +27,6 @@ def _():
         cfg = hydra.compose(config_name="base_train")
         cfg.data.data_root = "dataset/PHOENIX-2014-T-release-v3"
 
-    cfg.data.chat_template_jinjia = "jinjas/gemma_slt.jinja"
     tokenizer = AutoTokenizer.from_pretrained("google/gemma-3-1b-it")
     datamodule = DataModule(
         cfg.data,
