@@ -1,6 +1,7 @@
 #! /bin/bash
 #
 # Usage:
+#   bash scripts/run_cognition_scale_max.sh              # tubbs: use the extracted dataset directly
 #   sbatch scripts/run_cognition_scale_max.sh            # de+en+zh, diverse train prompts (default)
 #   sbatch scripts/run_cognition_scale_max.sh multi 60   # override epochs
 #   sbatch scripts/run_cognition_scale_max.sh zh fixed   # single language: 80 epochs
@@ -29,8 +30,8 @@ set -euo pipefail
 #   * dataset: tubbs has it extracted in-repo, so skip the stage-to-scratch step;
 #   * NCCL P2P: only the cluster fabric needs NCCL_P2P_DISABLE=1; tubbs's local
 #     GPUs keep P2P enabled.
-HOST_FQDN="$(hostname -f)"
-if [[ "$HOST_FQDN" == "tubbs.eng.gla.ac.uk" ]]; then
+HOST_FQDN="$(hostname -f 2>/dev/null || hostname)"
+if [[ "$HOST_FQDN" == "tubbs.eng.gla.ac.uk" || "$HOST_FQDN" == "tubbs" ]]; then
   SCRIPT_DIR=/home/2533494W/project/sign_language_translation_v3
   IS_TUBBS=true
 elif [[ -d /users/2533494w/projects/sign_language_translation_v3 ]]; then
@@ -43,7 +44,7 @@ else
 fi
 
 if [[ "$IS_TUBBS" == true ]]; then
-  unset NCCL_P2P_DISABLE
+  export NCCL_P2P_DISABLE=0
 else
   export NCCL_P2P_DISABLE=1
 fi

@@ -49,9 +49,11 @@ fsdp_config:
   #   python -c "from transformers.models.gemma4_unified import *" and inspect
   #   the model's `named_modules()`).
   fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
-  # Retain gathered weights after forward to avoid backward all-gathers.
-  # Trades higher peak GPU memory for less communication.
-  fsdp_reshard_after_forward: false
+  # Reshard (free) gathered weights after forward, re-gathering them for
+  # backward. Trades more communication for lower peak GPU memory -- flip
+  # back to false if OOM is resolved and communication becomes the
+  # bottleneck.
+  fsdp_reshard_after_forward: true
   fsdp_activation_checkpointing: false
   # WARN: OFF deliberately -- do not turn this on without reading the following.
   # It would save CPU RAM by having only rank 0 materialize the weights, the
