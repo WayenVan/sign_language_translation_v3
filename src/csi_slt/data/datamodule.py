@@ -75,20 +75,6 @@ class DataModule:
             replace_extra_special_tokens=False,
         )
 
-    @property
-    def chat_template(self) -> str | None:
-        """Read the chat template configured for the data processor."""
-        path = self.data_cfg.get("chat_template_jinjia")
-        if path is None:
-            return None
-
-        path = path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Chat template file not found: {path}")
-
-        with open(path, "r", encoding="utf-8") as template_file:
-            return template_file.read()
-
     def setup(self, stage: Stage = None) -> None:
         """Create datasets required by the requested execution stage.
 
@@ -161,7 +147,6 @@ class DataModule:
         return instantiate(
             self.data_cfg.processor,
             tokenizer=self.tokenizer,
-            chat_template=self.chat_template,
             **processor_kwargs,
             _convert_="all",
         )
