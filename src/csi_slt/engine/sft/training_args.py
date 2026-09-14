@@ -53,6 +53,12 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
         return now.strftime("%Y-%m-%d_%H-%M-%S")
 
     @staticmethod
+    def __default_run_name(output_dir: str) -> str:
+        """Keep tracking names compact when checkpoints use an absolute path."""
+        output_name = os.path.basename(os.path.normpath(output_dir))
+        return os.path.join("outputs", output_name)
+
+    @staticmethod
     def __snyc_output_base_name(acc: Accelerator, base_name: str):
         """
         synchronize the base name of the output directory across all processes.
@@ -105,11 +111,12 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
             self.output_dir = output_dir
 
             if self.run_name:
+                run_name = self.__default_run_name(output_dir)
                 logger.warning(
                     "The `run_name` argument is set, but `auto_output_dir` is True. "
-                    f"The `run_name` will be overridden to the new output directory name: {output_dir}."
+                    f"The `run_name` will be overridden to: {run_name}."
                 )
-            self.run_name = output_dir
+            self.run_name = self.__default_run_name(output_dir)
         else:
             if self.auto_output_root:
                 raise ValueError(
@@ -118,4 +125,4 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
                 )
 
             if self.run_name is None:
-                self.run_name = self.output_dir
+                self.run_name = self.__default_run_name(self.output_dir)

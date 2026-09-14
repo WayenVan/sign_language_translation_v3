@@ -17,6 +17,20 @@ from csi_slt.engine.sft.trainer import SltTrainer, _ScalarAccumulator
 from csi_slt.engine.sft.training_args import SltTrainingArguments
 
 
+def test_default_run_name_uses_only_output_directory_name(tmp_path):
+    output_dir = tmp_path / "group" / "llmlora-all-ckpt132k-de-qkvo-r768a1536-lr1e-4-ep18"
+
+    args = SltTrainingArguments(
+        output_dir=str(output_dir),
+        auto_output_dir=False,
+        report_to="none",
+    )
+
+    assert args.run_name == (
+        "outputs/llmlora-all-ckpt132k-de-qkvo-r768a1536-lr1e-4-ep18"
+    )
+
+
 class _MeanReducedModelWithKwargs(nn.Module):
     """Minimal model reproducing Transformers' ``**kwargs`` inference."""
 
