@@ -8,6 +8,8 @@ from transformers.utils import logging
 from accelerate import Accelerator
 import torch
 
+from .spike_guard import SpikeGuard
+
 
 logger = logging.get_logger(__name__)
 
@@ -44,6 +46,29 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
         default="5GB",
         metadata={
             "help": "Maximum size of each model-weight shard written by checkpoints."
+        },
+    )
+    spike_skip_factor: float | None = field(
+        default=None,
+        metadata={
+            "help": "Skip the optimizer step when the pre-clip gradient norm exceeds "
+            "this multiple of the median of recently accepted norms. None disables "
+            "spike skipping. See csi_slt.engine.sft.spike_guard."
+        },
+    )
+    spike_skip_window: int = field(
+        default=100,
+        metadata={"help": "Number of recently accepted gradient norms in the median."},
+    )
+    spike_skip_min_history: int = field(
+        default=50,
+        metadata={"help": "Accepted norms required before any finite step is skipped."},
+    )
+    spike_skip_max_consecutive: int = field(
+        default=2,
+        metadata={
+            "help": "Maximum consecutive spike skips; the next outlier is accepted "
+            "so a real shift in gradient scale re-bases the median."
         },
     )
 
@@ -89,6 +114,15 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.spike_skip_factor is not None:
+            # Fail at argument parsing rather than when the trainer is built.
+            SpikeGuard(
+                factor=self.spike_skip_factor,
+                window=self.spike_skip_window,
+                min_history=self.spike_skip_min_history,
+                max_consecutive=self.spike_skip_max_consecutive,
+            )
 
         acc = Accelerator()
 

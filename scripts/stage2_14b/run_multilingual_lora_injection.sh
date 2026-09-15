@@ -11,9 +11,12 @@
 # Environment overrides:
 #   RANK=768 EPOCHS=11 EXTRA_ARGS="share"
 #   DIVERSE_CHECKPOINT_STEP=checkpoint-180000 FIXED_CHECKPOINT_STEP=checkpoint-126000
+#   SPIKE_SKIP=1 LLM_LORA_SPIKE_SKIP_FACTOR=20   # SPIKE_SKIP=0 turns skipping off
 #
-# All runs use StableAdamW (`stable` is always passed to the child launcher),
-# so outputs land in *-stableadamw dirs next to the earlier AdamW runs.
+# All runs use StableAdamW (`stable` is always passed to the child launcher).
+# Spike skipping is on by default (`spikeskip`), so outputs land in
+# *-stableadamw-spikeskip<factor> dirs; with SPIKE_SKIP=0 they land in
+# *-stableadamw dirs.
 
 set -euo pipefail
 
@@ -24,6 +27,7 @@ OUTPUT_ROOT="$PROJECT_DIR/outputs/v5.0-14b-final-ckpts"
 RANK="${RANK:-768}"
 EPOCHS="${EPOCHS:-11}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+SPIKE_SKIP="${SPIKE_SKIP:-1}"
 
 RUN_ROOTS=(
   "$OUTPUT_ROOT/v5.0-qwen3-14b-cradio-l-nextframe-handroi-cls-31m-gate1-hardmatch-wr3-projdrop0.5-posenc-learned-ol-8-ep40-multilang-diverse-0911.224x224"
@@ -60,6 +64,19 @@ if [[ ! "$EPOCHS" =~ ^[0-9]+$ ]] || (( 10#$EPOCHS < 1 )); then
   echo "EPOCHS must be a positive integer, got: $EPOCHS" >&2
   exit 2
 fi
+if [[ "$SPIKE_SKIP" != 0 && "$SPIKE_SKIP" != 1 ]]; then
+  echo "SPIKE_SKIP must be 0 or 1, got: $SPIKE_SKIP" >&2
+  exit 2
+fi
+if [[ "$SPIKE_SKIP" == 1 ]]; then
+  SPIKE_SKIP_DESC="${LLM_LORA_SPIKE_SKIP_FACTOR:-20}x-median"
+  SPIKE_SKIP_ARGS=(spikeskip)
+  SPIKE_SKIP_JOB_SUFFIX="_spikeskip"
+else
+  SPIKE_SKIP_DESC=off
+  SPIKE_SKIP_ARGS=()
+  SPIKE_SKIP_JOB_SUFFIX=""
+fi
 for checkpoint_step in "${CHECKPOINT_STEPS[@]}"; do
   if [[ ! "$checkpoint_step" =~ ^checkpoint-[0-9]+$ ]]; then
     echo "Checkpoint steps must look like checkpoint-180000, got: $checkpoint_step" >&2
@@ -73,7 +90,7 @@ echo "Mode: $MODE"
 echo "Jobs: 2 multilingual runs (diverse prompt, fixed prompt)"
 echo "Languages: de+en+zh joint training"
 echo "LoRA: targets=q_proj,k_proj,v_proj,o_proj; layers=all-40; rank=$RANK; alpha=$ALPHA"
-echo "Training: epochs=$EPOCHS; llm_lr=${LLM_LORA_LR:-1e-4}; optimizer=stable_adamw; GPUs=2"
+echo "Training: epochs=$EPOCHS; llm_lr=${LLM_LORA_LR:-1e-4}; optimizer=stable_adamw; spike_skip=$SPIKE_SKIP_DESC; GPUs=2"
 echo "Checkpoint steps: diverse=${CHECKPOINT_STEPS[0]}; fixed=${CHECKPOINT_STEPS[1]}"
 echo "Output root: $OUTPUT_ROOT"
 echo "Extra child arguments: ${EXTRA_ARGS:-none}"
@@ -81,10 +98,10 @@ echo "Extra child arguments: ${EXTRA_ARGS:-none}"
 for index in "${!PROMPT_MODES[@]}"; do
   prompt_mode="${PROMPT_MODES[$index]}"
   checkpoint_dir="${RUN_ROOTS[$index]}/${CHECKPOINT_STEPS[$index]}"
-  job_name="slt_14b_llora_multi_${prompt_mode}_r${RANK}a${ALPHA}_stable"
+  job_name="slt_14b_llora_multi_${prompt_mode}_r${RANK}a${ALPHA}_stable${SPIKE_SKIP_JOB_SUFFIX}"
   child_args=("$checkpoint_dir" "$RANK" multi "$prompt_mode")
   child_args+=("$EPOCHS")
-  child_args+=(stable)
+  child_args+=(stable "${SPIKE_SKIP_ARGS[@]}")
   child_args+=("${CHILD_EXTRA_ARGS[@]}")
 
   if [[ "$MODE" == sbatch ]]; then

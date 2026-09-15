@@ -12,6 +12,11 @@ from .callbacks import (
     EvalInformationVisualizationCallback,
     TrainSubsetMetricsCallback,
 )
+from .spike_guard import (
+    SpikeGuard,
+    install_optimizer_step_guard,
+    synchronized_grad_norm,
+)
 from torch import nn
 import torch
 from torch.distributed.fsdp import FSDPModule, FullyShardedDataParallel
@@ -317,6 +322,22 @@ class SltTrainer(Seq2SeqTrainer):
         self._train_scalars = _ScalarAccumulator()
         self._active_scalars = self._train_scalars
 
+        # Optional skip of the optimizer step on extreme gradient-norm spikes.
+        # Plain Seq2SeqTrainingArguments (used by some callers and tests) lack
+        # the spike_skip_* fields, which simply means the guard is off.
+        spike_skip_factor = getattr(self.args, "spike_skip_factor", None)
+        self._spike_guard = (
+            SpikeGuard(
+                factor=spike_skip_factor,
+                window=self.args.spike_skip_window,
+                min_history=self.args.spike_skip_min_history,
+                max_consecutive=self.args.spike_skip_max_consecutive,
+            )
+            if spike_skip_factor is not None
+            else None
+        )
+        self._skip_optimizer_step = False
+
         # adjust arguments for seq2seq training
         if self.args.predict_with_generate is False:
             logger.warning(
@@ -361,6 +382,7 @@ class SltTrainer(Seq2SeqTrainer):
     def create_optimizer(self, model=None) -> torch.optim.Optimizer:
         """Create component groups, resolving overrides against global defaults."""
         if self.optimizer is not None:
+            self._install_spike_skip(self.optimizer)
             return self.optimizer
 
         opt_model = self.model if model is None else model
@@ -378,7 +400,60 @@ class SltTrainer(Seq2SeqTrainer):
             self.args, opt_model
         )
         self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+        self._install_spike_skip(self.optimizer)
         return self.optimizer
+
+    def _install_spike_skip(self, optimizer: torch.optim.Optimizer) -> None:
+        """Guard ``optimizer.step`` with the decision made in ``_get_grad_norm``.
+
+        Called from ``create_optimizer``, i.e. before Trainer builds the LR
+        scheduler, so the scheduler's own ``optimizer.step`` wrapper sits on
+        top of this guard.
+        """
+        if self._spike_guard is not None:
+            install_optimizer_step_guard(optimizer, lambda: self._skip_optimizer_step)
+
+    def _get_grad_norm(self, model, grad_norm=None):
+        """Decide whether to skip this optimizer step from the pre-clip norm.
+
+        Trainer calls this once per optimizer step, right after clipping and
+        right before ``optimizer.step()``; ``grad_norm`` is the pre-clip norm
+        (or computed here when clipping is off). The logged value is returned
+        unchanged, so a skipped spike still shows up in ``grad_norm``.
+        """
+        grad_norm = super()._get_grad_norm(model, grad_norm=grad_norm)
+        if self._spike_guard is None:
+            return grad_norm
+
+        decision = self._spike_guard.observe(
+            synchronized_grad_norm(grad_norm, self.args.device)
+        )
+        self._skip_optimizer_step = decision.skip
+        if decision.reason is None or not self.is_world_process_zero():
+            # Every rank reaches the same decision; report it once.
+            return grad_norm
+        step = self.state.global_step + 1
+        if decision.reason == "non_finite":
+            logger.warning(
+                f"Skipping optimizer step {step}: non-finite gradient norm "
+                f"({decision.grad_norm})."
+            )
+        elif decision.reason == "spike":
+            logger.warning(
+                f"Skipping optimizer step {step}: gradient norm "
+                f"{decision.grad_norm:.4g} > {self._spike_guard.factor:g}x median "
+                f"{decision.median:.4g} (consecutive skip "
+                f"{self._spike_guard.consecutive}/{self._spike_guard.max_consecutive})."
+            )
+        elif decision.reason == "consecutive_limit":
+            logger.warning(
+                f"Not skipping optimizer step {step} despite gradient norm "
+                f"{decision.grad_norm:.4g} > {self._spike_guard.factor:g}x median "
+                f"{decision.median:.4g}: reached "
+                f"{self._spike_guard.max_consecutive} consecutive skips, treating it "
+                "as a shift in gradient scale."
+            )
+        return grad_norm
 
     def _prepare_for_training(self, *args, **kwargs):
         """Prepare as usual, then restore autocast on the FSDP2 path."""
@@ -666,6 +741,12 @@ class SltTrainer(Seq2SeqTrainer):
         if "loss" in logs and self._train_scalars:
             logs.update(
                 self._train_scalars.drain(self.accelerator, self.args.device)
+            )
+        if "loss" in logs and self._spike_guard is not None:
+            # Cumulative counts; identical on every rank (decisions are synced).
+            logs["spike_skip/total"] = float(self._spike_guard.skipped_total)
+            logs["spike_skip/consecutive_limit_hits"] = float(
+                self._spike_guard.consecutive_limit_hits
             )
 
         super().log(logs, start_time=start_time)

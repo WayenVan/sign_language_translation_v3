@@ -9,14 +9,16 @@
 #   sbatch scripts/run_llm_lora_inject.sh <CKPT_DIR> 256 multi 20          # epoch-count override
 #   bash   scripts/run_llm_lora_inject.sh <CKPT_DIR> de share debug        # local smoke test
 #   sbatch scripts/run_llm_lora_inject.sh <CKPT_DIR> 768 en stable         # StableAdamW optimizer (torch-optimi)
+#   sbatch scripts/run_llm_lora_inject.sh <CKPT_DIR> 768 en spikeskip      # skip steps with grad norm > 20x median
 #
 # <CKPT_DIR> is required (a stage-1 checkpoint directory) and always comes
 # first. After that, arguments are order-free keywords: de|en|zh|multi,
-# fixed|diverse, debug, share, stable, plus one bare positive integer for the LoRA
+# fixed|diverse, debug, share, stable, spikeskip, plus one bare positive integer for the LoRA
 # rank and a second one for the epoch count -- the first bare int seen is the
 # rank, the second is the epoch override. `diverse` is accepted only together
 # with `multi` -- see the prompt note below.
 # Environment: LLM_LORA_OUTPUT_ROOT overrides the parent output directory.
+#   LLM_LORA_SPIKE_SKIP_FACTOR (default 20) sets the `spikeskip` threshold.
 # Help: scripts/run_llm_lora_inject.sh --help
 #
 # Formal LLM-LoRA injection launcher: continues LoRA training from any
@@ -129,6 +131,7 @@ EPOCHS_OVERRIDE=
 DEBUG=false
 SHARED_DATASET=false
 STABLE_ADAMW=false
+SPIKE_SKIP=false
 for arg in "$@"; do
   case "$arg" in
   de | en | zh)
@@ -141,6 +144,7 @@ for arg in "$@"; do
   debug) DEBUG=true ;;
   share) SHARED_DATASET=true ;;
   stable | stable_adamw) STABLE_ADAMW=true ;;
+  spikeskip | spike_skip) SPIKE_SKIP=true ;;
   [0-9]*)
     if [[ ! "$arg" =~ ^[0-9]+$ ]] || ((10#$arg < 1)); then
       echo "numeric arguments must be positive integers, got: $arg" >&2
@@ -157,7 +161,7 @@ for arg in "$@"; do
     fi
     ;;
   *)
-    echo "Unknown argument: $arg (supported: de, en, zh, multi, fixed, diverse, debug, share, stable, <rank>, <epochs>)" >&2
+    echo "Unknown argument: $arg (supported: de, en, zh, multi, fixed, diverse, debug, share, stable, spikeskip, <rank>, <epochs>)" >&2
     exit 2
     ;;
   esac
@@ -269,8 +273,19 @@ OPTIM_SUFFIX=""
 if [[ "$STABLE_ADAMW" == true ]]; then
   OPTIM_SUFFIX="-stableadamw"
 fi
+# Spike skipping changes which updates are applied, so it also gets its own dir;
+# the factor is part of the tag so different thresholds never share one.
+SPIKE_SKIP_FACTOR="${LLM_LORA_SPIKE_SKIP_FACTOR:-20}"
+SPIKE_SUFFIX=""
+if [[ "$SPIKE_SKIP" == true ]]; then
+  if [[ ! "$SPIKE_SKIP_FACTOR" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    echo "LLM_LORA_SPIKE_SKIP_FACTOR must be a positive number, got: $SPIKE_SKIP_FACTOR" >&2
+    exit 2
+  fi
+  SPIKE_SUFFIX="-spikeskip${SPIKE_SKIP_FACTOR}"
+fi
 
-RUN_TAG="llmlora-${CKPT_TAG}-${LANG_TAG}-qkvo-r${RANK}a${ALPHA}${EP_SUFFIX}${PROMPT_SUFFIX}${OPTIM_SUFFIX}"
+RUN_TAG="llmlora-${CKPT_TAG}-${LANG_TAG}-qkvo-r${RANK}a${ALPHA}${EP_SUFFIX}${PROMPT_SUFFIX}${OPTIM_SUFFIX}${SPIKE_SUFFIX}"
 
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
@@ -281,7 +296,7 @@ else
   # Every tag here must stay under WandB's 64-character-per-tag limit, so this
   # carries short pieces only; RUN_TAG/OUTPUT_DIR (unbounded) is the full
   # record and shows up in the run's config instead.
-  export WANDB_TAGS="llm-lora,targets-qkvo,language-${LANG_TAG},${PROMPT_TAG}-prompt,rank${RANK},lr${LEARNING_RATE},ckpt-${CKPT_HASH}-${CKPT_STEP_NUM}${OPTIM_SUFFIX:+,optim-stable-adamw}"
+  export WANDB_TAGS="llm-lora,targets-qkvo,language-${LANG_TAG},${PROMPT_TAG}-prompt,rank${RANK},lr${LEARNING_RATE},ckpt-${CKPT_HASH}-${CKPT_STEP_NUM}${OPTIM_SUFFIX:+,optim-stable-adamw}${SPIKE_SUFFIX:+,spike-skip${SPIKE_SKIP_FACTOR}}"
   REPORT_TO=wandb
   OUTPUT_ROOT="${LLM_LORA_OUTPUT_ROOT:-outputs}"
   OUTPUT_DIR="${OUTPUT_ROOT%/}/${RUN_TAG}"
@@ -349,6 +364,14 @@ if [[ "$STABLE_ADAMW" == true ]]; then
   # Per-tensor update clipping (Wortsman et al. 2023); `++` because base.yaml has no optim key.
   CMD_ARGS+=("++engine.training_args.optim=stable_adamw")
   echo "OPTIMIZER = stable_adamw"
+fi
+
+if [[ "$SPIKE_SKIP" == true ]]; then
+  # Skip the optimizer step when the pre-clip grad norm exceeds this multiple of
+  # the recent median (csi_slt.engine.sft.spike_guard); `++` because base.yaml
+  # has no key.
+  CMD_ARGS+=("++engine.training_args.spike_skip_factor=$SPIKE_SKIP_FACTOR")
+  echo "SPIKE_SKIP_FACTOR = $SPIKE_SKIP_FACTOR"
 fi
 
 # Optional longer/shorter run: override only when an epoch count was passed,
