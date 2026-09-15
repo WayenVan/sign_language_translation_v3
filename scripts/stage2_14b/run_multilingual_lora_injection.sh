@@ -13,10 +13,10 @@
 #   DIVERSE_CHECKPOINT_STEP=checkpoint-180000 FIXED_CHECKPOINT_STEP=checkpoint-126000
 #   SPIKE_SKIP=1 LLM_LORA_SPIKE_SKIP_FACTOR=20   # SPIKE_SKIP=0 turns skipping off
 #
-# All runs use StableAdamW (`stable` is always passed to the child launcher).
-# Spike skipping is on by default (`spikeskip`), so outputs land in
-# *-stableadamw-spikeskip<factor> dirs; with SPIKE_SKIP=0 they land in
-# *-stableadamw dirs.
+# Runs use the Trainer's default AdamW. Spike skipping is on by default
+# (`spikeskip` is passed to the child launcher), so outputs land in
+# *-spikeskip<factor> dirs; with SPIKE_SKIP=0 the plain run tag is used, which
+# reuses (and overwrites) the dir of any earlier run with the same settings.
 
 set -euo pipefail
 
@@ -90,7 +90,7 @@ echo "Mode: $MODE"
 echo "Jobs: 2 multilingual runs (diverse prompt, fixed prompt)"
 echo "Languages: de+en+zh joint training"
 echo "LoRA: targets=q_proj,k_proj,v_proj,o_proj; layers=all-40; rank=$RANK; alpha=$ALPHA"
-echo "Training: epochs=$EPOCHS; llm_lr=${LLM_LORA_LR:-1e-4}; optimizer=stable_adamw; spike_skip=$SPIKE_SKIP_DESC; GPUs=2"
+echo "Training: epochs=$EPOCHS; llm_lr=${LLM_LORA_LR:-1e-4}; optimizer=adamw; spike_skip=$SPIKE_SKIP_DESC; GPUs=2"
 echo "Checkpoint steps: diverse=${CHECKPOINT_STEPS[0]}; fixed=${CHECKPOINT_STEPS[1]}"
 echo "Output root: $OUTPUT_ROOT"
 echo "Extra child arguments: ${EXTRA_ARGS:-none}"
@@ -98,10 +98,10 @@ echo "Extra child arguments: ${EXTRA_ARGS:-none}"
 for index in "${!PROMPT_MODES[@]}"; do
   prompt_mode="${PROMPT_MODES[$index]}"
   checkpoint_dir="${RUN_ROOTS[$index]}/${CHECKPOINT_STEPS[$index]}"
-  job_name="slt_14b_llora_multi_${prompt_mode}_r${RANK}a${ALPHA}_stable${SPIKE_SKIP_JOB_SUFFIX}"
+  job_name="slt_14b_llora_multi_${prompt_mode}_r${RANK}a${ALPHA}${SPIKE_SKIP_JOB_SUFFIX}"
   child_args=("$checkpoint_dir" "$RANK" multi "$prompt_mode")
   child_args+=("$EPOCHS")
-  child_args+=(stable "${SPIKE_SKIP_ARGS[@]}")
+  child_args+=("${SPIKE_SKIP_ARGS[@]}")
   child_args+=("${CHILD_EXTRA_ARGS[@]}")
 
   if [[ "$MODE" == sbatch ]]; then
