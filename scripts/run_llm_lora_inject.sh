@@ -8,13 +8,15 @@
 #   sbatch scripts/run_llm_lora_inject.sh <CKPT_DIR> multi diverse         # joint training with diverse train prompts
 #   sbatch scripts/run_llm_lora_inject.sh <CKPT_DIR> 256 multi 20          # epoch-count override
 #   bash   scripts/run_llm_lora_inject.sh <CKPT_DIR> de share debug        # local smoke test
+#   sbatch scripts/run_llm_lora_inject.sh <CKPT_DIR> 768 en stable         # StableAdamW optimizer (torch-optimi)
 #
 # <CKPT_DIR> is required (a stage-1 checkpoint directory) and always comes
 # first. After that, arguments are order-free keywords: de|en|zh|multi,
-# fixed|diverse, debug, share, plus one bare positive integer for the LoRA
+# fixed|diverse, debug, share, stable, plus one bare positive integer for the LoRA
 # rank and a second one for the epoch count -- the first bare int seen is the
 # rank, the second is the epoch override. `diverse` is accepted only together
 # with `multi` -- see the prompt note below.
+# Environment: LLM_LORA_OUTPUT_ROOT overrides the parent output directory.
 # Help: scripts/run_llm_lora_inject.sh --help
 #
 # Formal LLM-LoRA injection launcher: continues LoRA training from any
@@ -126,6 +128,7 @@ RANK=
 EPOCHS_OVERRIDE=
 DEBUG=false
 SHARED_DATASET=false
+STABLE_ADAMW=false
 for arg in "$@"; do
   case "$arg" in
   de | en | zh)
@@ -137,6 +140,7 @@ for arg in "$@"; do
   diverse | diverse_train) PROMPT_CONFIG=diverse_train ;;
   debug) DEBUG=true ;;
   share) SHARED_DATASET=true ;;
+  stable | stable_adamw) STABLE_ADAMW=true ;;
   [0-9]*)
     if [[ ! "$arg" =~ ^[0-9]+$ ]] || ((10#$arg < 1)); then
       echo "numeric arguments must be positive integers, got: $arg" >&2
@@ -153,7 +157,7 @@ for arg in "$@"; do
     fi
     ;;
   *)
-    echo "Unknown argument: $arg (supported: de, en, zh, multi, fixed, diverse, debug, share, <rank>, <epochs>)" >&2
+    echo "Unknown argument: $arg (supported: de, en, zh, multi, fixed, diverse, debug, share, stable, <rank>, <epochs>)" >&2
     exit 2
     ;;
   esac
@@ -259,7 +263,14 @@ CKPT_HASH="$(echo -n "$CKPT_RUN_NAME" | md5sum | cut -c1-8)"
 # "checkpoint", no need to say it twice.
 CKPT_STEP_NUM="${CKPT_STEP#checkpoint-}"
 
-RUN_TAG="llmlora-${CKPT_TAG}-${LANG_TAG}-qkvo-r${RANK}a${ALPHA}${EP_SUFFIX}${PROMPT_SUFFIX}"
+# StableAdamW changes the optimizer, so it gets its own output dir / wandb tag
+# instead of overwriting the AdamW run with the same checkpoint and rank.
+OPTIM_SUFFIX=""
+if [[ "$STABLE_ADAMW" == true ]]; then
+  OPTIM_SUFFIX="-stableadamw"
+fi
+
+RUN_TAG="llmlora-${CKPT_TAG}-${LANG_TAG}-qkvo-r${RANK}a${ALPHA}${EP_SUFFIX}${PROMPT_SUFFIX}${OPTIM_SUFFIX}"
 
 if [[ "$DEBUG" == true ]]; then
   echo "Debug mode: Disabling reporting to WandB, outputs go to outputs/debug."
@@ -270,9 +281,10 @@ else
   # Every tag here must stay under WandB's 64-character-per-tag limit, so this
   # carries short pieces only; RUN_TAG/OUTPUT_DIR (unbounded) is the full
   # record and shows up in the run's config instead.
-  export WANDB_TAGS="llm-lora,targets-qkvo,language-${LANG_TAG},${PROMPT_TAG}-prompt,rank${RANK},lr${LEARNING_RATE},ckpt-${CKPT_HASH}-${CKPT_STEP_NUM}"
+  export WANDB_TAGS="llm-lora,targets-qkvo,language-${LANG_TAG},${PROMPT_TAG}-prompt,rank${RANK},lr${LEARNING_RATE},ckpt-${CKPT_HASH}-${CKPT_STEP_NUM}${OPTIM_SUFFIX:+,optim-stable-adamw}"
   REPORT_TO=wandb
-  OUTPUT_DIR="outputs/${RUN_TAG}"
+  OUTPUT_ROOT="${LLM_LORA_OUTPUT_ROOT:-outputs}"
+  OUTPUT_DIR="${OUTPUT_ROOT%/}/${RUN_TAG}"
 fi
 
 if [[ -t 2 ]]; then
@@ -331,6 +343,12 @@ CMD_ARGS=(
 # three targets -- so this override belongs to the single-language recipe only.
 if [[ "$MULTILANG" != true ]]; then
   CMD_ARGS+=(data.language="$TARGET_LANGUAGE")
+fi
+
+if [[ "$STABLE_ADAMW" == true ]]; then
+  # Per-tensor update clipping (Wortsman et al. 2023); `++` because base.yaml has no optim key.
+  CMD_ARGS+=("++engine.training_args.optim=stable_adamw")
+  echo "OPTIMIZER = stable_adamw"
 fi
 
 # Optional longer/shorter run: override only when an epoch count was passed,
