@@ -1,0 +1,65 @@
+load_from_checkpoint: false
+checkpoint_dir: null
+
+# Qwen3-14B + C-RADIOv4-H counterpart of the 14B + C-RADIOv4-SO400M
+# (C-RADIO-L) 31M config. Keep the adapter structure, ranks, gates and
+# regularization; adjust only backbone-dependent feature widths and scorer.
+
+config:
+  # Qwen3-14B embedding width; must match adapter output_dim.
+  hidden_size: 5120
+  video_soft_token_id: 151656
+
+  # One visual token per two frames; match the data processor in the recipe.
+  video_token_scale: 0.5
+  video_bidirectional_attention: false
+  visual_position_embedding_type: none
+
+  ctc_enabled: true
+  ctc_loss_weight: 1.0
+  ctc_vocab_size: 2417
+  ctc_blank_id: 2
+
+  llm_model_name_or_path: Qwen/Qwen3-14B
+
+  visual_backbone_type: c_radio_v4
+  visual_backbone_config:
+    id: nvidia/C-RADIOv4-H
+    # Must match the layer used to fit the H-specific hand scorer below.
+    output_layer: -9
+
+  visual_adapter_type: spatiotemporal_next_frame_hand_roi_cls
+  visual_adapter_kwargs:
+    input_dim: 1280
+    output_dim: 5120
+    cls_input_dim: 2560
+    temporal_scale_factor: 2
+
+    # Next-frame patch fusion, unchanged from the 14B + L reference.
+    patch_grid_size: null
+    patch_fusion_hidden_dim: 1024
+    patch_fusion_temperature: 0.1
+    patch_fusion_matching_top_k: 1
+    patch_fusion_window_radius: 3
+    patch_fusion_gate_init: 1.0
+
+    # H scorer fitted at output_layer=-9; do not reuse the L scorer.
+    scorer_path: outputs/hand_patch_scorer_cradio-h_L9
+    top_k: 24
+    freeze_scorer: true
+
+    fusion_mode: gated
+    gate_init: -2.0
+    cls_gate_init: -2.0
+
+    # Keep the reference bottleneck widths. The larger backbone features
+    # bring the adapter to approximately 32M trainable parameters.
+    projection_rank: 2349
+    roi_projection_rank: 1265
+    cls_projection_rank: 620
+    use_layer_norm: true
+
+    spatial_dropout: 0.0
+    projection_dropout: 0.5
+    roi_projection_dropout: 0.5
+    cls_projection_dropout: 0.5

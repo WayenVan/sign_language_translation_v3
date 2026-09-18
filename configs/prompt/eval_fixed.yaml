@@ -1,0 +1,29 @@
+# Checkpoint evaluation: one explicitly chosen prompt per target language.
+#
+# Test-only on purpose. fixed_prompt.yaml / diverse_train.yaml describe a
+# *training* condition and share one resolver across train/val/test through a
+# YAML anchor, so overriding `prompt.test.*` there is ambiguous. Evaluation
+# never builds a train or val resolver (evaluate.py asks for ("test",) only),
+# and every eval suite differs from its neighbours in exactly two values --
+# the prompt bank and the three prompt IDs -- so both are meant to be
+# overridden from the launcher:
+#
+#   prompt=eval_fixed                                     # canonical prompts
+#   prompt.test.sampler.prompt_paths=prompts/generic/heldout.jsonl \
+#   prompt.test.prompt_ids.de=heldout_en_de_001 \
+#   prompt.test.prompt_ids.en=heldout_en_en_001 \
+#   prompt.test.prompt_ids.zh=heldout_en_zh_001
+#
+# scripts/eval/ drives this; csi_slt.commands.list_prompt_variants enumerates
+# the ID triples so one run always keeps every language on the same variant.
+
+test:
+  _target_: csi_slt.engine.prompt_resolver.FixedPromptResolver
+  sampler:
+    _target_: csi_slt.engine.prompt_sampler.PromptSampler
+    prompt_paths: prompts/generic/train.jsonl
+  prompt_ids:
+    de: canonical_en_de_001
+    en: canonical_en_en_001
+    zh: canonical_en_zh_001
+  target_lang_column: lang

@@ -461,3 +461,39 @@ def test_always_frozen_is_an_instance_marker_so_it_can_be_turned_off():
         parameter.requires_grad
         for parameter in model.visual_adapter.constant.parameters()
     )
+
+
+def test_cast_module_dtype_leaves_non_persistent_buffers_alone():
+    class _WithBuffers(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(2))
+            self.register_buffer("saved", torch.ones(2))
+            self.register_buffer("derived", torch.ones(2), persistent=False)
+            self.register_buffer("index", torch.arange(2))
+
+    module = _WithBuffers()
+
+    cast_module_dtype(module, "bfloat16")
+
+    assert module.weight.dtype == torch.bfloat16
+    assert module.saved.dtype == torch.bfloat16
+    # Recomputed values such as a rotary embedding's inv_freq keep the
+    # precision they were computed with; no checkpoint stores them.
+    assert module.derived.dtype == torch.float32
+    assert module.index.dtype == torch.int64
+
+
+def test_cast_module_dtype_keeps_parameter_identity_and_tying():
+    first = nn.Linear(3, 3)
+    second = nn.Linear(3, 3)
+    second.weight = first.weight
+    module = nn.Sequential(first, second)
+    parameter = first.weight
+
+    cast_module_dtype(module, "bfloat16")
+
+    assert first.weight is parameter
+    assert second.weight is first.weight
+    assert parameter.dtype == torch.bfloat16
+    assert parameter.requires_grad

@@ -21,7 +21,15 @@ model:
   checkpoint_dir: ???
 
 engine:
-  model_dtype: auto
+  # checkpoint: load at torch's default dtype, then cast every tensor back to
+  # the dtype the checkpoint actually stores -- a bf16 LLM next to an fp32
+  # visual tower for the v5.0 stage-2 runs, i.e. what training ran with.
+  # `auto` follows config.json's `dtype` field, but that field records the
+  # config object at save time and not the weights (train.py casts the LLM to
+  # bf16 after loading), so it upcasts a bf16 LLM to fp32: double the memory,
+  # no added precision. Explicit dtypes (float32, bfloat16, ...) still cast the
+  # whole model. See csi_slt/utils/checkpoint_dtypes.py.
+  model_dtype: checkpoint
   training_args:
     do_train: false
     do_eval: false

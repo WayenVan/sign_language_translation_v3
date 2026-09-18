@@ -48,6 +48,9 @@ class SltTrainingArguments(Seq2SeqTrainingArguments):
             "help": "Maximum size of each model-weight shard written by checkpoints."
         },
     )
+    # NOTE: Spike skipping is switched off (factor None) and no launcher enables
+    # it by default. In the 14B stage-2 LoRA runs it did not prevent the model
+    # from degrading, and it made the recovery afterwards slower.
     spike_skip_factor: float | None = field(
         default=None,
         metadata={

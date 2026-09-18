@@ -1,5 +1,9 @@
 import torch
 from torch import nn
+from transformers import logging
+
+
+logger = logging.get_logger(__name__)
 
 
 def packed_temporal_windows(
@@ -207,13 +211,81 @@ def mark_module_tree_as_initialized(module: nn.Module) -> None:
     checkpoint loading. ``PreTrainedModel.post_init`` respects the
     ``_is_hf_initialized`` marker and leaves the complete module tree
     unchanged when it is later attached to an outer model.
+
+    A module holding *only* non-persistent buffers is deliberately left
+    unmarked. Such buffers are absent from every checkpoint, so
+    ``from_pretrained`` re-allocates them with ``torch.empty_like`` and relies
+    on ``_initialize_weights`` to recompute their values -- that is how a
+    ``RotaryEmbedding`` gets its ``inv_freq`` back. ``_initialize_weights``
+    returns immediately for a module already marked as initialized, so marking
+    one leaves uninitialized memory in place. When the LLM's LoRA is injected
+    from ``SltModel.__init__`` (any checkpoint with ``llm_lora=True``), that
+    happens *before* weight loading, and marking the whole LLM tree left
+    ``inv_freq`` holding values around 1e17: RoPE became noise and generation
+    collapsed into repeated fragments while every loaded weight looked perfect
+    (BLEU-4 0.016 instead of 0.263).
+
+    The skip is deliberately narrow. A module owning parameters or persistent
+    buffers keeps its marker, because losing it would expose those tensors to
+    re-initialization -- exactly what this function exists to prevent. Their
+    non-persistent buffers stay uninitialized here, which is the behaviour
+    those modules already relied on: this project's are private caches
+    (``_patch_positions``, ``_neighbourhood_mask``, ...) rebuilt on the first
+    forward pass.
     """
     if not isinstance(module, nn.Module):
         raise TypeError(f"module must be an nn.Module, got {type(module).__name__}")
 
     for submodule in module.modules():
+        owns_only_transient_buffers = (
+            submodule._non_persistent_buffers_set
+            and not any(True for _ in submodule.parameters(recurse=False))
+            and not set(submodule._buffers).difference(
+                submodule._non_persistent_buffers_set
+            )
+        )
+        if owns_only_transient_buffers:
+            continue
         submodule._is_hf_initialized = True
 
+
+
+def mark_adapter_modules_as_initialized(module: nn.Module) -> int:
+    """Mark only the submodules a PEFT injection created, and nothing else.
+
+    ``inject_adapter_in_model`` replaces every target layer with a tuner layer
+    that owns freshly initialized adapter weights -- for LoRA, ``lora_A``
+    kaiming-uniform and ``lora_B`` zeros. Those are the tensors that must
+    survive ``PreTrainedModel.post_init``, so they are what gets marked. The
+    tuner layer's ``base_layer`` and the rest of the tree keep whatever state
+    they already had: a caller that supplied an already-loaded module has
+    marked it itself, a checkpoint load marks every tensor it fills, and
+    non-persistent buffers stay unmarked so ``from_pretrained`` can recompute
+    them (see :func:`mark_module_tree_as_initialized`).
+
+    Marking the whole enclosing tree instead -- what this replaced -- also
+    silenced that recomputation: the LLM's ``RotaryEmbedding`` kept an
+    uninitialized ``inv_freq`` and every LoRA checkpoint decoded into repeated
+    fragments. Returns the number of modules marked.
+    """
+    if not isinstance(module, nn.Module):
+        raise TypeError(f"module must be an nn.Module, got {type(module).__name__}")
+
+    marked = 0
+    for submodule in module.modules():
+        adapter_layer_names = getattr(submodule, "adapter_layer_names", None)
+        if not adapter_layer_names:
+            continue
+        submodule._is_hf_initialized = True
+        marked += 1
+        for attribute in adapter_layer_names:
+            adapter_container = getattr(submodule, attribute, None)
+            if not isinstance(adapter_container, nn.Module):
+                continue
+            for adapter_module in adapter_container.modules():
+                adapter_module._is_hf_initialized = True
+                marked += 1
+    return marked
 
 def random_derangement(video_lengths, device=None):
     """Derange frames independently within every packed video.
@@ -314,3 +386,34 @@ if __name__ == "__main__":
     video_lengths = [5, 3, 4]
     permutations = random_derangement(video_lengths)
     print(permutations)
+
+
+def validate_rope_buffers(model: nn.Module) -> int:
+    """Fail loudly when a rotary embedding holds uninitialized frequencies.
+
+    ``inv_freq`` is ``1 / base ** (arange(0, dim, 2) / dim)``, so every entry
+    lies in ``(0, 1]``. Values outside that range mean the buffer was never
+    recomputed after ``from_pretrained`` re-allocated it (see
+    :func:`mark_module_tree_as_initialized`). Left unchecked this costs no
+    error and all of the quality: a 14B checkpoint scored BLEU-4 0.016 instead
+    of 0.263 with every weight loaded correctly. Returns the number of rotary
+    modules checked.
+    """
+    checked = 0
+    for name, submodule in model.named_modules():
+        inv_freq = getattr(submodule, "inv_freq", None)
+        if not isinstance(inv_freq, torch.Tensor):
+            continue
+        checked += 1
+        values = inv_freq.detach().float()
+        if not torch.isfinite(values).all() or not (
+            (values > 0).all() and (values <= 1).all()
+        ):
+            raise RuntimeError(
+                f"{name or type(submodule).__name__}.inv_freq holds values outside "
+                f"(0, 1] (min={values.min().item():.6g}, "
+                f"max={values.max().item():.6g}); the rotary buffer was not "
+                "recomputed after loading, so RoPE is noise. See "
+                "csi_slt.modeling_slt.misc.mark_module_tree_as_initialized."
+            )
+    return checked

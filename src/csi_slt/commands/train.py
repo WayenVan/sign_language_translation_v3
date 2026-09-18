@@ -36,7 +36,17 @@ set_seed(42)
 
 
 def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None:
-    """Cast one loaded checkpoint component, treating ``auto`` as no-op."""
+    """Cast one loaded checkpoint component, treating ``auto`` as no-op.
+
+    Parameters and persistent buffers are cast; non-persistent buffers are
+    left alone. Those are derived values that a module computes for itself and
+    that no checkpoint stores -- a rotary embedding's ``inv_freq`` is computed
+    in fp32 on purpose, and ``Module.to(dtype=...)`` used to round it to bf16
+    here, degrading every position's phase for no benefit. Standalone
+    evaluation recomputes them in fp32 (they are absent from the checkpoint),
+    so leaving them untouched also keeps training and evaluation on the same
+    values instead of a hair apart.
+    """
     if dtype == "auto":
         return
     if isinstance(dtype, str):
@@ -48,7 +58,22 @@ def cast_module_dtype(module: torch.nn.Module, dtype: str | torch.dtype) -> None
         raise TypeError("dtype must be a torch.dtype or dtype name")
     if not (dtype.is_floating_point or dtype.is_complex):
         raise ValueError(f"dtype must be floating point or complex, got {dtype}")
-    module.to(dtype=dtype)
+
+    for submodule in module.modules():
+        for parameter in submodule._parameters.values():
+            if parameter is None or not parameter.is_floating_point():
+                continue
+            # Assigning ``.data`` keeps the Parameter object, so requires_grad,
+            # weight tying and any optimizer reference survive the cast.
+            parameter.data = parameter.data.to(dtype)
+            if parameter.grad is not None:
+                parameter.grad = parameter.grad.to(dtype)
+        for name, buffer in submodule._buffers.items():
+            if buffer is None or not buffer.is_floating_point():
+                continue
+            if name in submodule._non_persistent_buffers_set:
+                continue
+            submodule._buffers[name] = buffer.to(dtype)
 
 
 def initialize_model(

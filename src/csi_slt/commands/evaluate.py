@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import hydra
 from accelerate import Accelerator
@@ -15,7 +16,9 @@ from csi_slt.commands.config import (
 from csi_slt.engine.sft.metrics import SLTMetric
 from csi_slt.engine.sft.trainer import SltTrainer, apply_fsdp2_autocast
 from csi_slt.engine.sft.training_args import SltTrainingArguments
+from csi_slt.modeling_slt.misc import validate_rope_buffers
 from csi_slt.modeling_slt.slt import SltModel
+from csi_slt.utils.checkpoint_dtypes import restore_checkpoint_dtypes
 from csi_slt.utils.generation_config import merge_generation_config
 
 
@@ -59,10 +62,24 @@ def main(cfg: DictConfig) -> None:
     # materializes the weights instead of every rank holding a full copy.
     Accelerator()
 
-    slt_model = SltModel.from_pretrained(
-        cfg.model.checkpoint_dir,
-        dtype=cfg.engine.model_dtype,
-    )
+    # ``checkpoint`` loads at torch's default dtype and then puts every tensor
+    # back to the dtype the checkpoint stores, which is also the dtype layout
+    # training ran with. ``csi_slt.utils.checkpoint_dtypes`` explains why
+    # ``auto`` cannot be trusted for that; any explicit dtype still casts the
+    # whole model.
+    if cfg.engine.model_dtype == "checkpoint":
+        slt_model = SltModel.from_pretrained(cfg.model.checkpoint_dir)
+        restore_checkpoint_dtypes(slt_model, cfg.model.checkpoint_dir)
+    else:
+        slt_model = SltModel.from_pretrained(
+            cfg.model.checkpoint_dir,
+            dtype=cfg.engine.model_dtype,
+        )
+
+    # A rotary buffer that was never recomputed costs no error and all of the
+    # quality, so it is checked before anything expensive runs.
+    validate_rope_buffers(slt_model)
+
     tokenizer = AutoTokenizer.from_pretrained(
         slt_model.config.llm_model_name_or_path,
         config=slt_model.config.llm_config,
@@ -112,6 +129,16 @@ def main(cfg: DictConfig) -> None:
     trainer.log_metrics("test", predictions.metrics)
     trainer.save_metrics("test", predictions.metrics)
     trainer.save_predictions(predictions)
+
+    # Record what was actually evaluated. ``SaveHydraConfigCallback`` only
+    # fires ``on_save``, so a predict-only run would otherwise leave no trace
+    # of its checkpoint, prompt IDs, or generation settings next to its
+    # predictions -- and a prompt suite is exactly one output directory per
+    # prompt variant. ``csi_slt.commands.summarize_prompt_suite`` reads this.
+    if trainer.is_world_process_zero():
+        output_dir = Path(training_args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        OmegaConf.save(cfg, output_dir / "eval_config.yaml")
 
 
 if __name__ == "__main__":

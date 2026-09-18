@@ -35,6 +35,7 @@ from .output_utils import (
     VisualBackboneOutput,
 )
 from .misc import (
+    mark_adapter_modules_as_initialized,
     mark_module_tree_as_initialized,
     packed_to_padded,
 )
@@ -520,7 +521,10 @@ class SltModel(PreTrainedModel, GenerationMixin):
                 "visual_encoder and cannot use visual LoRA"
             )
         inject_adapter_in_model(peft_config=peft_config, model=visual_encoder)
-        mark_module_tree_as_initialized(visual_encoder)
+        # Only PEFT's own new weights need protecting from post_init; marking
+        # the encoder tree would also suppress recomputation of anything
+        # `from_pretrained` leaves to `_initialize_weights`.
+        mark_adapter_modules_as_initialized(visual_encoder)
 
     def _inject_llm_lora(self, peft_config: LoraConfig) -> None:
         """Inject LoRA into the native LLM without wrapping its top level."""
@@ -530,10 +534,11 @@ class SltModel(PreTrainedModel, GenerationMixin):
         )
         if injected_llm is not self.llm:
             raise RuntimeError("PEFT replaced the native LLM during in-place injection")
-        # PEFT initializes the new adapter parameters. Protect them from the
-        # outer SltModel.post_init(), which runs after checkpoint topology has
-        # been reconstructed.
-        mark_module_tree_as_initialized(self.llm)
+        # PEFT initializes the new adapter parameters. Protect exactly those
+        # from the outer SltModel.post_init(); the surrounding LLM tree must
+        # stay unmarked so `from_pretrained` still recomputes the buffers it
+        # cannot load, starting with the rotary embedding's `inv_freq`.
+        mark_adapter_modules_as_initialized(self.llm)
 
     def inject_llm_lora(
         self,
