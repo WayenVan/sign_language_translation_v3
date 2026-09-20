@@ -216,9 +216,25 @@ run_prompt_suite() {
     --languages "$summarizer_languages")
   if [[ "$diagnostic" == true ]]; then
     summarize_command+=(--diagnostic)
-    if [[ "${EVAL_LANGUAGE_DISTRIBUTION:-1}" == "1" ]]; then
-      summarize_command+=(--language-distribution)
-    fi
+  fi
+
+  # The output-language distribution is the confusion matrix behind lacc, and is
+  # independent of whether the suite's BLEU means anything: a diagnostic suite
+  # wants it because lacc is its only real metric, and the counterfactual suites
+  # want it alongside a BLEU that does count. Hence the default follows
+  # $diagnostic and EVAL_LANGUAGE_DISTRIBUTION overrides it either way.
+  local want_distribution="$diagnostic"
+  case "${EVAL_LANGUAGE_DISTRIBUTION:-}" in
+  1 | true) want_distribution=true ;;
+  0 | false) want_distribution=false ;;
+  "") ;;
+  *)
+    echo "EVAL_LANGUAGE_DISTRIBUTION must be 0 or 1, got '${EVAL_LANGUAGE_DISTRIBUTION}'" >&2
+    exit 2
+    ;;
+  esac
+  if [[ "$want_distribution" == true ]]; then
+    summarize_command+=(--language-distribution)
   fi
 
   if [[ "$dry_run" == true ]]; then
