@@ -1,7 +1,7 @@
 #! /bin/bash
 #
 # Usage:
-#   bash scripts/eval/run_eval_unseen_prompt.sh <CKPT_DIR>          # 4 variants
+#   bash scripts/eval/run_eval_unseen_prompt.sh <CKPT_DIR>          # 8 variants
 #   bash scripts/eval/run_eval_unseen_prompt.sh <CKPT_DIR> share    # in-repo dataset
 #   bash scripts/eval/run_eval_unseen_prompt.sh <CKPT_DIR> dry-run  # preview only
 #
@@ -18,7 +18,7 @@
 # unseen-instruction measurement and must not be used to pick checkpoints or
 # hyperparameters (refine-logs/PROMPT_PROTOCOL.md).
 #
-#   outputs/eval/<run>/<step>/unseen/heldout_001..heldout_004/
+#   outputs/eval/<run>/<step>/unseen/heldout_001..heldout_008/
 
 set -euo pipefail
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib_prompt_suite.sh"

@@ -39,7 +39,7 @@ predict，同一次 run 里三种语言用同一个 instruction 变体（这样
 bash scripts/eval/run_eval_fixed_prompt.sh     <CKPT>        # multi，canonical_001
 bash scripts/eval/run_eval_fixed_prompt.sh     <CKPT> de     # 单语言（只有这个 suite 支持）
 bash scripts/eval/run_eval_diverse_prompt.sh   <CKPT>        # 8 轮：canonical_001 + diverse_001..007
-bash scripts/eval/run_eval_unseen_prompt.sh    <CKPT>        # 4 轮：heldout_001..004
+bash scripts/eval/run_eval_unseen_prompt.sh    <CKPT>        # 8 轮：heldout_001..008
 bash scripts/eval/run_eval_wrong_task_prompt.sh <CKPT>       # 1 轮，diagnostic
 bash scripts/eval/run_eval_unrelated_prompt.sh  <CKPT>       # 1 轮，diagnostic
 bash scripts/eval/run_eval_cf_first_prompt.sh   <CKPT>       # 2 轮：cf_first_001..002
@@ -87,7 +87,7 @@ python -m csi_slt.commands.summarize_prompt_suite outputs/eval/<run>/<step>/wron
 outputs/eval/<ckpt_run_name>/<checkpoint-step>/
   fixed/<multi|de|en|zh>/canonical_001/
   diverse/{canonical_001, diverse_001 … diverse_007}/
-  unseen/{heldout_001 … heldout_004}/
+  unseen/{heldout_001 … heldout_008}/
   wrong_task/wrong_task_001/
   unrelated/unrelated_001/
   cf_first/{cf_first_001, cf_first_002}/

@@ -106,7 +106,7 @@ def test_real_prompt_banks_load():
     unrelated = PromptSampler("prompts/generic/unrelated.jsonl")
 
     assert len(train.records) == 24
-    assert len(heldout.records) == 12
+    assert len(heldout.records) == 24
     assert len(wrong_task.records) == 3
     assert len(unrelated.records) == 3
     assert train.by_id("canonical_en_de_001", target_lang="de")

@@ -17,7 +17,7 @@
 # （SWEEP_OUTPUT_ROOT 下有 <run>/<checkpoint-step>/diverse/summary.json 的），补跑剩下的
 # 三个 suite：
 #
-#   unseen      heldout_001..004（4 个变体）
+#   unseen      heldout_001..008（8 个变体）
 #   wrong_task  wrong_task_001（1 个，diagnostic）
 #   unrelated   unrelated_001（1 个，diagnostic）
 #
@@ -56,7 +56,7 @@ declare -A SUITE_SCRIPTS=(
   [wrong_task]=run_eval_wrong_task_prompt.sh
   [unrelated]=run_eval_unrelated_prompt.sh
 )
-declare -A SUITE_VARIANTS=([unseen]=4 [wrong_task]=1 [unrelated]=1)
+declare -A SUITE_VARIANTS=([unseen]=8 [wrong_task]=1 [unrelated]=1)
 
 total_variants=0
 for suite in "${SUITES[@]}"; do

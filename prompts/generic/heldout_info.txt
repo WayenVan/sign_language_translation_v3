@@ -1,0 +1,26 @@
+┌──────┬────────────────────┬────────────────────────────────────────────┐
+│ 变体 │        类别        │                   起手句                   │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 001  │ Direct imperative  │ For the signed sequence shown below,       │
+│      │                    │ return its meaning in X.                   │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 002  │ Direct imperative  │ Interpret the signer's utterance and       │
+│      │                    │ convey it in X.                            │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 003  │ Polite/question    │ What message is being signed? Respond      │
+│      │                    │ using X only.                              │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 004  │ Polite/question    │ Could you please tell me what the person   │
+│      │                    │ below is signing?                          │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 005  │ Explicit target    │ Task: sign language translation. / Target  │
+│      │                    │ language: X.                               │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 006  │ Explicit target    │ Output language: X.                        │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 007  │ Constraint/context │ The person reading your reply understands  │
+│      │                    │ X and no other language.                   │
+├──────┼────────────────────┼────────────────────────────────────────────┤
+│ 008  │ Constraint/context │ Subtitle the following clip … must be      │
+│      │                    │ written entirely in X.                     │
+└──────┴────────────────────┴────────────────────────────────────────────┘
