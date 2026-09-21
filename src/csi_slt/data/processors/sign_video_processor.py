@@ -10,7 +10,7 @@ import torch
 from torchvision import tv_tensors
 from torchvision.transforms import v2
 
-from csi_slt.data.processors.video_transforms import RandomVideoSpeed
+from csi_slt.data.processors.video_transforms import BottomCenterCrop, RandomVideoSpeed
 
 
 class SignVideoKwargs(VideosKwargs, total=False):
@@ -23,6 +23,7 @@ class SignVideoKwargs(VideosKwargs, total=False):
     do_random_resize: bool
     do_random_erasing: bool
     do_random_gaussian_blur: bool
+    eval_crop_bottom_aligned: bool
 
 
 class SignVideoProcessor(BaseVideoProcessor):
@@ -42,6 +43,7 @@ class SignVideoProcessor(BaseVideoProcessor):
     do_random_resize = True
     do_random_erasing = True
     do_random_gaussian_blur = False
+    eval_crop_bottom_aligned = False  # True: eval crop hugs the bottom edge
     input_data_format = "channels_last"
     size = {"height": 224, "width": 224}
 
@@ -104,8 +106,11 @@ class SignVideoProcessor(BaseVideoProcessor):
 
     @staticmethod
     def build_predict_transform(kwargs: dict[str, Any]):
+        crop = (kwargs["crop_size"].height, kwargs["crop_size"].width)
         transforms = [
-            v2.CenterCrop((kwargs["crop_size"].height, kwargs["crop_size"].width)),
+            BottomCenterCrop(crop)
+            if kwargs["eval_crop_bottom_aligned"]
+            else v2.CenterCrop(crop),
             v2.Resize((kwargs["size"].height, kwargs["size"].width))
             if kwargs["do_resize"]
             else v2.Identity(),

@@ -155,3 +155,58 @@ class RandomVideoSpeed(v2.Transform):
             output = tv_tensors.wrap(output, like=inpt)
 
         return output
+
+
+class BottomCenterCrop(v2.Transform):
+    """
+    底边对齐、水平居中的确定性裁剪。
+
+    手语者的手会从画面底边出去，而不是顶边：居中裁剪会切掉底部
+    最常打手语的区域，却保留头顶上方的空墙。这个裁剪把损失挪到顶部。
+
+    输入比裁剪尺寸小时直接报错，而不像 CenterCrop 那样补边：
+    从底边往上补边没有合理的语义。
+
+    Args:
+        size:
+            输出尺寸 (height, width)。
+
+    Example:
+        BottomCenterCrop((224, 224))
+    """
+
+    _transformed_types = (
+        tv_tensors.Video,
+        _is_pure_tensor,
+    )
+
+    def __init__(self, size: Sequence[int]) -> None:
+        super().__init__()
+
+        if len(size) != 2:
+            raise ValueError(
+                f"`size` must contain exactly two values, but got {size}."
+            )
+
+        self.height, self.width = int(size[0]), int(size[1])
+
+    def transform(
+        self,
+        inpt: torch.Tensor,
+        params: dict[str, Any],
+    ) -> torch.Tensor:
+        in_height, in_width = inpt.shape[-2:]
+        if in_height < self.height or in_width < self.width:
+            raise ValueError(
+                f"Crop {self.height}x{self.width} is larger than the input "
+                f"{in_height}x{in_width}."
+            )
+
+        # functional.crop 会保留 tv_tensors.Video 类型。
+        return v2.functional.crop(
+            inpt,
+            top=in_height - self.height,
+            left=(in_width - self.width) // 2,
+            height=self.height,
+            width=self.width,
+        )
