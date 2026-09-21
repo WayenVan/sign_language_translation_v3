@@ -4,7 +4,7 @@ A prompt suite is one directory holding one subdirectory per prompt variant,
 each written by ``csi_slt.commands.evaluate``::
 
     outputs/eval/<run>/<checkpoint-step>/diverse/
-        variants.tsv                 # what scripts/eval asked to run
+        variants.tsv                 # what scripts/ph14t/eval asked to run
         canonical_001/predictions_metrics.json
         diverse_001/predictions_metrics.json
         ...

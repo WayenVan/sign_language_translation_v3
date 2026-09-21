@@ -166,7 +166,7 @@ def build_backbone(scorer_config, device: torch.device):
         raise ValueError(
             f"the scorer at {SCORER_PATH} records no backbone provenance, so the "
             "features it must be scored on are unknown; re-fit it with "
-            "preprocess/extract_scorer_features.py + preprocess/train_scorer.py"
+            "preprocess/ph14t/extract_scorer_features.py + preprocess/ph14t/train_scorer.py"
         )
     module_name, _, class_name = scorer_config.visual_backbone_class.rpartition(".")
     backbone_class = getattr(importlib.import_module(module_name), class_name)
@@ -186,7 +186,7 @@ def build_backbone(scorer_config, device: torch.device):
 def extract_patch_features(backbone, frames: torch.Tensor, device, dtype) -> torch.Tensor:
     """Raw patch features for every frame: ``[F, P, D]`` float32 on the CPU.
 
-    Called exactly as ``preprocess/extract_scorer_features.py`` calls it -- one
+    Called exactly as ``preprocess/ph14t/extract_scorer_features.py`` calls it -- one
     frame-independent pass, no ``t_lengths`` -- because the scorer's coefficients
     are calibrated to the features that script produced.
     """

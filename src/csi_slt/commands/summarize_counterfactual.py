@@ -1,6 +1,6 @@
 """Aggregate the counterfactual instruction-switching suites of one checkpoint.
 
-The two suites written by ``scripts/eval/run_eval_cf_{first,last}_prompt.sh``
+The two suites written by ``scripts/ph14t/eval/run_eval_cf_{first,last}_prompt.sh``
 hold 12 conditions per video -- 2 templates x 3 unordered language pairs x 2
 target directions -- laid out as two prompt variants per suite::
 
@@ -320,7 +320,7 @@ def collect_conditions(
         if not suite_dir.is_dir():
             raise FileNotFoundError(
                 f"suite directory not found: {suite_dir}; run "
-                f"scripts/eval/run_eval_{suite}_prompt.sh first"
+                f"scripts/ph14t/eval/run_eval_{suite}_prompt.sh first"
             )
         variants_file = suite_dir / "variants.tsv"
         if not variants_file.is_file():

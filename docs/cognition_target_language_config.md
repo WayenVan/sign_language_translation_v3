@@ -1,6 +1,6 @@
 # Target-language 训练配置结构
 
-入口：`scripts/run_cognition_target_language.sh`，通过 `accelerate launch -m csi_slt.commands.train` 启动，默认目标语言为 `en`，支持 `de/en/zh`、`debug`、`share`。
+入口：`scripts/ph14t/run_cognition_target_language.sh`，通过 `accelerate launch -m csi_slt.commands.train` 启动，默认目标语言为 `en`，支持 `de/en/zh`、`debug`、`share`。
 
 ## 组合顺序
 
@@ -45,7 +45,7 @@ Hydra defaults 中的 `_self_` 表示当前文件内容在其 defaults 后合并
 ## 新增的 32B 运行入口
 
 - 模型：`configs/model/qwen3-32b-cradio-l-spatiotemporal-next-frame-handroi-cls-31m.yaml`。与 14B 配置的有效字段仅模型 ID 不同。
-- 脚本：`scripts/run_cognition_scale_max.sh`。默认通过 best_adapter_multilang 使用 de/en/zh 联合训练及 diverse_train prompt（验证/测试使用 canonical prompt）；多语言默认 25 epochs、每 12000 steps 评估；单语言默认 80 epochs、每 6000 steps 评估；可传正整数覆盖轮数，保留原优化、正则设置。
+- 脚本：`scripts/ph14t/run_cognition_scale_max.sh`。默认通过 best_adapter_multilang 使用 de/en/zh 联合训练及 diverse_train prompt（验证/测试使用 canonical prompt）；多语言默认 25 epochs、每 12000 steps 评估；单语言默认 80 epochs、每 6000 steps 评估；可传正整数覆盖轮数，保留原优化、正则设置。
 - 资源：两张 H100、256GB CPU RAM、60 小时，显式使用 `configs/accelerate/fsdp2.yaml`；FSDP2 负责 decoder 分片；当前关闭 activation checkpointing 和 forward 后 reshard，以更多显存换取速度。
-- 启动：`sbatch scripts/run_cognition_scale_max.sh share`；不传参数默认多语言 + diverse。可用 `de fixed` 切换单语言固定 prompt，或 `multi fixed` 切换多语言固定 prompt。`debug` 仅关闭 WandB 并更换输出目录，仍会完整训练。
+- 启动：`sbatch scripts/ph14t/run_cognition_scale_max.sh share`；不传参数默认多语言 + diverse。可用 `de fixed` 切换单语言固定 prompt，或 `multi fixed` 切换多语言固定 prompt。`debug` 仅关闭 WandB 并更换输出目录，仍会完整训练。
 - 新输出目录和 WandB 标签包含 32B / scale-max 标识。

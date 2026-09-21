@@ -24,26 +24,26 @@ predict，同一次 run 里三种语言用同一个 instruction 变体（这样
 | `src/csi_slt/utils/checkpoint_dtypes.py` | 读 safetensors 头，把模型每个张量铸回 checkpoint 里存的 dtype（`tests/test_checkpoint_dtypes.py` 7 个用例） |
 | `src/csi_slt/modeling_slt/misc.py` | `mark_adapter_modules_as_initialized()` / `mark_module_tree_as_initialized()` / `validate_rope_buffers()`——见下面的 RoPE bug（`tests/test_module_initialization_marking.py` 7 个用例） |
 | `src/csi_slt/commands/train.py:38` | `cast_module_dtype` 不再铸非持久 buffer |
-| `scripts/eval/run_eval.sh` | worker：本地 `accelerate launch`，回放 ckpt 的 processor 设置，跳过已完成的 run |
-| `scripts/eval/lib_prompt_suite.sh` | 共用 suite 驱动：枚举变体 → 逐个跑 → 写 `variants.tsv` → 汇总 |
-| `scripts/eval/run_eval_{fixed,diverse,unseen,wrong_task,unrelated}_prompt.sh` | 5 个 suite 入口 |
-| `scripts/eval/sweep14b/run_multilang_diverse_sweep.sh` | 两个 14B 多语言 stage-2 run 各取 `eval_overall_macro_bleu4` 最高的 checkpoint 跑 diverse suite，输出到 `outputs/eval/14b-multilang-diverse-eval/` |
+| `scripts/ph14t/eval/run_eval.sh` | worker：本地 `accelerate launch`，回放 ckpt 的 processor 设置，跳过已完成的 run |
+| `scripts/ph14t/eval/lib_prompt_suite.sh` | 共用 suite 驱动：枚举变体 → 逐个跑 → 写 `variants.tsv` → 汇总 |
+| `scripts/ph14t/eval/run_eval_{fixed,diverse,unseen,wrong_task,unrelated}_prompt.sh` | 5 个 suite 入口 |
+| `scripts/ph14t/eval/sweep14b/run_multilang_diverse_sweep.sh` | 两个 14B 多语言 stage-2 run 各取 `eval_overall_macro_bleu4` 最高的 checkpoint 跑 diverse suite，输出到 `outputs/eval/14b-multilang-diverse-eval/` |
 | `prompts/generic/counterfactual_{first,last}.jsonl` | 反事实 bank，各 6 条（family `cf_first` / `cf_last`），held-out，禁止进训练池 |
-| `scripts/eval/run_eval_cf_{first,last}_prompt.sh` | 两个反事实 suite 入口，各 2 个变体 |
+| `scripts/ph14t/eval/run_eval_cf_{first,last}_prompt.sh` | 两个反事实 suite 入口，各 2 个变体 |
 | `src/csi_slt/commands/summarize_counterfactual.py` | 把两个反事实 suite 合成一份报告：逐条件 LAcc、BSA、目标语言混淆矩阵、主表那一行（`tests/test_summarize_counterfactual.py` 19 个用例） |
-| `scripts/eval/sweep{4b,14b}/run_multilang_counterfactual_sweep.sh` | 对 diverse sweep 已完成的每个 checkpoint 跑两个反事实 suite 并汇总 |
+| `scripts/ph14t/eval/sweep{4b,14b}/run_multilang_counterfactual_sweep.sh` | 对 diverse sweep 已完成的每个 checkpoint 跑两个反事实 suite 并汇总 |
 
 ## 用法
 
 ```bash
-bash scripts/eval/run_eval_fixed_prompt.sh     <CKPT>        # multi，canonical_001
-bash scripts/eval/run_eval_fixed_prompt.sh     <CKPT> de     # 单语言（只有这个 suite 支持）
-bash scripts/eval/run_eval_diverse_prompt.sh   <CKPT>        # 8 轮：canonical_001 + diverse_001..007
-bash scripts/eval/run_eval_unseen_prompt.sh    <CKPT>        # 8 轮：heldout_001..008
-bash scripts/eval/run_eval_wrong_task_prompt.sh <CKPT>       # 1 轮，diagnostic
-bash scripts/eval/run_eval_unrelated_prompt.sh  <CKPT>       # 1 轮，diagnostic
-bash scripts/eval/run_eval_cf_first_prompt.sh   <CKPT>       # 2 轮：cf_first_001..002
-bash scripts/eval/run_eval_cf_last_prompt.sh    <CKPT>       # 2 轮：cf_last_001..002
+bash scripts/ph14t/eval/run_eval_fixed_prompt.sh     <CKPT>        # multi，canonical_001
+bash scripts/ph14t/eval/run_eval_fixed_prompt.sh     <CKPT> de     # 单语言（只有这个 suite 支持）
+bash scripts/ph14t/eval/run_eval_diverse_prompt.sh   <CKPT>        # 8 轮：canonical_001 + diverse_001..007
+bash scripts/ph14t/eval/run_eval_unseen_prompt.sh    <CKPT>        # 8 轮：heldout_001..008
+bash scripts/ph14t/eval/run_eval_wrong_task_prompt.sh <CKPT>       # 1 轮，diagnostic
+bash scripts/ph14t/eval/run_eval_unrelated_prompt.sh  <CKPT>       # 1 轮，diagnostic
+bash scripts/ph14t/eval/run_eval_cf_first_prompt.sh   <CKPT>       # 2 轮：cf_first_001..002
+bash scripts/ph14t/eval/run_eval_cf_last_prompt.sh    <CKPT>       # 2 轮：cf_last_001..002
 # 任何一个加 dry-run 只打印命令；share 用仓库内数据集
 # PROMPT_VARIANTS="diverse_003 diverse_005" 跑子集；FORCE=1 重跑；EVAL_NUM_PROCESSES 改 GPU 数
 ```
@@ -53,9 +53,9 @@ bash scripts/eval/run_eval_cf_last_prompt.sh    <CKPT>       # 2 轮：cf_last_0
 2 个 checkpoint × 8 变体 = 16 次评测）：
 
 ```bash
-bash scripts/eval/sweep14b/run_multilang_diverse_sweep.sh                       # 自动选最好的
-CHECKPOINT_STEPS="29280 46848" bash scripts/eval/sweep14b/run_multilang_diverse_sweep.sh  # 手动指定
-ALL_CHECKPOINTS=1 bash scripts/eval/sweep14b/run_multilang_diverse_sweep.sh     # 全部 checkpoint
+bash scripts/ph14t/eval/sweep14b/run_multilang_diverse_sweep.sh                       # 自动选最好的
+CHECKPOINT_STEPS="29280 46848" bash scripts/ph14t/eval/sweep14b/run_multilang_diverse_sweep.sh  # 手动指定
+ALL_CHECKPOINTS=1 bash scripts/ph14t/eval/sweep14b/run_multilang_diverse_sweep.sh     # 全部 checkpoint
 ```
 
 分数从最新 checkpoint 的 `trainer_state.json` → `log_history` 里读。注意训练时
@@ -68,7 +68,7 @@ ALL_CHECKPOINTS=1 bash scripts/eval/sweep14b/run_multilang_diverse_sweep.sh     
 EVAL_OUTPUT_DIR=outputs/eval/<run>/<step>/unseen/heldout_002 \
 EVAL_PROMPT_BANK=prompts/generic/heldout.jsonl \
 EVAL_PROMPT_IDS="de=heldout_en_de_002,en=heldout_en_en_002,zh=heldout_en_zh_002" \
-  bash scripts/eval/run_eval.sh <CKPT> multi
+  bash scripts/ph14t/eval/run_eval.sh <CKPT> multi
 ```
 
 汇总器可以单独重跑（纯派生文件，删掉再生成即可）：

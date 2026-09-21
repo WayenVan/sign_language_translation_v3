@@ -14,7 +14,7 @@
 #   prompt.test.prompt_ids.en=heldout_en_en_001 \
 #   prompt.test.prompt_ids.zh=heldout_en_zh_001
 #
-# scripts/eval/ drives this; csi_slt.commands.list_prompt_variants enumerates
+# scripts/ph14t/eval/ drives this; csi_slt.commands.list_prompt_variants enumerates
 # the ID triples so one run always keeps every language on the same variant.
 
 test:

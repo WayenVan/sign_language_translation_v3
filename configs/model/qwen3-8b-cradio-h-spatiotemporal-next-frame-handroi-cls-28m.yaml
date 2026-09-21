@@ -89,7 +89,7 @@ config:
     # A scorer is an affine map over one backbone's features at one layer, so
     # the SO400M scorers (1152-d) cannot be reused. This one must be fitted on
     # C-RADIOv4-H at output_layer=-9 before a run can be built:
-    #   sbatch scripts/swaps/run_scorer_cradio_h_sweep.sh     # fits -9 / -8 / -10 / -7 / -11
+    #   sbatch scripts/ph14t/lora_sweep/run_scorer_cradio_h_sweep.sh     # fits -9 / -8 / -10 / -7 / -11
     # Change output_layer and this path together.
     scorer_path: outputs/hand_patch_scorer_cradio-h_L9
     top_k: 24

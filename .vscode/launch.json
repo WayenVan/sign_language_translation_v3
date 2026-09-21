@@ -68,7 +68,7 @@
       "name": "preprocess",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/preprocess/dataset_preprocess-T.py",
+      "program": "${workspaceFolder}/preprocess/ph14t/dataset_preprocess-T.py",
       "console": "integratedTerminal",
       "args": [
         "--process-image"

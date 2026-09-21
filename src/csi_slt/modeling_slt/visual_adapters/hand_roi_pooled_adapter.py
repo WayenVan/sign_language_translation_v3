@@ -214,8 +214,8 @@ class TopKRoiPool(nn.Module):
                 f"scorer at {self.scorer_path} was fitted against a different "
                 f"backbone configuration: {detail}. Its coefficients only match "
                 "the feature distribution of the layer they were fitted on. "
-                "Re-fit with preprocess/extract_scorer_features.py + "
-                "preprocess/train_scorer.py for this configuration."
+                "Re-fit with preprocess/ph14t/extract_scorer_features.py + "
+                "preprocess/ph14t/train_scorer.py for this configuration."
             )
 
     def select(self, score_features: Tensor) -> Tensor:
