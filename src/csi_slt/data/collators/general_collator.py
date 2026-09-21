@@ -59,6 +59,10 @@ class GeneralSLTCollator:
             zbatch["lang"],
         )
         pseudo_gloss = zbatch.get("pseudo_gloss")
+        # A dataset without pseudo gloss (CSL-Daily) yields None per sample;
+        # the processor takes that as None for the batch, not a list of Nones.
+        if pseudo_gloss is not None and all(gloss is None for gloss in pseudo_gloss):
+            pseudo_gloss = None
         semantic_ids = zbatch.get("semantic_ids")
         prompt_templates = tuple(
             self.prompt_resolver.resolve(sample, epoch=self.epoch).template

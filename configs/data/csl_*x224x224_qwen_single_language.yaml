@@ -1,0 +1,55 @@
+# CSL-Daily, Chinese only. Frames come from preprocess/csl_daily/extract_frames.py:
+# whole 256x256 frames, trimmed to the signing span.
+data_root: dataset/CSL-Daily-HG/preprocessed/full-trim-256x256px
+
+# CSL-Daily has no pseudo gloss (the dataset yields None), so there is no CTC
+# target and no CTC tokenizer to load.
+ctc_tokenizer_dir: null
+
+processor:
+  _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
+  video_token_scale: 1.0
+  num_extra_video_tokens: 2
+  video_processor:
+    _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
+    size:
+      height: 224
+      width: 224
+    padding_to_multiple_of: 4
+    image_mean: [0.485, 0.456, 0.406]
+    image_std: [0.229, 0.224, 0.225]
+    do_normalize: true
+    do_crop: false
+    do_resize: false
+    crop_size:
+      height: 224
+      width: 224
+    do_random_speed: true
+    do_random_resize: true
+    # Hands leave the frame through the bottom edge, never the top: the eval
+    # crop keeps the bottom 224 rows of the 256 frame instead of the centre.
+    # Only the predict transform reads it; training crops are unchanged.
+    eval_crop_bottom_aligned: true
+
+train:
+  dataset: &dataset
+    _target_: csi_slt.data.csl.CSLDailyDataset
+    data_root: ${data.data_root}
+    mode: train
+  collator: &collator
+    _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
+    debug: false
+
+val:
+  dataset:
+    <<: *dataset
+    mode: validation
+  collator:
+    <<: *collator
+
+test:
+  dataset:
+    <<: *dataset
+    mode: test
+  collator:
+    <<: *collator

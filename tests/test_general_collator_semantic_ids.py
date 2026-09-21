@@ -92,3 +92,44 @@ def test_collator_resolves_and_forwards_per_sample_prompt_templates():
         "Instruction for sample-a: {{ video_start_token }}",
         "Instruction for sample-b: {{ video_start_token }}",
     )
+
+
+def _batch_with_pseudo_gloss(*glosses):
+    return [
+        {
+            "id": f"sample-{index}",
+            "video": f"video-{index}",
+            "text": f"text-{index}",
+            "lang": "zh",
+            "pseudo_gloss": gloss,
+        }
+        for index, gloss in enumerate(glosses)
+    ]
+
+
+def test_collator_passes_an_all_none_pseudo_gloss_batch_as_none():
+    # CSL-Daily has no pseudo gloss; the processor accepts None for the batch
+    # but rejects a list holding None.
+    processor = _RecordingProcessor()
+    collator = GeneralSLTCollator(
+        processor=processor,
+        prompt_resolver=_RecordingResolver(),
+        training=True,
+    )
+
+    collator(_batch_with_pseudo_gloss(None, None))
+
+    assert processor.kwargs["pseudo_gloss"] is None
+
+
+def test_collator_forwards_string_pseudo_gloss_unchanged():
+    processor = _RecordingProcessor()
+    collator = GeneralSLTCollator(
+        processor=processor,
+        prompt_resolver=_RecordingResolver(),
+        training=True,
+    )
+
+    collator(_batch_with_pseudo_gloss("GLOSS-A", "GLOSS-B"))
+
+    assert processor.kwargs["pseudo_gloss"] == ("GLOSS-A", "GLOSS-B")
