@@ -54,8 +54,9 @@ class CSLDailyDataset(Dataset):
     new root.  Whether the idle frames around the signing were trimmed was
     decided at extraction time; this class reads whatever the index lists.
 
-    ``pseudo_gloss`` is always None: CSL-Daily has no pseudo-gloss column, and
-    the collator passes an all-None batch on as "no pseudo gloss".
+    A pseudo-gloss column can be selected for auxiliary objectives such as
+    CTC.  Leaving ``pseudo_gloss_column`` unset preserves the text-only setup
+    and makes each sample's ``pseudo_gloss`` value None.
     """
 
     LANGUAGE = "zh"
@@ -64,6 +65,7 @@ class CSLDailyDataset(Dataset):
         self,
         data_root: str,
         mode: str = "train",
+        pseudo_gloss_column: str | None = None,
         pipline=None,
     ):
         if mode not in SPLIT_FILES:
@@ -78,6 +80,7 @@ class CSLDailyDataset(Dataset):
 
         self.data_root = data_root
         self.mode = mode
+        self.pseudo_gloss_column = pseudo_gloss_column
         self.pipline = pipline
 
         self.hg_dataset = load_dataset(
@@ -85,6 +88,14 @@ class CSLDailyDataset(Dataset):
             data_files={mode: os.path.join(data_root, SPLIT_FILES[mode])},
             split=mode,
         )
+        if (
+            self.pseudo_gloss_column is not None
+            and self.pseudo_gloss_column not in self.hg_dataset.column_names
+        ):
+            raise ValueError(
+                f"pseudo-gloss column {self.pseudo_gloss_column!r} is missing "
+                f"from {SPLIT_FILES[mode]}"
+            )
 
     @property
     def cache_namespace(self) -> str:
@@ -105,7 +116,11 @@ class CSLDailyDataset(Dataset):
             semantic_ids=sentence_id(data_info["clip_id"]),
             text=data_info["translation"],
             lang=self.LANGUAGE,
-            pseudo_gloss=None,
+            pseudo_gloss=(
+                data_info[self.pseudo_gloss_column]
+                if self.pseudo_gloss_column is not None
+                else None
+            ),
         )
 
     def get_text_item(self, idx):

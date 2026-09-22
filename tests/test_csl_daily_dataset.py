@@ -40,6 +40,7 @@ def _write_frames_root(root, *, complete=True):
                     signer=clip_id.split("_")[1],
                     translation=f"{clip_id} 的翻译",
                     gloss=f"{clip_id} 手语",
+                    pseudo_gloss_relaxed=f"{clip_id} 伪词",
                     start_frame=19,
                     end_frame_exclusive=19 + num_frames,
                     num_frames=num_frames,
@@ -78,6 +79,25 @@ def test_getitem_returns_the_fields_the_collator_reads(frames_root):
     assert item["pseudo_gloss"] is None
     assert item["video"].dtype == np.uint8
     assert item["video"].shape == (3, 8, 8, 3)
+
+
+def test_getitem_returns_the_selected_pseudo_gloss(frames_root):
+    dataset = CSLDailyDataset(
+        str(frames_root),
+        mode="train",
+        pseudo_gloss_column="pseudo_gloss_relaxed",
+    )
+
+    assert dataset[0]["pseudo_gloss"] == "S000001_P0000_T00 伪词"
+
+
+def test_rejects_a_missing_pseudo_gloss_column(frames_root):
+    with pytest.raises(ValueError, match="pseudo-gloss column.*is missing"):
+        CSLDailyDataset(
+            str(frames_root),
+            mode="train",
+            pseudo_gloss_column="missing_gloss",
+        )
 
 
 def test_frames_are_rgb_and_in_index_order(frames_root):

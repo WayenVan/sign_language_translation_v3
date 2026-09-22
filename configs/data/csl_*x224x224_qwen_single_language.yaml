@@ -2,14 +2,14 @@
 # whole 256x256 frames, trimmed to the signing span.
 data_root: dataset/CSL-Daily-HG/preprocessed/full-trim-256x256px
 
-# CSL-Daily has no pseudo gloss (the dataset yields None), so there is no CTC
-# target and no CTC tokenizer to load.
-ctc_tokenizer_dir: null
+# Word-level CTC vocabulary trained from pseudo_gloss_relaxed in all splits.
+ctc_tokenizer_dir: outputs/ctc_tokenizer_csl_daily_relaxed
 
 processor:
   _target_: csi_slt.data.processors.slt_processor.SignTranslationProcessor
   video_token_scale: 1.0
   num_extra_video_tokens: 2
+  pseudo_gloss_dropout: 0.2
   video_processor:
     _target_: csi_slt.data.processors.sign_video_processor.SignVideoProcessor
     size:
@@ -36,6 +36,7 @@ train:
     _target_: csi_slt.data.csl.CSLDailyDataset
     data_root: ${data.data_root}
     mode: train
+    pseudo_gloss_column: pseudo_gloss_relaxed
   collator: &collator
     _target_: csi_slt.data.collators.general_collator.GeneralSLTCollator
     debug: false
